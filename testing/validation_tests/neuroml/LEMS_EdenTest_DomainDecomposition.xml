@@ -1,0 +1,51 @@
+
+<Lems>
+
+<!-- Example with instances of multicompartmental cells...
+
+     Note: requires Neuron to run, e.g.
+
+     jnml LEMS_NML2_Ex25_MultiComp.xml -neuron
+-->
+
+
+<!-- Specify which component to run -->
+    <Target component="sim1"/>
+
+<!-- Include core NeuroML2 ComponentType definitions -->
+    <Include file="Cells.xml"/>
+    <Include file="Networks.xml"/>
+    <Include file="Simulation.xml"/>
+
+    <!-- Main NeuroML2 content. -->
+
+    <!-- Including file with a <neuroml> root, a "real" NeuroML 2 file -->
+    <Include file="EdenTest_DomainDecomposition.nml"/>
+
+    <!-- End of NeuroML2 content -->
+
+
+    <Simulation id="sim1" length="100.100ms" step="0.005ms" target="EdenTestNetwork1">
+		
+		<!-- add logging for headless sims --> 
+		
+		<OutputFile id="first" fileName="results.gen.txt">
+			<OutputColumn id="v_cell_00_0" quantity="pop0/00/MultiCompCell/0/v"/>
+			<OutputColumn id="v_cell_01_0" quantity="pop0/01/MultiCompCell/0/v"/>
+			<OutputColumn id="v_cell_02_0" quantity="pop0/02/MultiCompCell/0/v"/>
+			<OutputColumn id="v_cell_03_0" quantity="pop0/03/MultiCompCell/0/v"/>
+			<OutputColumn id="v_cell_04_0" quantity="pop0/04/MultiCompCell/0/v"/>
+			<OutputColumn id="v_cell_05_0" quantity="pop0/05/MultiCompCell/0/v"/>
+			<OutputColumn id="v_cell_06_0" quantity="pop0/06/MultiCompCell/0/v"/>
+			<OutputColumn id="v_cell_07_0" quantity="pop0/07/MultiCompCell/0/v"/>
+			<OutputColumn id="v_cell_08_0" quantity="pop0/08/MultiCompCell/0/v"/>
+			<OutputColumn id="v_cell_09_0" quantity="pop0/09/MultiCompCell/0/v"/>
+      <OutputColumn id="v_cell_10_0" quantity="pop0/10/MultiCompCell/0/v"/>
+      <OutputColumn id="v_cell_11_0" quantity="pop0/11/MultiCompCell/0/v"/>
+      <OutputColumn id="v_cell_12_0" quantity="pop0/12/MultiCompCell/0/v"/>
+      <OutputColumn id="v_cell_13_0" quantity="pop0/13/MultiCompCell/0/v"/><!--  -->
+		</OutputFile>
+		
+    </Simulation>
+
+</Lems>

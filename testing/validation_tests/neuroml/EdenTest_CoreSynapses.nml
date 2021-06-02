@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<neuroml xmlns="http://www.neuroml.org/schema/neuroml2"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://www.neuroml.org/schema/neuroml2 ../Schemas/NeuroML2/NeuroML_v2beta4.xsd"
+         id=" NML_EdenTestNetwork">
+
+    <!-- 
+		Example of core NeuroML synaptic components:
+			Chemical synapses are all triggered by the same spiking cell, an eachd affects its espective passive cell
+			Graded synapses connect a different pair of passive components each, with one component receiving injected current TODO
+	--> 
+
+	<ionChannelHH id="passiveChan" conductance="10pS">
+		<notes>Leak conductance</notes>
+	</ionChannelHH>
+	<ionChannelHH id="naChan" conductance="10pS" species="na">
+        <notes>Na channel</notes>
+
+        <gateHHrates id="m" instances="3">
+            <forwardRate type="HHExpLinearRate" rate="1per_ms" midpoint="-40mV" scale="10mV"/>
+            <reverseRate type="HHExpRate" rate="4per_ms" midpoint="-65mV" scale="-18mV"/>
+        </gateHHrates>
+
+        <gateHHrates id="h" instances="1">
+            <forwardRate type="HHExpRate" rate="0.07per_ms" midpoint="-65mV" scale="-20mV"/>
+            <reverseRate type="HHSigmoidRate" rate="1per_ms" midpoint="-35mV" scale="10mV"/>
+        </gateHHrates>
+
+    </ionChannelHH>
+    <ionChannelHH id="kChan" conductance="10pS" species="k">
+
+        <gateHHrates id="n" instances="4">
+            <forwardRate type="HHExpLinearRate" rate="0.1per_ms" midpoint="-55mV" scale="10mV"/>
+            <reverseRate type="HHExpRate" rate="0.125per_ms" midpoint="-65mV" scale="-80mV"/>
+        </gateHHrates>
+            
+    </ionChannelHH>
+
+	<!-- Chemical synapses -->
+	<alphaCurrentSynapse id="Syn_alphaCurrentSynapse" tau="10ms" ibase=".1nA"/>
+	<alphaSynapse id="Syn_alphaSynapse" gbase="5nS" erev="0mV" tau="2ms" />
+	<expOneSynapse id="Syn_expOneSynapse" gbase="10nS" erev="0V" tauDecay="0.5ms"/>
+	<expTwoSynapse id="Syn_expTwoSynapse" gbase="20nS" erev="0V" tauDecay="1.0ms" tauRise="0.5ms"/>
+    <expThreeSynapse id="Syn_expThreeSynapse" gbase1="30nS" erev="0V" tauDecay1="1.5ms" tauRise="0.5ms" gbase2="30nS" tauDecay2="5.0ms"/>
+	<!-- doubleSynapse requires hierarchical structure of LEMS components -->
+	<blockingPlasticSynapse id="Syn_blockingPlasticSynapse" gbase="10nS" erev="0mV" tauRise="0.5ms" tauDecay="1.0ms">
+		<blockMechanism  type="voltageConcDepBlockMechanism" species="mg" blockConcentration="0.001 mM" scalingConc= "2 mM"  scalingVolt="150 mV"/>
+		<plasticityMechanism type="tsodyksMarkramDepFacMechanism" initReleaseProb="0.25" tauFac="5 ms" tauRec="15 ms"/>
+	</blockingPlasticSynapse>
+	
+	<!--Dummy synapse which emits no current. Used as presynaptic endpoint for analog synaptic connection.-->
+	<silentSynapse id="Syn_SilentSynapse"/>
+	<gapJunction id="Syn_gapJunction" conductance="1000pS"/>
+	<linearGradedSynapse id="Syn_linearGradedSynapse" conductance="1000pS"/>
+	<!--Based on synapse in Methods of http://www.nature.com/neuro/journal/v7/n12/abs/nn1352.html-->
+	<gradedSynapse id="Syn_gradedSynapse" conductance="1000pS" delta="5mV" Vth="-55mV" k="0.025per_ms" erev="0mV"/>
+	
+	<!-- LATER compound synapses -->
+	
+	<expCondSynapse   id="Syn_expCondSynapse"   tau_syn="2" e_rev="0"/>
+    <alphaCondSynapse id="Syn_alphaCondSynapse" tau_syn="2" e_rev="0"/>
+    <expCurrSynapse   id="Syn_expCurrSynapse"   tau_syn="2"/>
+    <alphaCurrSynapse id="Syn_alphaCurrSynapse" tau_syn="2"/>
+	<!-- FIXME weight, delay !! -->
+	
+    <pulseGenerator     id="Inp_pulseGenerator"     delay="10ms" duration="20ms" amplitude="0.2nA"/>
+	<sineGenerator      id="Inp_sineGenerator"      delay="20ms" duration="50ms" amplitude="1.0nA" phase="0" period="5ms"/>
+	
+	
+	<cell id="PassiveCell">
+
+        <notes></notes>
+
+        <morphology>
+
+			<segment id="0" name="soma">
+                <proximal x="0" y="0" z="0" diameter="17.841242"/> <!--Gives a convenient surface area of 1000.0 ?m�-->
+                <distal x="0" y="0" z="0" diameter="17.841242"/>
+            </segment>
+
+        </morphology>
+
+        <biophysicalProperties id="bioph_PassiveCompartment">
+            
+            <membraneProperties>
+                
+                <channelDensity id="leak" ionChannel="passiveChan" condDensity="3.0 S_per_m2" erev="-54.3mV" ion="non_specific"/>
+                
+                <spikeThresh value="-0.0mV"/>
+                <specificCapacitance value="1.0 uF_per_cm2"/>
+				<initMembPotential value="-65mV" />
+
+            </membraneProperties>
+
+            <intracellularProperties>
+                <resistivity value="0.03 kohm_cm"/>   
+            </intracellularProperties>
+
+        </biophysicalProperties>
+    </cell>
+	<cell id="HHCell">
+
+        <morphology id="morph1">
+            <segment id="0" name="soma">
+                <proximal x="0" y="0" z="0" diameter="17.841242"/> <!--Gives a convenient surface area of 1000.0 ?m�-->
+                <distal x="0" y="0" z="0" diameter="17.841242"/>
+            </segment>
+
+            <segmentGroup id="soma_group">
+                <member segment="0"/>
+            </segmentGroup>
+
+        </morphology>
+
+        <biophysicalProperties id="bioPhys1">
+
+            <membraneProperties>
+                        
+                <channelDensity id="leak" ionChannel="passiveChan" condDensity="3.0 S_per_m2" erev="-54.3mV" ion="non_specific"/>
+                
+		<channelDensity id="naChans" ionChannel="naChan" condDensity="120.0 mS_per_cm2" erev="50.0 mV" ion="na"/>
+		<!---->
+                <channelDensity id="kChans" ionChannel="kChan" condDensity="360 S_per_m2" erev="-77mV" ion="k"/>
+		
+                <spikeThresh value="-20mV"/>
+                <specificCapacitance value="1.0 uF_per_cm2"/>
+                <initMembPotential value="-65mV"/>
+
+            </membraneProperties>
+
+            <intracellularProperties>
+                <resistivity value="0.03 kohm_cm"/>   <!-- Note: not used in single compartment simulations -->
+            </intracellularProperties>
+
+        </biophysicalProperties>
+
+    </cell>
+	
+    <network id="EdenTestNetwork">
+		
+		<population id="ChemPre" component="HHCell" size="1" />
+        <population id="ChemPost" size="30" component="PassiveCell">
+			<!-- Note: jNeuroML/NEURON does not allow non-0-based ID's, it breaks at hoc run time! Try instance id's 101, 102 ... to reproduce -->
+        </population>
+		
+		<projection id="projChem01" presynapticPopulation="ChemPre" postsynapticPopulation="ChemPost" synapse="Syn_alphaCurrentSynapse">
+			<connection id="0" preCellId="/0" postCellId="/1" preSegmentId="0" postSegmentId="0"/>
+		</projection>
+		<projection id="projChem02" presynapticPopulation="ChemPre" postsynapticPopulation="ChemPost" synapse="Syn_alphaSynapse">
+			<connection id="0" preCellId="/0" postCellId="/2" preSegmentId="0" postSegmentId="0"/>
+		</projection>
+		<projection id="projChem03" presynapticPopulation="ChemPre" postsynapticPopulation="ChemPost" synapse="Syn_expOneSynapse">
+			<connection id="0" preCellId="/0" postCellId="/3" preSegmentId="0" postSegmentId="0"/>
+		</projection>
+		<projection id="projChem04" presynapticPopulation="ChemPre" postsynapticPopulation="ChemPost" synapse="Syn_expTwoSynapse">
+			<connection id="0" preCellId="/0" postCellId="/4" preSegmentId="0" postSegmentId="0"/>
+		</projection>
+		<projection id="projChem05" presynapticPopulation="ChemPre" postsynapticPopulation="ChemPost" synapse="Syn_expThreeSynapse">
+			<connection id="0" preCellId="/0" postCellId="/5" preSegmentId="0" postSegmentId="0"/>
+		</projection>
+		<projection id="projChem06" presynapticPopulation="ChemPre" postsynapticPopulation="ChemPost" synapse="Syn_blockingPlasticSynapse">
+			<connection id="0" preCellId="/0" postCellId="/6" preSegmentId="0" postSegmentId="0"/>
+		</projection>
+		<projection id="projChem07" presynapticPopulation="ChemPre" postsynapticPopulation="ChemPost" synapse="Syn_expCondSynapse">
+			<connection id="0" preCellId="/0" postCellId="/7" preSegmentId="0" postSegmentId="0"/>
+		</projection>
+		<projection id="projChem08" presynapticPopulation="ChemPre" postsynapticPopulation="ChemPost" synapse="Syn_alphaCondSynapse">
+			<connection id="0" preCellId="/0" postCellId="/8" preSegmentId="0" postSegmentId="0"/>
+		</projection>
+		<projection id="projChem09" presynapticPopulation="ChemPre" postsynapticPopulation="ChemPost" synapse="Syn_expCurrSynapse">
+			<connection id="0" preCellId="/0" postCellId="/9" preSegmentId="0" postSegmentId="0"/>
+		</projection>
+		<projection id="projChem10" presynapticPopulation="ChemPre" postsynapticPopulation="ChemPost" synapse="Syn_alphaCurrSynapse">
+			<connection id="0" preCellId="/0" postCellId="/10" preSegmentId="0" postSegmentId="0"/>
+		</projection>
+		
+		<projection id="projChem21" presynapticPopulation="ChemPre" postsynapticPopulation="ChemPost" synapse="Syn_alphaCurrentSynapse">
+			<connectionWD id="0" preCellId="/0" postCellId="/21" preSegmentId="0" postSegmentId="0" weight="1.7" delay="5 ms"/>
+		</projection>
+		
+		<inputList id="Stim_ChemPre" component="Inp_pulseGenerator" population="ChemPre">
+            <input id="1" target="../ChemPre/0/HHCell" segmentId="0" destination="synapses"/>
+        </inputList>
+		
+		<population id="ContPre" component="PassiveCell" size="20" >
+        </population>
+		<population id="ContPost" component="PassiveCell" size="20" >
+        </population>
+		
+		<continuousProjection id="projCont01" presynapticPopulation="ContPre" postsynapticPopulation="ContPost">
+			<continuousConnection id="0" preCell="1" postCell="1" preComponent="Syn_linearGradedSynapse" postComponent="Syn_SilentSynapse"/>
+		</continuousProjection>
+		<electricalProjection id ="projCont02" presynapticPopulation="ContPre" postsynapticPopulation="ContPost">
+			<electricalConnection id="0" preCell="2" postCell="2" preSegment="0" postSegment="0" synapse="Syn_gapJunction"/>
+		</electricalProjection>
+		<continuousProjection id="projCont03" presynapticPopulation="ContPre" postsynapticPopulation="ContPost">
+			<continuousConnection id="0" preCell="3" postCell="3" preComponent="Syn_SilentSynapse" postComponent="Syn_linearGradedSynapse"/>
+		</continuousProjection>
+		<continuousProjection id="projCont04" presynapticPopulation="ContPre" postsynapticPopulation="ContPost">
+			<continuousConnection id="0" preCell="4" postCell="4" preComponent="Syn_SilentSynapse" postComponent="Syn_gradedSynapse"/>
+		</continuousProjection>
+		
+		<!-- NOTE: for some reason, using electricalConnectionInstanceW makes NEuroML/NEURON recosider the interface of electricalConnection to a point-neuron version. If no electricalConnectionInstanceW is used, the expected behaviour is demonstrated, with electricalConnection being allowed to specify segments on cells, as per NeuroML v. 2.5 spec. If electricalConnectionInstance is used, it still breaks the exporter. TODO check again with a newer jNeuroML/NEURON version. -->
+		<!-- <electricalProjection id ="projCont12" presynapticPopulation="ContPre" postsynapticPopulation="ContPost">
+			<electricalConnectionInstanceW id="0" preCell="12" postCell="12" preSegment="0" postSegment="0" synapse="Syn_gapJunction" weight=".7"/>
+		</electricalProjection> -->
+		
+		<inputList id="Stim_ContPre" component="Inp_pulseGenerator" population="ContPre">
+			<input id="1" target="../ContPre/01/PassiveCell" segmentId="0" destination="synapses"/>
+			<input id="2" target="../ContPre/02/PassiveCell" segmentId="0" destination="synapses"/>
+			<input id="3" target="../ContPre/03/PassiveCell" segmentId="0" destination="synapses"/>
+            <input id="4" target="../ContPre/04/PassiveCell" segmentId="0" destination="synapses"/>
+			
+            <input id="5" target="../ContPre/12/PassiveCell" segmentId="0" destination="synapses"/>
+        </inputList> 
+		
+    </network>
+
+</neuroml>

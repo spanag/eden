@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<neuroml xmlns="http://www.neuroml.org/schema/neuroml2"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://www.neuroml.org/schema/neuroml2 ../Schemas/NeuroML2/NeuroML_v2beta4.xsd"
+         id=" NML_EdenTestNetwork1">
+
+    <!-- Example of a network with connections between multicompartmental cells --> 
+
+	<ionChannelHH id="passiveChan" conductance="10pS">
+		<notes>Leak conductance</notes>
+	</ionChannelHH>
+
+
+	<ionChannelHH id="naChan" conductance="10pS" species="na">
+		<notes>Na channel</notes>
+
+		<gateHHrates id="m" instances="3">
+			<forwardRate type="HHExpLinearRate" rate="1per_ms" midpoint="-40mV" scale="10mV"/>
+			<reverseRate type="HHExpRate" rate="4per_ms" midpoint="-65mV" scale="-18mV"/>
+		</gateHHrates>
+
+		<gateHHrates id="h" instances="1">
+			<forwardRate type="HHExpRate" rate="0.07per_ms" midpoint="-65mV" scale="-20mV"/>
+			<reverseRate type="HHSigmoidRate" rate="1per_ms" midpoint="-35mV" scale="10mV"/>
+		</gateHHrates>
+
+	</ionChannelHH>
+
+
+	<ionChannelHH id="kChan" conductance="10pS" species="k">
+
+		<gateHHrates id="n" instances="4">
+			<forwardRate type="HHExpLinearRate" rate="0.1per_ms" midpoint="-55mV" scale="10mV"/>
+			<reverseRate type="HHExpRate" rate="0.125per_ms" midpoint="-65mV" scale="-80mV"/>
+		</gateHHrates>
+			
+	</ionChannelHH>
+    
+	<cell id="MultiCompCell">
+
+        <notes>Multicompartmental cell</notes>
+
+        <morphology id="MultiCompCell_morphology">
+
+            <segment id ="0" name="Soma">
+                <proximal x="0" y="0" z="0" diameter="10"/>
+                <distal x="10" y="0" z="0" diameter="10"/>
+            </segment>
+
+            <segment id ="1" name="Dendrite1">
+                <parent segment="0"/>
+                <distal x="20" y="0" z="0" diameter="3"/>
+            </segment>
+			<!-- 
+            <segment id ="2" name="Dendrite2">
+                <parent segment="1"/>
+                <distal x="30" y="0" z="0" diameter="1"/>
+            </segment>
+             -->
+            <segmentGroup id="soma_group"> 
+                <member segment="0"/>
+            </segmentGroup>
+
+           <segmentGroup id="dendrite_group">  
+                <member segment="1"/>
+                <!-- <member segment="2"/> -->
+            </segmentGroup>
+
+        </morphology>
+
+        <biophysicalProperties id="bioPhys1">
+            
+            <membraneProperties>
+                
+                <channelDensity id="leak" ionChannel="passiveChan" condDensity="3.0 S_per_m2" erev="-54.3mV" ion="non_specific"/>
+                
+                <channelDensity id="naChans" ionChannel="naChan" condDensity="120.0 mS_per_cm2" erev="50.0 mV" ion="na"/>
+                <channelDensity id="kChans" ionChannel="kChan" condDensity="360 S_per_m2" erev="-77mV" ion="k"/>
+                
+                <spikeThresh value="-64.5mV"/>
+                <specificCapacitance value="1.0 uF_per_cm2"/>
+				
+				<initMembPotential value="-65mV" />
+				<!-- initMembPotential for specific segment group is broken in NeuroML ! jLEMS frontend strips the segmentGroup property away ! 
+				<initMembPotential value="-65mV" segmentGroup = "soma_group"/>
+                <initMembPotential value="-75mV" segmentGroup = "dendrite_group"/>
+				-->
+
+            </membraneProperties>
+
+            <intracellularProperties>
+                <resistivity value="1 kohm_cm"/>   
+            </intracellularProperties>
+
+        </biophysicalProperties>
+    </cell>
+    
+	<gapJunction id="gj1" conductance="1000pS"/>
+	<expOneSynapse id="expone" tauDecay="1.5ms" gbase=".7nS" erev="0V"/>
+    
+    <pulseGenerator id="pulseGen2" delay="1ms" duration="200ms" amplitude="0.2nA"/>
+	
+    <network id="EdenTestNetwork1">
+        
+        <population id="pop0" component="MultiCompCell" size="14"/>
+        
+        <projection id="projAexpo" presynapticPopulation="pop0" postsynapticPopulation="pop0" synapse="expone">
+            <connection id="00" preCellId="pop0[13]" postCellId="pop0[02]" preSegmentId="0" postSegmentId="0" />
+            <connection id="01" preCellId="pop0[08]" postCellId="pop0[02]" preSegmentId="0" postSegmentId="0" />
+            <connection id="02" preCellId="pop0[00]" postCellId="pop0[08]" preSegmentId="0" postSegmentId="0" />
+            <connection id="03" preCellId="pop0[00]" postCellId="pop0[07]" preSegmentId="0" postSegmentId="0" />
+            <connection id="04" preCellId="pop0[00]" postCellId="pop0[09]" preSegmentId="0" postSegmentId="0" />
+            <connection id="05" preCellId="pop0[09]" postCellId="pop0[03]" preSegmentId="0" postSegmentId="0" />
+            <connection id="06" preCellId="pop0[00]" postCellId="pop0[03]" preSegmentId="0" postSegmentId="0" />
+            <connection id="07" preCellId="pop0[01]" postCellId="pop0[13]" preSegmentId="0" postSegmentId="0" />
+            <connection id="08" preCellId="pop0[09]" postCellId="pop0[12]" preSegmentId="0" postSegmentId="0" />
+            <connection id="09" preCellId="pop0[12]" postCellId="pop0[05]" preSegmentId="0" postSegmentId="0" />
+            <connection id="10" preCellId="pop0[05]" postCellId="pop0[06]" preSegmentId="0" postSegmentId="0" />
+            <connection id="11" preCellId="pop0[06]" postCellId="pop0[01]" preSegmentId="0" postSegmentId="0" />
+            <connection id="12" preCellId="pop0[01]" postCellId="pop0[11]" preSegmentId="0" postSegmentId="0" />
+            <connection id="13" preCellId="pop0[11]" postCellId="pop0[05]" preSegmentId="0" postSegmentId="0" />
+            <connection id="14" preCellId="pop0[11]" postCellId="pop0[04]" preSegmentId="0" postSegmentId="0" />
+            <connection id="15" preCellId="pop0[04]" postCellId="pop0[10]" preSegmentId="0" postSegmentId="0" />
+            <connection id="16" preCellId="pop0[11]" postCellId="pop0[07]" preSegmentId="0" postSegmentId="0" />
+            <connection id="17" preCellId="pop0[13]" postCellId="pop0[07]" preSegmentId="0" postSegmentId="0" />
+            <connection id="18" preCellId="pop0[10]" postCellId="pop0[00]" preSegmentId="0" postSegmentId="0" />
+            <connection id="19" preCellId="pop0[09]" postCellId="pop0[04]" preSegmentId="0" postSegmentId="0" />
+        </projection>
+        
+		<electricalProjection id ="testGJconn" presynapticPopulation="pop0" postsynapticPopulation="pop0">
+			<electricalConnection id="0" preCell="0" preSegment="0" postCell="1" postSegment="1" synapse="gj1"/>
+            <electricalConnection id="1" preCell="8" preSegment="0" postCell="5" postSegment="1" synapse="gj1"/>
+            <electricalConnection id="2" preCell="0" preSegment="0" postCell="12" postSegment="1" synapse="gj1"/>
+            <electricalConnection id="3" preCell="3" preSegment="0" postCell="11" postSegment="1" synapse="gj1"/>
+		</electricalProjection>
+		
+        <inputList id="stimInput1" component="pulseGen2" population="pop0">
+            <input id="0" target="../pop0/0/MultiCompCell" segmentId="0" fractionAlong="0.5" destination="synapses"/>
+            <input id="1" target="../pop0/10/MultiCompCell" segmentId="0" fractionAlong="0.5" destination="synapses"/>
+        </inputList>
+
+    </network>
+
+</neuroml>

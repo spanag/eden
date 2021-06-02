@@ -1,0 +1,52 @@
+
+<Lems>
+
+<!-- Specify which component to run -->
+    <Target component="sim1"/>
+
+<!-- Include core NeuroML2 ComponentType definitions -->
+    <Include file="Cells.xml"/>
+    <Include file="Networks.xml"/>
+    <Include file="Simulation.xml"/>
+		<Include file="PyNN.xml"/>
+
+    <!-- Main NeuroML2 content. -->
+
+    <!-- Including file with a <neuroml> root, a "real" NeuroML 2 file -->
+    <Include file="EdenTest_ArtificialCells.nml"/>
+
+    <!-- End of NeuroML2 content -->
+
+    <Simulation id="sim1" length="100.0ms" step="0.010ms" target="EdenTestNetwork">
+		<OutputFile id="first" fileName="results.gen.txt">
+			
+			<OutputColumn id="V_iafTauCell"               quantity="Pop_iafTauCell[0]/v"              />
+			<OutputColumn id="V_iafTauRefCell"            quantity="Pop_iafTauRefCell[0]/v"           />
+			<OutputColumn id="V_iafCell"                  quantity="Pop_iafCell[0]/v"                 />
+			<OutputColumn id="V_iafRefCell"               quantity="Pop_iafRefCell[0]/v"              />
+			<!-- TODO current version of NEURON exporter doesn't simulate izhikevichCell properly, get a newer version -->
+			<!-- <OutputColumn id="V_izhikevichCell"           quantity="Pop_izhikevichCell[0]/v"          /> TODO -->
+			<OutputColumn id="V_izhikevich2007Cell"       quantity="Pop_izhikevich2007Cell[0]/v"      />
+			<!-- TODO current version of NEURON exporter doesn't simulate adExIaFCell properly, get a newer version -->
+			<!-- TODO auto-validate with jLEMS instead -->
+			<!-- <OutputColumn id="V_adExIaFCell"              quantity="Pop_adExIaFCell[0]/v"             /> TODO -->
+			<OutputColumn id="V_fitzHughNagumoCell"       quantity="Pop_fitzHughNagumoCell[0]/V"      />
+			<OutputColumn id="V_fitzHughNagumo1969Cell"   quantity="Pop_fitzHughNagumo1969Cell[0]/V"  />
+			<!-- <OutputColumn id="V_pinskyRinzelCA3Cell"      quantity="Pop_pinskyRinzelCA3Cell[0]/Vs"    /> TODO -->
+			<OutputColumn id="V_IF_curr_alpha"            quantity="Pop_IF_curr_alpha[0]/v"           />
+			<OutputColumn id="V_IF_curr_exp"              quantity="Pop_IF_curr_exp[0]/v"             />
+			<OutputColumn id="V_IF_cond_alpha"            quantity="Pop_IF_cond_alpha[0]/v"           />
+			<OutputColumn id="V_IF_cond_exp"              quantity="Pop_IF_cond_exp[0]/v"             />
+			<!-- TODO current version of NEURON exporter doesn't simulate PyNN adEx properly, get a newer version -->
+			<!-- TODO auto-validate with jLEMS instead ! -->
+			<!-- <OutputColumn id="V_EIF_cond_exp_isfa_ista"   quantity="Pop_EIF_cond_exp_isfa_ista[0]/v"  /> -->
+			<!-- <OutputColumn id="V_EIF_cond_alpha_isfa_ista" quantity="Pop_EIF_cond_alpha_isfa_ista[0]/v"/> -->
+			<OutputColumn id="V_HH_cond_exp"              quantity="Pop_HH_cond_exp[0]/v"             />
+			
+			<!-- TODO more work to make this work in jLEMS or Neuron -->
+			<!-- <OutputColumn id="V_iafTauCell_Quadratic"     quantity="Pop_iafTauCell_Quadratic[0]/v"    /> -->
+			
+		</OutputFile>
+    </Simulation>
+
+</Lems>

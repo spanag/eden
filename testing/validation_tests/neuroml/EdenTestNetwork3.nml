@@ -1,0 +1,690 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<neuroml xmlns="http://www.neuroml.org/schema/neuroml2"
+		xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		xsi:schemaLocation="http://www.neuroml.org/schema/neuroml2 ../Schemas/NeuroML2/NeuroML_v2beta4.xsd"
+		id="NML2_SingleCompHHCell">
+	
+	<!-- LEMS Calcium concnetration model -->
+	<!-- <ComponentType name="concentrationModelHayEtAl" extends="concentrationModel" description="Model of buffering of concentration of specific to Hay Et Al 2011">
+
+		<Parameter name="gamma" dimension="none"/>
+		<Parameter name="minCai" dimension="concentration"/>
+		<Parameter name="decay" dimension="time"/>
+		<Parameter name="depth" dimension="length"/>
+		
+
+		<Constant name="Faraday" dimension="charge_per_mole" value="96485.3C_per_mol"/>
+		<Constant name="AREA_SCALE" dimension="area" value="1m2"/>
+		<Constant name="LENGTH_SCALE" dimension="length" value="1m"/>
+
+		<Requirement name="iCa" dimension="current"/>
+
+		<Text name="ion"/>
+
+		<Dynamics>
+
+			<StateVariable name="concentration" exposure="concentration" dimension="concentration"/>
+			<StateVariable name="extConcentration" exposure="extConcentration" dimension="concentration"/>
+
+			<DerivedVariable name="currDensCa" dimension="currentDensity" value="iCa / surfaceArea"/>
+			
+
+			<TimeDerivative variable="concentration" value="(currDensCa*gamma/(2*Faraday*depth)) - ((concentration - minCai) / decay)"/>
+
+			<OnStart>
+				<StateAssignment variable="concentration" value="initialConcentration"/>
+				<StateAssignment variable="extConcentration" value="initialExtConcentration"/>
+			</OnStart>
+
+		</Dynamics>
+
+	</ComponentType> -->
+
+	<!-- <ComponentType name="BezaireCaConcentrationModel"
+		extends="concentrationModel"
+		description="Model of Capool">
+
+		<Parameter name="restingConc" dimension="concentration"/>
+		<Parameter name="decayConstant" dimension="time"/>
+		<Parameter name="shellThickness" dimension="length"/>
+
+		<Constant name="Faraday" dimension="charge_per_mole" value="96520C_per_mol"/>
+		<Requirement name="iCa" dimension="current"/>
+
+		<Exposure name="concentration" dimension="concentration"/>
+
+		<Text name="ion"/>
+
+		<Dynamics>
+
+			<StateVariable name="concentration" exposure="concentration" dimension="concentration"/>
+			<StateVariable name="extConcentration" exposure="extConcentration" dimension="concentration"/>
+
+			<TimeDerivative variable="concentration" value=" iCa / (Faraday * surfaceArea * shellThickness) - ((concentration - restingConc) / decayConstant)"/>
+
+			<OnStart>
+				<StateAssignment variable="concentration" value="restingConc"/>
+				<StateAssignment variable="extConcentration" value="initialExtConcentration"/>
+			</OnStart>          
+
+			<OnCondition test="concentration .lt. 0">
+				<StateAssignment variable="concentration" value="0"/>
+			</OnCondition>
+
+		</Dynamics>
+	</ComponentType>
+	<BezaireCaConcentrationModel id="Capoolngf" ion="ca" decayConstant="10ms" restingConc="5e-6mM" shellThickness="0.2um"/> -->
+	
+	<decayingPoolConcentrationModel   id=  "Gran_CaPool_98" restingConc="7.55e-5mM" decayConstant="1e-2s" ion="ca" shellThickness="8.4e-8m"/>
+	<mydecayingPoolConcentrationModel id="myGran_CaPool_98" restingConc="7.55e-5mM" decayConstant="1e-2s" ion="ca" shellThickness="8.4e-8m"/>	
+	
+	<!-- LEMS Calcium concentration model clone -->
+	<ComponentType name="mydecayingPoolConcentrationModel"
+		extends="concentrationModel"
+		description="My Model of Capool">
+
+		<Parameter name="restingConc" dimension="concentration"/>
+		<Parameter name="decayConstant" dimension="time"/>
+		<Parameter name="shellThickness" dimension="length"/>
+
+		<Constant name="Faraday" dimension="charge_per_mole" value="96485.3C_per_mol"/>
+		<Constant name="AREA_SCALE" dimension="area" value="1m2"/>
+		<Constant name="LENGTH_SCALE" dimension="length" value="1m"/>
+
+		<Requirement name="iCa" dimension="current"/>
+
+		<Text name="ion"/>
+
+		<Dynamics>
+
+			<StateVariable name="concentration" exposure="concentration" dimension="concentration"/>
+			<StateVariable name="extConcentration" exposure="extConcentration" dimension="concentration"/>
+			
+			<DerivedVariable name="effectiveRadius" dimension="length" value="LENGTH_SCALE * sqrt(surfaceArea/(AREA_SCALE * (4 * 3.14159)))"/>  <!-- needed to calc volume of pools, etc. -->
+			<DerivedVariable name="innerRadius" dimension="length" value="effectiveRadius - shellThickness"/>
+
+			<DerivedVariable name="shellVolume" dimension="volume" value="(4 * (effectiveRadius * effectiveRadius * effectiveRadius) * 3.14159 / 3) - (4 * (innerRadius * innerRadius * innerRadius) * 3.14159 / 3)"/>
+
+			<TimeDerivative variable="concentration" value="iCa / (2 * Faraday * shellVolume) - ((concentration - restingConc) / decayConstant)"/>
+
+			<OnStart>
+				<StateAssignment variable="concentration" value="initialConcentration"/>
+				<StateAssignment variable="extConcentration" value="initialExtConcentration"/>
+			</OnStart>
+			
+			<OnCondition test="concentration .lt. 0">
+				<StateAssignment variable="concentration" value="0"/>
+			</OnCondition>
+
+		</Dynamics>
+	</ComponentType>
+	
+	<!-- <ionChannel id="Gran_KA_98" conductance="10pS" type="ionChannelHH" species="k">
+
+		<gate id="m" type="gateHHtauInf" instances="3">
+			<q10Settings type="q10ExpTemp" q10Factor="1" experimentalTemp="17.350264793 degC"/>
+			<timeCourse type="Gran_KA_98_m_tau_tau"/>
+			<steadyState type="HHSigmoidVariable" rate="1" scale="0.0198V" midpoint="-0.036699999999999997V"/>
+		</gate>
+
+		<gate id="h" type="gateHHtauInf" instances="1">
+			<q10Settings type="q10ExpTemp" q10Factor="1" experimentalTemp="17.350264793 degC"/>
+			<timeCourse type="Gran_KA_98_h_tau_tau"/>
+			<steadyState type="HHSigmoidVariable" rate="1" scale="-0.0084V" midpoint="-0.0688V"/>
+		</gate>
+						
+	</ionChannel>
+	<ComponentType name="Gran_KA_98_m_tau_tau" extends="baseVoltageDepTime">
+		<Constant name="TIME_SCALE" dimension="time" value="1 s"/>
+		<Constant name="VOLT_SCALE" dimension="voltage" value="1 V"/>
+		<Constant name="offset" dimension="voltage" value="0.010V"/>
+
+		<Dynamics>
+			<DerivedVariable name="V" dimension="none" value="(v - offset) / VOLT_SCALE"/>
+			<DerivedVariable name="t" exposure="t" dimension="time" value="(0.410e-3 * ((exp (( ((V) + 0.0435) / (-0.0428))))) + 0.167e-3) * TIME_SCALE"/>
+		</Dynamics>
+
+	</ComponentType>
+	<ComponentType name="Gran_KA_98_h_tau_tau" extends="baseVoltageDepTime">
+		<Constant name="TIME_SCALE" dimension="time" value="1 s"/>
+		<Constant name="VOLT_SCALE" dimension="voltage" value="1 V"/>
+		<Constant name="offset" dimension="voltage" value="0.010V"/>
+
+		<Dynamics>
+			<DerivedVariable name="V" dimension="none" value="(v - offset) / VOLT_SCALE"/>
+			<DerivedVariable name="t" exposure="t" dimension="time" value="(0.001 * (10.8 + (30 * V) + (1 / (57.9 * (exp (V * 127)) + (134e-6 * (exp (V * (-59)))))))) * TIME_SCALE"/>
+		</Dynamics>
+
+	</ComponentType> -->
+	
+	<!-- ion channel with tau, inf LEMS dynamics -->
+	<ionChannel id="KvA" conductance="1pS" type="ionChannelHH" species="k">
+		
+		<notes>A-type K+ channel description (from Migliore 1995 - modified by Marianne Bezaire)</notes>
+		
+		<gateHHtauInf id="n" instances="1">
+			<q10Settings type="q10ExpTemp" q10Factor="3" experimentalTemp="30 degC"/>
+			<timeCourse type="Bezaire_KvA_taun"/>
+			<steadyState type="Bezaire_KvA_ssn"/>
+		</gateHHtauInf>
+		
+		<gateHHtauInf id="l" instances="1">
+			<q10Settings type="q10ExpTemp" q10Factor="3" experimentalTemp="30 degC"/>
+			<timeCourse type="Bezaire_KvA_taul"/>
+			<steadyState type="Bezaire_KvA_ssl"/>
+		</gateHHtauInf>
+		
+	</ionChannel>
+	<ComponentType name="Bezaire_KvA_taun"
+				   extends="baseVoltageDepTime"
+				   description="Tau parameter to describe KvA">
+		
+		<Constant name="TIME_SCALE" dimension="time" value="1 ms"/>
+		<Constant name="VOLT_SCALE" dimension="voltage" value="1 mV"/>
+		<Constant name="TEMP_SCALE" dimension="temperature" value="1 K"/>
+		<Constant name="R" dimension="none" value="8.315"/>
+		<Constant name="F" dimension="none" value="96480"/>
+				
+		<Requirement name="temperature" dimension="temperature"/>
+
+		<Dynamics>
+			<DerivedVariable name="V" dimension="none" value="v / VOLT_SCALE"/>
+			<DerivedVariable name="T" dimension="none" value="temperature / TEMP_SCALE"/>
+			
+			<DerivedVariable name="alpha" dimension="none" value="exp((1e-3*(-3)*(V+33.6)*F) / (R*(T+0.01)))"/> <!-- NEURON code: 273.16 + celsius-->
+			<DerivedVariable name="beta" dimension="none" value="exp((1e-3*(-3)*0.6*(V+33.6)*F) / (R*(T+0.01)))"/> <!-- NEURON code: 273.16 + celsius-->
+
+			<DerivedVariable name="t" dimension="time" value="( beta / (0.02*(1 + alpha)) ) * TIME_SCALE" exposure="t"/>
+
+		</Dynamics>
+
+	</ComponentType>
+	<ComponentType name="Bezaire_KvA_ssn"
+				   extends="baseVoltageDepVariable"
+				   description="steadyState parameter to describe KvA">
+		
+		<Constant name="VOLT_SCALE" dimension="voltage" value="1 mV"/>
+		<Constant name="TEMP_SCALE" dimension="temperature" value="1 K"/>
+		<Constant name="R" dimension="none" value="8.315"/>
+		<Constant name="F" dimension="none" value="96480"/>
+				
+		<Requirement name="temperature" dimension="temperature"/>
+
+		<Dynamics>
+			<DerivedVariable name="V" dimension="none" value="v / VOLT_SCALE"/>
+			<DerivedVariable name="T" dimension="none" value="temperature / TEMP_SCALE"/>
+			
+			<DerivedVariable name="alpha" dimension="none" value="exp((1e-3*(-3)*(V+33.6)*F) / (R*(T+0.01)))"/> <!-- NEURON code: 273.16 + celsius-->
+			
+			<DerivedVariable name="x" exposure="x" dimension="none" value="1 / (1 + alpha)"/>
+		</Dynamics>
+
+	</ComponentType>
+	<ComponentType name="Bezaire_KvA_taul"
+				   extends="baseVoltageDepTime"
+				   description="Tau parameter to describe KvA">
+		
+		<Constant name="TIME_SCALE" dimension="time" value="1 ms"/>
+		<Constant name="VOLT_SCALE" dimension="voltage" value="1 mV"/>
+		<Constant name="TEMP_SCALE" dimension="temperature" value="1 K"/>
+		<Constant name="R" dimension="none" value="8.315"/>
+		<Constant name="F" dimension="none" value="96480"/>
+				
+		<Requirement name="temperature" dimension="temperature"/>
+
+		<Dynamics>
+			<DerivedVariable name="V" dimension="none" value="v / VOLT_SCALE"/>
+			<DerivedVariable name="T" dimension="none" value="temperature / TEMP_SCALE"/>
+			
+			<DerivedVariable name="alpha_beta" dimension="none" value="exp((1e-3*4*(V+83)*F) / (R*(T+0.01)))"/> <!-- NEURON code: 273.16 + celsius-->
+
+			<DerivedVariable name="t" dimension="time" value="( alpha_beta / (0.08*(1 + alpha_beta)) ) * TIME_SCALE" exposure="t"/>
+
+		</Dynamics>
+
+	</ComponentType>
+	<ComponentType name="Bezaire_KvA_ssl"
+				   extends="baseVoltageDepVariable"
+				   description="steadyState parameter to describe KvA">
+		
+		<Constant name="VOLT_SCALE" dimension="voltage" value="1 mV"/>
+		<Constant name="TEMP_SCALE" dimension="temperature" value="1 K"/>
+		<Constant name="R" dimension="none" value="8.315"/>
+		<Constant name="F" dimension="none" value="96480"/>
+				
+		<Requirement name="temperature" dimension="temperature"/>
+
+		<Dynamics>
+			<DerivedVariable name="V" dimension="none" value="v / VOLT_SCALE"/>
+			<DerivedVariable name="T" dimension="none" value="temperature / TEMP_SCALE"/>
+			
+			<DerivedVariable name="alpha" dimension="none" value="exp((1e-3*4*(V+83)*F) / (R*(T+0.01)))"/> <!-- NEURON code: 273.16 + celsius-->
+			
+			<DerivedVariable name="x" exposure="x" dimension="none" value="1 / (1 + alpha)"/>
+		</Dynamics>
+
+	</ComponentType>
+	
+	<!-- <ionChannel id="Golgi_KA_CML" conductance="10pS" type="ionChannelHH" species="k">
+
+		<notes>A-type K channel, with rate equations expressed in tau and inf form</notes>
+				
+		<annotation>
+			<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+				<rdf:Description rdf:about="Golgi_KA_CML">
+					
+					<bqmodel:isDescribedBy xmlns:bqmodel="http://biomodels.net/model-qualifiers/">
+						<rdf:Bag>
+							<rdf:li>Maex, R and De Schutter, E. 
+			Synchronization of Golgi and Granule Cell Firing in a Detailed Network Model of the 
+			cerebellar Granule Cell Layer. J Neurophysiol, Nov 1998; 80: 2521 - 2537</rdf:li>
+							<rdf:li rdf:resource="http://www.ncbi.nlm.nih.gov/entrez/query.fcgi?cmd=Retrieve&amp;db=PubMed&amp;list_uids=9819260&amp;dopt=Abstract"/>
+						</rdf:Bag>
+					</bqmodel:isDescribedBy>
+
+				
+					<bqbiol:isVersionOf xmlns:bqbiol="http://biomodels.net/biology-qualifiers/">
+						<rdf:Bag>
+							<rdf:li>K channels</rdf:li>
+							<rdf:li rdf:resource="http://senselab.med.yale.edu/senselab/NeuronDB/channelGene2.htm#table3"/>
+						</rdf:Bag>
+					</bqbiol:isVersionOf>
+
+				</rdf:Description>
+			</rdf:RDF>
+		</annotation>
+
+		<gate id="m" type="gateHHtauInf" instances="3">
+			<q10Settings type="q10ExpTemp" q10Factor="1" experimentalTemp="17.350264793 degC"/>
+			<timeCourse type="Golgi_KA_CML_m_tau_tau"/>
+			<steadyState type="HHSigmoidVariable" rate="1" scale="0.0198V" midpoint="-0.0467V"/>
+		</gate>
+
+		<gate id="h" type="gateHHtauInf" instances="1">
+			<q10Settings type="q10ExpTemp" q10Factor="1" experimentalTemp="17.350264793 degC"/>
+			<timeCourse type="Golgi_KA_CML_h_tau_tau"/>
+			<steadyState type="HHSigmoidVariable" rate="1" scale="-0.0084V" midpoint="-0.0788V"/>
+		</gate>
+							
+	</ionChannel>
+	<ComponentType name="Golgi_KA_CML_m_tau_tau" extends="baseVoltageDepTime">
+		<Constant name="TIME_SCALE" dimension="time" value="1 s"/>
+		<Constant name="VOLT_SCALE" dimension="voltage" value="1 V"/>
+
+		<Dynamics>
+			<DerivedVariable name="V" dimension="none" value="v / VOLT_SCALE"/>
+			<DerivedVariable name="t" exposure="t" dimension="time" value="(0.410e-3 * ((exp (( ((V) + 0.0435) / (-0.0428))))) + 0.167e-3) * TIME_SCALE"/>
+		</Dynamics>
+
+	</ComponentType>
+	<ComponentType name="Golgi_KA_CML_h_tau_tau" extends="baseVoltageDepTime">
+		<Constant name="TIME_SCALE" dimension="time" value="1 s"/>
+		<Constant name="VOLT_SCALE" dimension="voltage" value="1 V"/>
+
+		<Dynamics>
+			<DerivedVariable name="V" dimension="none" value="v / VOLT_SCALE"/>
+			<DerivedVariable name="t" exposure="t" dimension="time" value="(0.001 * (10.8 + (30 * V) + (1 / (57.9 * (exp (V * 127)) + (134e-6 * (exp (V * (-59)))))))) * TIME_SCALE"/>
+		</Dynamics>
+
+	</ComponentType> -->
+	
+	<!-- calcium channel with instantaneous gate -->
+	<ionChannel id="CavL" conductance="1pS" type="ionChannelHH" species="ca">
+        
+        <notes>L-type Ca++ channel description (from Jaffe 1994 - modeled by Lawrence 2006)</notes>
+        
+        <gate id="m" type="gateHHrates" instances="2">
+            <forwardRate type="HHExpLinearRate" rate="156.9per_ms" midpoint="81.5mV" scale="10mV"/>
+            <reverseRate type="HHExpRate" rate="0.29per_ms" midpoint="0mV" scale="-10.86mV"/>
+        </gate>
+        
+        <gate id="h" type="gateHHInstantaneous" instances="1">
+            <steadyState type="Bezaire_CavL_ssh"/>
+        </gate>
+                            
+    </ionChannel>
+    <ComponentType name="Bezaire_CavL_ssh"
+			extends="baseVoltageConcDepVariable"
+			description="steadyState parameter to describe CavL">
+        
+        <Constant name="CONC_SCALE" dimension="concentration" value="1 mM"/>
+
+        <Dynamics>
+            <DerivedVariable name="ca_conc_i" dimension="none" value="caConc / CONC_SCALE"/>
+            <DerivedVariable name="x" dimension="none" value="0.001 / (0.001 + ca_conc_i)" exposure="x"/>
+        </Dynamics>
+
+    </ComponentType>
+	
+	<!-- calcium-controlled ion channel -->
+	<ionChannel id="Gran_KCa_98" conductance="10pS" type="ionChannelHH" species="k">
+
+		<gate id="m" type="gateHHrates" instances="1">
+			<q10Settings type="q10ExpTemp" q10Factor="3" experimentalTemp="17.350264793 degC"/>
+			<!--Note: offset from ChannelML file incorporated into the midpoint of rates!!-->
+			<forwardRate type="Gran_KCa_98_m_alpha_rate"/>
+			<reverseRate type="Gran_KCa_98_m_beta_rate"/>
+		</gate>
+							
+	</ionChannel>
+	<ComponentType name="Gran_KCa_98_m_alpha_rate" extends="baseVoltageConcDepRate">
+		<Constant name="TIME_SCALE" dimension="time" value="1 s"/>
+		<Constant name="VOLT_SCALE" dimension="voltage" value="1 V"/>
+		<Constant name="CONC_SCALE" dimension="concentration" value="1 mM"/>
+		<Constant name="offset" dimension="voltage" value="0.010V"/>
+
+		<Dynamics>
+			<DerivedVariable name="V" dimension="none" value="(v - offset) / VOLT_SCALE"/>
+			<DerivedVariable name="ca_conc" dimension="none" value="caConc / CONC_SCALE"/>
+			<DerivedVariable name="r" exposure="r" dimension="per_time" value="(2500/(1 + ( (1.5e-3 *(exp (-85*V))) / ca_conc))) / TIME_SCALE"/>
+		</Dynamics>
+
+	</ComponentType>
+	<ComponentType name="Gran_KCa_98_m_beta_rate" extends="baseVoltageConcDepRate">
+		<Constant name="TIME_SCALE" dimension="time" value="1 s"/>
+		<Constant name="VOLT_SCALE" dimension="voltage" value="1 V"/>
+		<Constant name="CONC_SCALE" dimension="concentration" value="1 mM"/>
+		<Constant name="offset" dimension="voltage" value="0.010V"/>
+
+		<Dynamics>
+			<DerivedVariable name="V" dimension="none" value="(v - offset) / VOLT_SCALE"/>
+			<DerivedVariable name="ca_conc" dimension="none" value="caConc / CONC_SCALE"/>
+			<DerivedVariable name="r" exposure="r" dimension="per_time" value="(1500/(1 + (ca_conc / (1.5e-4 * (exp (-77*V)))))) / TIME_SCALE"/>
+		</Dynamics>
+
+	</ComponentType>
+	
+	<!-- ion channel with alpha, beta dynamics -->
+	<ionChannel id="Kdrfastngf" conductance="1pS" type="ionChannelHH" species="k">
+		<!-- not the same as ch_Kdrfastngf.mod, because those parameters are changed from hoc level ... - András -->
+			
+			<notes>Fast delayed rectifier K+ channel description for neurogliaform family (from Yuen and Durand 1991, modeled by Marianne Bezaire)</notes> 
+			<!-- also suitable for Ivy cells-->
+			<gateHHrates id="n" instances="4">
+				<q10Settings type="q10ExpTemp" q10Factor="3" experimentalTemp="34 degC"/> 
+				<forwardRate type="HHExpLinearRate" rate="0.42per_ms" midpoint="-9mV" scale="6mV"/>
+				<reverseRate type="Bezaire_Kdrfastngf_betaq"/>
+			</gateHHrates>
+			
+	</ionChannel>
+	<ComponentType name="Bezaire_Kdrfastngf_betaq"
+			extends="baseVoltageDepRate"
+			description="reverse rate to describe Kdrfastngf">
+		
+		<Constant name="TIME_SCALE" dimension="time" value="1 ms"/>
+		<Constant name="VOLT_SCALE" dimension="voltage" value="1 mV"/>
+		
+		<Dynamics>
+			<DerivedVariable name="V" dimension="none" value="v / VOLT_SCALE"/>       
+			<DerivedVariable name="r" dimension="per_time" value="((0.264) / (exp((V+34)/40))) / TIME_SCALE" exposure="r"/>          
+		</Dynamics>
+		
+	</ComponentType>
+	<!-- 
+	TODO:
+
+	composite gate
+	ks gate
+	q10 scaling
+	lems scaling
+	vshift 
+	population
+	ChannelDensityNernstCa2
+	all sorts of ion channel distributions
+	https://github.com/OpenSourceBrain/ghk-nernst
+	Population ?
+	
+	<ComponentType name="cond_scaling_kc" extends="baseConductanceScalingCaDependent">
+        <Constant name="CONC_SCALE" dimension="concentration" value="1 mol_per_cm3"/>
+
+        <Dynamics>
+            <DerivedVariable name="ca_conc" dimension="none" value="caConc / CONC_SCALE"/>
+            <ConditionalDerivedVariable name="factor" exposure="factor" dimension="none">
+                <Case condition="ca_conc  .lt. ( 0.00025 )" value=" (ca_conc / 0.00025) "/>
+                <Case value=" 1"/>
+            </ConditionalDerivedVariable>
+        </Dynamics>
+
+    </ComponentType>
+	<baseConductanceScalingCaDependent type="cond_scaling_kc"/> LATER
+	-->
+	
+	<!-- LEMS Component gate
+		who uses this anyway? some users extend gateTauInf but they hierarchically include sub-components -->
+	<ComponentType name="K_gate_N"
+				extends="baseGate"
+				description="Gate which follows the general Hodgkin Huxley formalism">
+		
+		<Requirement name="temperature" dimension="temperature"/>
+		
+		<Parameter name="q10Factor" dimension="temperature" value="278.75 K"/>
+		
+		<Constant name="TIME_SCALE" dimension="time" value="1 ms"/>
+		<Constant name="VOLT_SCALE" dimension="voltage" value="1 mV"/>
+		
+		<Dynamics>
+			<StateVariable name="q" exposure="q" dimension="none"/>
+			
+			<DerivedVariable name="V" dimension="none" value="v / VOLT_SCALE"/>
+
+			<DerivedVariable name="rateScale" exposure="rateScale" dimension="none" value="10 ^ (temperature/q10Factor)"/>
+
+			<DerivedVariable name="alpha" dimension="per_time" exposure="alpha" value=" ( (0.01 * (10 - V) ) / (exp((10 - V) / 10) - 1) ) / TIME_SCALE"/>
+			<DerivedVariable name="beta" dimension="per_time" exposure="beta" value="( 0.125 * exp( (-V) / 80 ) ) / TIME_SCALE"/>
+
+			<DerivedVariable name="fcond" exposure="fcond" dimension="none" value="q^instances"/>
+
+			<TimeDerivative variable="q" value="rateScale * ( alpha * (1 - q) - beta * q )"/>
+
+			<OnStart>
+				<StateAssignment variable="q" value="alpha / ( alpha + beta )"/>
+			</OnStart>
+
+		</Dynamics>
+	</ComponentType>
+	
+	<!-- LEMS Component channel
+		who uses this anyway? -->
+	<ComponentType name="myIonChannelPassive" 
+                   extends="baseIonChannel"
+                   description="Simple passive ion channel where the constant conductance through the channel is equal to _conductance">
+
+        <Dynamics>
+            <DerivedVariable name="fopen" exposure="fopen" value="1" dimension="none"/>
+            <DerivedVariable name="g" exposure="g" value="conductance" dimension="conductance"/>
+        </Dynamics>
+    </ComponentType>
+	<myIonChannelPassive id="passiveChanLems" conductance="10pS"/>
+	
+	<!-- LEMS Component scaling
+		applicable on any ion channel -->
+	<ComponentType name="cond_scaling_kc" extends="baseConductanceScalingCaDependent">
+        <Constant name="CONC_SCALE" dimension="concentration" value="1 mol_per_cm3"/>
+
+        <Dynamics>
+            <DerivedVariable name="ca_conc" dimension="none" value="caConc / CONC_SCALE"/>
+            <DerivedVariable name="factor" exposure="factor" dimension="none" value="(ca_conc / 0.00025)"/>
+        </Dynamics>
+
+    </ComponentType>
+	
+	<!-- ion channel with q10  scaling component -->
+	
+	<ionChannelHH id="passiveChanQ10" conductance="10pS">
+		<q10ConductanceScaling q10Factor="2.3" experimentalTemp="23degC"/>
+	</ionChannelHH>
+	<ionChannelHH id="passiveChanQ10Lems" conductance="10pS">
+		<cond_scaling_kc q10Factor="2.3" experimentalTemp="23degC"/>
+	</ionChannelHH>
+	
+	<!-- ion channel with LEMS scaling component -->
+	
+	<!-- <ComponentType name="Generic_NaV_rate1" extends="baseVoltageDepRate">
+
+		<Parameter name="forward_n" dimension="none"/> 
+		<Parameter name="backward_n" dimension="none"/> 
+
+		<Parameter name="alfac" dimension="none"/> 
+		<Parameter name="btfac" dimension="none"/> 
+
+		<Constant name="alpha" dimension="per_time" value="400 per_ms"/>
+		<Constant name="beta" dimension="per_time" value="12 per_ms"/>
+
+		<Constant name="x1" dimension="voltage" value="24 mV"/>
+		<Constant name="x2" dimension="voltage" value="-24 mV"/>
+
+		<Constant name="base_q10" dimension="temperature" value="37 degC"/>
+		<Constant name="TENDEGREES" dimension="temperature" value="10K"/>
+
+		<Requirement name="temperature" dimension="temperature"/>
+
+		<Dynamics>
+			<DerivedVariable name="qt" dimension="none" value="2.3^((temperature-base_q10)/TENDEGREES)"/>
+			<DerivedVariable name="r" exposure="r" dimension="per_time" value="(qt * forward_n * alpha * alfac * exp(v/x1)) + (qt * backward_n * beta * exp(v/x2) / btfac)"/>
+		</Dynamics>
+
+		</ComponentType>
+
+		<ComponentType name="Generic_NaV_rate2" extends="baseVoltageDepRate">
+
+		<Parameter name="rate" dimension="per_time"/> 
+		<Parameter name="factor" dimension="none"/> 
+		<Parameter name="power" dimension="none"/> 
+
+		<Constant name="base_q10" dimension="temperature" value="37 degC"/>
+		<Constant name="TENDEGREES" dimension="temperature" value="10K"/>
+
+		<Requirement name="temperature" dimension="temperature"/>
+
+		<Dynamics>
+			<DerivedVariable name="qt" dimension="none" value="2.3^((temperature-base_q10)/TENDEGREES)"/>
+			<DerivedVariable name="r" exposure="r" dimension="per_time" value="qt * rate * (factor^power)"/>
+		</Dynamics>
+
+	</ComponentType> -->
+	
+	<!-- basic HH ion channels -->
+	<ionChannelHH id="passiveChan" conductance="10pS">
+		<notes>Leak conductance</notes>
+	</ionChannelHH>
+	<ionChannelHH id="naChan" conductance="10pS" species="na">
+		<notes>Na channel</notes>
+
+		<gateHHrates id="m" instances="3">
+			<forwardRate type="HHExpLinearRate" rate="1per_ms" midpoint="-40mV" scale="10mV"/>
+			<reverseRate type="HHExpRate" rate="4per_ms" midpoint="-65mV" scale="-18mV"/>
+		</gateHHrates>
+
+		<gateHHrates id="h" instances="1">
+			<forwardRate type="myHHExpRate" rate="0.07per_ms" midpoint="-65mV" scale="-20mV"/>
+			<reverseRate type="myHHSigmoidRate" rate="1per_ms" midpoint="-35mV" scale="10mV"/>
+		</gateHHrates>
+
+	</ionChannelHH>
+	<ionChannelHH id="kChan" conductance="10pS" species="k">
+
+		<gateHHrates id="n" instances="4">
+			<forwardRate type="HHExpLinearRate" rate="0.1per_ms" midpoint="-55mV" scale="10mV"/>
+			<reverseRate type="myHHExpRate" rate="0.125per_ms" midpoint="-65mV" scale="-80mV"/>
+		</gateHHrates>
+			
+	</ionChannelHH>
+	<ionChannelHH id="kChan_Lems" conductance="10pS" species="k">
+
+		<K_gate_N id="n" instances="4" tryMoreParms="TODO"/>
+			
+	</ionChannelHH>
+	
+	<ComponentType name="myHHExpRate" 
+					extends="baseVoltageDepRate"
+					description="Exponential form for rate equation (Q: Should these be renamed hhExpRate, etc?)">
+					
+		<Parameter name="rate" dimension="per_time"/>
+		<Parameter name="midpoint" dimension="voltage"/>
+		<Parameter name="scale" dimension="voltage"/>
+		
+		<Dynamics>
+			<DerivedVariable name="r" exposure="r" value="rate * exp((v - midpoint)/scale)" dimension="per_time"/>
+		</Dynamics>
+		
+	</ComponentType>
+
+	<ComponentType name="myHHSigmoidRate" 
+					extends="baseVoltageDepRate">
+					
+		<Parameter name="rate" dimension="per_time"/>
+		<Parameter name="midpoint" dimension="voltage"/>
+		<Parameter name="scale" dimension="voltage"/>
+		
+		<Dynamics>
+			<DerivedVariable name="r" exposure="r" value="rate / (1 + exp(0 - (v - midpoint)/scale))" dimension="per_time"/>
+		</Dynamics>
+		
+	</ComponentType>
+	
+	
+	<cell id="hhcell">
+
+		<morphology id="morph1">
+			<segment id="0" name="soma">
+				<proximal x="0" y="0" z="0" diameter="17.841242"/> <!--Gives a convenient surface area of 1000.0 ?m�-->
+				<distal x="0" y="0" z="0" diameter="17.841242"/>
+			</segment>
+
+			<segmentGroup id="soma_group">
+				<member segment="0"/>
+			</segmentGroup>
+
+		</morphology>
+
+		<biophysicalProperties id="bioPhys1">
+
+			<membraneProperties>
+						
+				<channelDensity id="leak" ionChannel="passiveChan" condDensity="3.0 S_per_m2" erev="-54.3mV" ion="non_specific"/>
+				<channelDensity id="leakLems" ionChannel="passiveChanLems" condDensity="3.0 S_per_m2" erev="-54.3mV" ion="non_specific"/>
+				
+				<channelDensity id="naChans" ionChannel="naChan" condDensity="120.0 mS_per_cm2" erev="50.0 mV" ion="na"/>
+				
+				<channelDensity id="kChans"      ionChannel="kChan"      condDensity="0 S_per_m2" erev="-77mV" ion="k"/>
+				<channelDensity id="kChans_Lems" ionChannel="kChan_Lems" condDensity="0 S_per_m2" erev="-77mV" ion="k"/>
+				<channelDensity id="kChansAlphaBeta" ionChannel="Kdrfastngf" condDensity="180 S_per_m2" erev="-77mV" ion="k"/>
+				<channelDensity id="kChansTauInf" ionChannel="KvA" condDensity="180 S_per_m2" erev="-77mV" ion="k"/>
+				<channelDensity id="kChansCaDep" ionChannel="Gran_KCa_98" condDensity="180 S_per_m2" erev="-77mV" ion="k"/>
+				
+				<channelDensity id="caChans" ionChannel="CavL" condDensity="29.0 S_per_m2" erev="-54.3mV" ion="ca"/><!--  -->
+				
+				<!--
+				<channelDensity condDensity="0.524928 mS_per_cm2" id="Golgi_KA_CML_soma_group" ionChannel="Golgi_KA_CML" segmentGroup="soma_group" ion="k" erev="-90.0 mV"/>
+				-->
+				<!-- <channelDensity id="Kdrfastngf_soma" ionChannel="Kdrfastngf" condDensity="155.145mS_per_cm2" erev="-90mV" segmentGroup="soma_group" ion="k"/> -->
+				
+				<!-- <channelDensity id="fakeCaChans" ionChannel="fakeCaChan" condDensity="360 S_per_m2" erev="50mV" ion="ca"/> -->
+				
+				<spikeThresh value="-20mV"/>
+				<specificCapacitance value="1.0 uF_per_cm2"/>
+				<initMembPotential value="-65mV"/>
+
+			</membraneProperties>
+
+			<intracellularProperties>
+				<!-- <species segmentGroup="soma_group" id="ca" ion="ca" concentrationModel="Gran_CaPool_98" initialConcentration="7.55E-11 mol_per_cm3" initialExtConcentration="2.4E-6 mol_per_cm3"/> -->
+				<!-- <species id="ca" concentrationModel="Capoolngf" ion="ca" initialConcentration="5e-6 mM" initialExtConcentration="2 mM"/> -->
+				<species id="ca" concentrationModel="myGran_CaPool_98" ion="ca" initialConcentration="5e-6 mM" initialExtConcentration="2 mM"/>
+				<!-- <species id="ca" concentrationModel="mydemyGran_CaPool_98cayingPoolConcentrationModel" ion="ca" initialConcentration="5e-6 mM" initialExtConcentration="2 mM"/> -->
+				
+				<resistivity value="0.03 kohm_cm"/>   <!-- Note: not used in single compartment simulations -->
+			</intracellularProperties>
+
+		</biophysicalProperties>
+
+	</cell>
+	<pulseGenerator id="pulseGen1" delay="00ms" duration="1ms" amplitude="0.08nA"/>
+
+	<network id="net1">
+		<population id="hhpop" component="hhcell" size="1"/>
+		<explicitInput target="hhpop[0]" input="pulseGen1"/>
+	</network>
+
+</neuroml>

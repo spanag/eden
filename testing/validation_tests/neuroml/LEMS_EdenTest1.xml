@@ -1,0 +1,49 @@
+
+<Lems>
+
+<!-- Example with instances of multicompartmental cells...
+
+     Note: requires Neuron to run, e.g.
+
+     jnml LEMS_NML2_Ex25_MultiComp.xml -neuron
+-->
+
+
+<!-- Specify which component to run -->
+    <Target component="sim1"/>
+
+<!-- Include core NeuroML2 ComponentType definitions -->
+    <Include file="Cells.xml"/>
+    <Include file="Networks.xml"/>
+    <Include file="Simulation.xml"/>
+
+    <!-- Main NeuroML2 content. -->
+
+    <!-- Including file with a <neuroml> root, a "real" NeuroML 2 file -->
+    <Include file="EdenTestNetwork1.nml"/>
+
+    <!-- End of NeuroML2 content -->
+
+
+    <Simulation id="sim1" length="50.30ms" step="0.025ms" target="EdenTestNetwork1">
+		
+		<!-- add logging for headless sims --> 
+		
+		<OutputFile id="first" fileName="results1.txt">
+			<OutputColumn id="v_cell_0" quantity="pop0/0/MultiCompCell/0/v"/>
+			<OutputColumn id="v_cell_1" quantity="pop0/1/MultiCompCell/0/v"/>
+			<OutputColumn id="v_cell_2" quantity="pop0/2/MultiCompCell/1/v"/>
+      		<OutputColumn id="v_cell_20" quantity="pop0/2/MultiCompCell/0/v"/>
+			<OutputColumn id="v_cell" quantity="pop0/2/MultiCompCell/1/bioPhys1/membraneProperties/naChans/naChan/m/q"/>
+		</OutputFile>
+		
+		<EventOutputFile id="spikeone" fileName="resultspikes.txt" format="ID_TIME">
+            <EventSelection id="thatone" select="pop0[2]/0" eventPort="spike"/> 
+		</EventOutputFile>
+		<EventOutputFile id="spiketwo" fileName="resultspikes.txt" format="TIME_ID">
+            <EventSelection id="thisone" select="pop0/2/MultiCompCell/0" eventPort="spike"/> 
+		</EventOutputFile>
+		
+    </Simulation>
+
+</Lems>

@@ -1,0 +1,9 @@
+#Ignore the intermediate binaries
+#Also preserve the folder in Git
+*.o
+*.a
+#Also ignore flex/bison generated code
+*.yy.*
+*.tab.*
+# And other generated code
+*.gen.*

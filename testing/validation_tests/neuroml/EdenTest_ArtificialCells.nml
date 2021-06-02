@@ -1,0 +1,284 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<neuroml xmlns="http://www.neuroml.org/schema/neuroml2"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://www.neuroml.org/schema/neuroml2 ../Schemas/NeuroML2/NeuroML_v2beta4.xsd"
+         id=" NML_EdenTestNetwork">
+
+    <!-- 
+		Example of core NeuroML artificial cells, and retated interfaces:
+			Some cells are not designed for synapses/inputs
+			Some cells have dimensionless voltage or current
+			Some cells are pure spike-based input sources
+			Later, some cells may directly receive spikes from spike sources
+			Artificial cells can interact with physical cells through both spikes and gap junctions. If the artificial cell is dimensionless, its side of the gap junction adapts Vpeer of physical cell to dimensionless current.
+	-->
+
+	<!-- Chemical synapses -->
+	<expOneSynapse id="Syn_expOneSynapse" gbase="10nS" erev="0V" tauDecay="0.5ms"/>
+	
+	<!-- Dummy physical cell -->
+	<ionChannelHH id="passiveChan" conductance="10pS">
+		<notes>Leak conductance</notes>
+	</ionChannelHH>
+	<cell id="PassiveCell">
+
+        <notes></notes>
+
+        <morphology>
+
+			<segment id="0" name="soma">
+                <proximal x="0" y="0" z="0" diameter="17.841242"/> <!--Gives a convenient surface area of 1000.0 ?m�-->
+                <distal x="0" y="0" z="0" diameter="17.841242"/>
+            </segment>
+
+        </morphology>
+
+        <biophysicalProperties id="bioph_PassiveCompartment">
+            
+            <membraneProperties>
+                
+                <channelDensity id="leak" ionChannel="passiveChan" condDensity="3.0 S_per_m2" erev="-54.3mV" ion="non_specific"/>
+                
+                <spikeThresh value="-0.0mV"/>
+                <specificCapacitance value="1.0 uF_per_cm2"/>
+				<initMembPotential value="-65mV" />
+
+            </membraneProperties>
+
+            <intracellularProperties>
+                <resistivity value="0.03 kohm_cm"/>   
+            </intracellularProperties>
+
+        </biophysicalProperties>
+    </cell>
+	
+	<!-- Artificial cells -->
+	<iafTauCell id="iafTau" leakReversal="-50mV" thresh="-55mV" reset="-70mV" tau="30ms"/>
+
+    <iafTauRefCell id="iafTauRef" leakReversal="-50mV" thresh="-55mV" reset="-70mV" tau="30ms" refract="5ms"/>
+
+    <iafCell id="iaf"
+		leakReversal="-50mV" thresh="-55mV"
+		reset="-70mV" C="0.2nF" leakConductance="0.01uS"
+	/>
+
+    <iafRefCell id="iafRef"
+		leakReversal="-50mV" thresh="-55mV"
+		reset="-70mV" C="0.2nF" leakConductance="0.01uS" refract="5ms"
+	/>
+
+	<izhikevichCell id="izBurst" v0 = "-70mV" thresh = "30mV" a ="0.02" b = "0.2" c = "-50" d = "2"/>
+	<!-- <izhikevichCell id="izTonic" v0 = "-70mV" thresh = "30mV" a ="0.02" b = "0.2" c = "-65" d = "6"/> -->
+	<!-- <izhikevichCell id="izMixed" v0 = "-70mV" thresh = "30mV" a ="0.02" b = "0.2" c = "-55" d = "4"/> -->
+	<!-- <izhikevichCell id="izClass1" v0 = "-60mV" thresh = "30mV" a ="0.02" b = "-0.1" c = "-55" d = "6"/> -->
+	<rampGeneratorDL id="rg0" delay="30ms" duration="170ms" startAmplitude="-32" finishAmplitude="50" baselineAmplitude="-32"/>
+	<!-- for izClass1 -->
+    
+    <izhikevich2007Cell id="iz2007RS"
+		v0 = "-60mV" C="100 pF" k = "0.7 nS_per_mV"
+		vr = "-60 mV" vt = "-40 mV" vpeak = "35 mV" 
+		a = "0.03 per_ms" b = "-2 nS" c = "-50 mV" d = "100 pA"
+	/>
+
+    <adExIaFCell id="adExBurst"
+		C="281pF" gL="30nS" EL="-70.6mV"
+		reset="-48.5mV" VT = "-50.4mV" thresh="-40.4mV"
+		refract="0.2ms" delT="2mV" tauw="40ms" a="4nS"
+		b="0.08nA"
+	/>
+	<!-- <adExIaFCell id="adExBurstChaos" C="281pF" gL="30nS" EL="-70.6mV" reset="-48mV"   VT = "-50.4mV" thresh = "-40.4mV" delT="2mV" tauw="40ms"  a ="4nS"   b = "0.08nA" refract="0.2ms"/> -->
+    
+    <fitzHughNagumoCell id="fn1" I="0.8" />
+    
+    <fitzHughNagumo1969Cell id="fn1969" a="0.7" b="0.08" I="1.0" phi="0.08" V0="0.0" W0="0.0"/>
+	
+	<!-- TODO current version of NeuroML exporter has a bug in mod generation, get a newer version
+    <pinskyRinzelCA3Cell id="pr2A"
+		iSoma="0.75 uA_per_cm2" iDend="0 uA_per_cm2" gc="2.1 mS_per_cm2" qd0="0"
+		gLs="0.1 mS_per_cm2" gLd="0.1 mS_per_cm2" gNa="30 mS_per_cm2" gKdr="15 mS_per_cm2"
+		gCa="10 mS_per_cm2" gKahp="0.8 mS_per_cm2" gKC="15 mS_per_cm2" eNa="60 mV" eCa="80 mV" eK="-75 mV" eL="-60 mV"
+		pp="0.5" cm="3 uF_per_cm2" alphac="2" betac="0.1"
+		gNmda="0 mS_per_cm2" gAmpa="0 mS_per_cm2"
+	/>
+	-->
+	
+	<!-- A novel LEMS cell that receives inputs -->
+	
+	<!-- PyNN stuff -->
+	
+	<IF_curr_alpha id="Test_IF_curr_alpha" cm="1.0" i_offset="0.9" tau_m="20.0" tau_refrac="10.0" 
+        tau_syn_E="0.5" tau_syn_I="0.5" v_init="-65" v_reset="-62.0" v_rest="-65.0" v_thresh="-52.0"/>
+    
+    <IF_curr_exp id="Test_IF_curr_exp" cm="1.0" i_offset="1.0" tau_m="20.0" tau_refrac="8.0"
+    tau_syn_E="5.0" tau_syn_I="5.0" v_init="-65" v_reset="-70.0" v_rest="-65.0" v_thresh="-50.0"/>
+    
+    <IF_cond_alpha id="Test_IF_cond_alpha" cm="1.0" e_rev_E="0.0" e_rev_I="-70.0" i_offset="0.9"  
+        tau_m="20.0" tau_refrac="5.0" tau_syn_E="0.3" tau_syn_I="0.5" v_init="-65" v_reset="-65.0" v_rest="-65.0" v_thresh="-50.0"/>
+    
+    <IF_cond_alpha id="silent_cell" cm="1.0" e_rev_E="0.0" e_rev_I="-70.0" i_offset="0"
+        tau_m="20.0" tau_refrac="5.0" tau_syn_E="5" tau_syn_I="10" v_init="-65" v_reset="-65.0" v_rest="-65.0" v_thresh="-50.0"/>
+    
+    <IF_cond_exp id="Test_IF_cond_exp" cm="1.0" e_rev_E="0.0" e_rev_I="-70.0" i_offset="1.0" 
+        tau_m="20.0" tau_refrac="5.0" tau_syn_E="5.0" tau_syn_I="5.0" v_init="-65" v_reset="-68.0" v_rest="-65.0" v_thresh="-52.0"/>
+    
+    <EIF_cond_exp_isfa_ista id="Test_EIF_cond_exp_isfa_ista" a="0.0" b="0.0805" cm="0.281"
+        delta_T="2.0" e_rev_E="0.0" e_rev_I="-80.0" i_offset="0.6" tau_m="9.3667" tau_refrac="5" tau_syn_E="5.0"
+        tau_syn_I="5.0" tau_w="144.0" v_init="-65" v_reset="-68.0" v_rest="-70.6" v_spike="-40.0" v_thresh="-52.0"/>
+    
+    <EIF_cond_alpha_isfa_ista id="Test_EIF_cond_alpha_isfa_ista" a="0.0" b="0.0805" cm="0.281"
+        delta_T="0" e_rev_E="0.0" e_rev_I="-80.0" i_offset="0.6" tau_m="9.3667" tau_refrac="5" tau_syn_E="5.0"
+        tau_syn_I="5.0" tau_w="144.0" v_init="-65" v_reset="-68.0" v_rest="-70.6" v_spike="-40.0" v_thresh="-52.0"/>
+    
+    <HH_cond_exp id="Test_HH_cond_exp" cm="0.2" e_rev_E="0.0" e_rev_I="-80.0" e_rev_K="-90.0"
+        e_rev_Na="50.0" e_rev_leak="-65.0" g_leak="0.01" gbar_K="6.0" gbar_Na="20.0" i_offset="0.2" tau_syn_E="0.2"
+        tau_syn_I="2.0" v_init="-65" v_offset="-63.0"/>
+		
+	<ComponentType name="iafTauCell_Quadratic"
+		extends="baseIaf"
+		description="Quadratic I&amp;F cell as seen on https://neuronaldynamics.epfl.ch/online/Ch5.S3.html . Extended with spike input causing a voltage delta">
+		
+		<Constant name="MVOLT" dimension="voltage" value="1mV"/>
+		
+		<Parameter name="vRest" dimension="voltage"/>
+		<Parameter name="vCrit" dimension="voltage"/>
+		<Parameter name="aScale" dimension="none"/>
+		
+		<Parameter name="deltaV" dimension="voltage"/>
+		
+		<Parameter name="tau" dimension="time"/>
+		
+		<EventPort name="in" direction="in"/>
+		
+		<!-- <Attachments name="spike_inputs" type="baseSpikeSource"/> -->
+		<!-- TODO more LEMS work needed to send direct spikes to cells, with jLems -->
+		<!-- <Requirement name="ISyn" dimension="none" /> -->
+
+		<Dynamics>
+			<StateVariable name="v" exposure="v" dimension="voltage"/>
+
+			<TimeDerivative variable="v" value="aScale * ( (v - vRest) * (v - vCrit) / MVOLT ) / tau"/>
+
+			<OnStart>
+				<StateAssignment variable="v" value="vRest"/>
+			</OnStart>
+
+			<OnCondition test="v .gt. thresh">
+				<StateAssignment variable="v" value="reset"/>
+				<EventOut port="spike"/>
+			</OnCondition>
+			
+			<OnEvent port="in">
+				<StateAssignment variable="v" value="v + deltaV"/>
+			</OnEvent>
+
+		</Dynamics>
+
+	</ComponentType>
+	<iafTauCell_Quadratic id="iafTauQuad" aScale="1" vRest="-60mV" vCrit="-50mV" deltaV="11mV" thresh="-0mV" reset="-70mV" tau="30ms"/>
+	
+	
+	<expCondSynapse id="syn1" tau_syn="5" e_rev="0"/>
+    <alphaCondSynapse id="syn2" tau_syn="5" e_rev="0"/>
+    <expCurrSynapse id="syn3" tau_syn="5"/>
+    <alphaCurrSynapse id="syn4" tau_syn="5"/>
+	
+	<!-- Input sources -->
+	<pulseGenerator     id="pulseGen1"     delay="10ms" duration="50ms" amplitude="0.2nA"/>
+	<pulseGenerator     id="pulseGenE"     delay="10ms" duration="50ms" amplitude="0.8nA"/>
+	<pulseGeneratorDL   id="pulseDL_1"   delay="10ms" duration="20ms" amplitude="14"/>
+	<sineGenerator      id="Inp_sineGenerator"      delay="20ms" duration="50ms" amplitude="1.0nA" phase="0" period="5ms"/>
+	
+	
+	<spikeArray id="spkArr">
+		<spike id="0" time="10 ms"/>
+		<spike id="1" time="20 ms"/>
+		<spike id="2" time="35 ms"/>
+		<spike id="3" time="50 ms"/>
+		<spike id="4" time="70 ms"/>
+    </spikeArray>
+	
+	<!-- Test network -->
+    <network id="EdenTestNetwork">
+		
+		<!-- Spike sources, with target cells -->
+		<!-- TODO all spike sources -->
+		<population id="Pop_spikeArray" component="spkArr" size="3" />
+		
+		<population id="Pop_SpikeSource_Targets" component="PassiveCell" size="3" />
+		
+		<!-- TODO gap junctions, test all combinations -->
+		
+		<!-- Artificial cells, with injected inputs -->
+		<population id="Pop_iafTauCell"               component="iafTau"    size="1" />
+		<population id="Pop_iafTauRefCell"            component="iafTauRef" size="1" />
+		<population id="Pop_iafCell"                  component="iaf"       size="1" />
+		<population id="Pop_iafRefCell"               component="iafRef"    size="1" />
+		<population id="Pop_izhikevichCell"           component="izBurst"   size="1" />
+		<population id="Pop_izhikevich2007Cell"       component="iz2007RS"  size="1" />
+		<population id="Pop_adExIaFCell"              component="adExBurst" size="1" />
+		<population id="Pop_fitzHughNagumoCell"       component="fn1"       size="1" />
+		<population id="Pop_fitzHughNagumo1969Cell"   component="fn1969"    size="1" />
+		<!-- <population id="Pop_pinskyRinzelCA3Cell"      component="pr2A"      size="1" /> TODO -->
+		<population id="Pop_IF_curr_alpha"            component="Test_IF_curr_alpha"            size="1" />
+		<population id="Pop_IF_curr_exp"              component="Test_IF_curr_exp"              size="1" />
+		<population id="Pop_IF_cond_alpha"            component="Test_IF_cond_alpha"            size="1" />
+		<population id="Pop_IF_cond_exp"              component="Test_IF_cond_exp"              size="1" />
+		<population id="Pop_EIF_cond_exp_isfa_ista"   component="Test_EIF_cond_exp_isfa_ista"   size="1" />
+		<population id="Pop_EIF_cond_alpha_isfa_ista" component="Test_EIF_cond_alpha_isfa_ista" size="1" />
+		<population id="Pop_HH_cond_exp"              component="Test_HH_cond_exp"              size="1" />
+		
+		<population id="Pop_iafTauCell_Quadratic"     component="iafTauQuad" size="1" />
+		
+		<!-- iafTauCell    does not receive current -->
+		<!-- iafTauRefCell does not receive current -->
+		<explicitInput target="Pop_iafCell[0]"                  input="pulseGen1" destination="synapses"/>
+		<explicitInput target="Pop_iafRefCell[0]"               input="pulseGen1" destination="synapses"/>
+		<explicitInput target="Pop_izhikevichCell[0]"           input="pulseDL_1" destination="synapses"/>
+		<explicitInput target="Pop_izhikevich2007Cell[0]"       input="pulseGen1" destination="synapses"/>
+		<explicitInput target="Pop_adExIaFCell[0]"              input="pulseGenE" destination="synapses"/>
+		<!-- fitzHughNagumoCell     does not receive current (but it should, it supports I_offset  already) -->
+		<!-- fitzHughNagumo1969Cell does not receive current (but it should, it supports I_offset  already) -->
+		<!-- pinskyRinzelCA3Cell    does not receive current (but it should, it supports I_density already) -->
+		<explicitInput target="Pop_IF_curr_alpha[0]"            input="pulseGen1" destination="synapses"/>
+		<explicitInput target="Pop_IF_curr_exp[0]"              input="pulseGen1" destination="synapses"/>
+		<explicitInput target="Pop_IF_cond_alpha[0]"            input="pulseGen1" destination="synapses"/>
+		<explicitInput target="Pop_IF_cond_exp[0]"              input="pulseGen1" destination="synapses"/>
+		<explicitInput target="Pop_EIF_cond_exp_isfa_ista[0]"   input="pulseGen1" destination="synapses"/>
+		<explicitInput target="Pop_EIF_cond_alpha_isfa_ista[0]" input="pulseGen1" destination="synapses"/>
+		<!-- NB: jLEMS complains about Pop_HH_cond_exp not having a spike output, for some reason -->
+		<!-- <explicitInput target="Pop_HH_cond_exp[0]"              input="pulseGen1" destination="synapses"/> -->
+		
+		<!-- TODO make cells receive direct spikes, using LEMS  -->
+		<!-- <explicitInput target="Pop_iafTauCell_Quadratic[0]"     input="spkArr" /> -->
+		
+		
+		<!-- PyNN stuff -->
+		<!-- TODO
+    
+        <population component="silent_cell" id="pop_target" size="4"/>
+        
+        <population component="spikes1" id="pop_spikes1" size="1"/>
+        <population component="spikes2" id="pop_spikes2" size="1"/>
+		
+        <projection id="proj0" presynapticPopulation="pop_EIF_cond_exp_isfa_ista" postsynapticPopulation="pop_target" synapse="syn1">
+            <connectionWD id="0" preCellId="../pop_EIF_cond_exp_isfa_ista[0]" postCellId="../pop_target[0]" weight="0.01" delay="10ms"/>
+        </projection>
+        
+        <projection id="proj1" presynapticPopulation="pop_EIF_cond_alpha_isfa_ista" postsynapticPopulation="pop_target" synapse="syn2">
+            <connectionWD id="0" preCellId="../pop_EIF_cond_alpha_isfa_ista[0]" postCellId="../pop_target[1]" weight="0.005" delay="20ms"/>
+        </projection>
+        
+        <projection id="proj2" presynapticPopulation="pop_IF_curr_alpha" postsynapticPopulation="pop_target" synapse="syn3">
+            <connectionWD id="0" preCellId="../pop_IF_curr_alpha[0]" postCellId="../pop_target[2]" weight="1" delay="30ms"/>
+        </projection>
+        
+        <projection id="proj3" presynapticPopulation="pop_IF_cond_exp" postsynapticPopulation="pop_target" synapse="syn4">
+            <connectionWD id="0" preCellId="../pop_IF_cond_exp[0]" postCellId="../pop_target[3]" weight="0.5" delay="40ms"/>
+        </projection>
+		-->
+		
+		
+    </network>
+
+</neuroml>

@@ -1,0 +1,4 @@
+#Ignore the artifact binaries
+#Also preserve the folder in Git
+*.x
+*.o

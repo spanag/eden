@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<neuroml xmlns="http://www.neuroml.org/schema/neuroml2"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://www.neuroml.org/schema/neuroml2 ../Schemas/NeuroML2/NeuroML_v2beta4.xsd"
+         id=" NML_EdenTestNetwork1">
+
+    <!-- Example of a network with connections between passive cells, with LEMS equivalents --> 
+
+    <ComponentType name="myPulseGenerator" extends="basePointCurrent"
+                description="Generates a constant current pulse of a certain _amplitude for a specified _duration after a _delay">
+
+        <Parameter name="delay" dimension="time" description="Delay before change in current. Current is zero  prior to this."/>
+        <Parameter name="duration" dimension="time" description="Duration for holding current at amplitude. Current is zero after delay + duration."/>
+        <Parameter name="amplitude" dimension="current" description="Amplitude of current pulse"/>
+
+        <Dynamics>
+            <!-- Could be using a conditional derived variable here -->
+            <StateVariable name="i" exposure="i" dimension="current"/>
+
+            <!-- Note that the component is initialized through OnCondition actions! -->
+            <OnCondition test="t .lt. delay">
+                <StateAssignment variable="i" value="0"/>
+            </OnCondition>
+            <OnCondition test="t .geq. delay .and. t .lt. duration + delay">
+                <StateAssignment variable="i" value="amplitude"/>
+            </OnCondition>
+            <OnCondition test="t .geq. duration + delay">
+                <StateAssignment variable="i" value="0"/>
+            </OnCondition>
+
+        </Dynamics>
+    </ComponentType>
+    <ComponentType name="myGapJunction" extends="baseGradedSynapse">
+
+        <Parameter name="conductance" dimension="conductance"/>
+
+        <Dynamics>
+            <DerivedVariable name="i" exposure="i" dimension="current" value="(vpeer - v) * conductance"/>
+        </Dynamics>
+    </ComponentType>
+    
+    <ComponentType name="myExpOneSynapse"
+                    extends="baseConductanceBasedSynapse"
+                    description="Ohmic synapse model whose conductance rises instantaneously by (_gbase * _weight) on receiving an event, and which decays exponentially to zero with time course _tauDecay">
+
+        <Property name="weight" dimension="none" defaultValue="1"/>
+
+        <Parameter name="tauDecay" dimension="time" description="Time course of decay"/>
+
+        <Dynamics>
+
+            <StateVariable name="g" dimension="conductance" exposure="g"/>
+
+            <DerivedVariable name="i" exposure="i" dimension="current" value="g * (erev - v)" />
+
+            <TimeDerivative variable="g" value="-g / tauDecay" />
+
+            <OnStart>
+                <StateAssignment variable="g" value="0" />
+            </OnStart>
+
+            <OnEvent port="in">
+                <StateAssignment variable="g" value="g + (weight * gbase)" />
+            </OnEvent>
+
+        </Dynamics>
+    </ComponentType>
+
+    
+
+	<ionChannelHH id="passiveChan" conductance="10pS">
+		<notes>Leak conductance</notes>
+	</ionChannelHH>
+
+
+	<gapJunction id="gj1" conductance="1000pS"/>
+	<myGapJunction id="gj3" conductance="1000pS"/>
+	
+	<expOneSynapse id="exp21" tauDecay="0.5ms" gbase=".3nS" erev="0V"/>
+	<myExpOneSynapse id="exp54" tauDecay="0.5ms" gbase=".3nS" erev="0V"/>
+    <expTwoSynapse id="AMPA" tauRise="3e-5s" tauDecay="0.5e-3s" gbase=".3nS" erev="0V"/>
+    
+    <pulseGenerator id="pulseGen2" delay="1ms" duration="20ms" amplitude="0.2nA"/>
+    <pulseGenerator id="pulseGen3" delay="0.001ms" duration="0.020ms" amplitude="0.18nA"/>
+    
+    <myPulseGenerator id="pulseGen5" delay="1ms" duration="20ms" amplitude="0.2nA"/>
+    <myPulseGenerator id="pulseGen6" delay="0.001ms" duration="0.020ms" amplitude="0.18nA"/>
+    
+	<cell id="MultiCompCell">
+
+        <notes>Multicompartmental cell</notes>
+
+        <morphology id="MultiCompCell_morphology">
+
+            <segment id ="0" name="Soma">
+                <proximal x="0" y="0" z="0" diameter="10"/>
+                <distal x="10" y="0" z="0" diameter="10"/>
+            </segment>
+
+            <segment id ="1" name="Dendrite1">
+                <parent segment="0"/>
+                <distal x="20" y="0" z="0" diameter="3"/>
+            </segment>
+			<!-- 
+            <segment id ="2" name="Dendrite2">
+                <parent segment="1"/>
+                <distal x="30" y="0" z="0" diameter="1"/>
+            </segment>
+             -->
+            <segmentGroup id="soma_group"> 
+                <member segment="0"/>
+            </segmentGroup>
+
+           <segmentGroup id="dendrite_group">  
+                <member segment="1"/>
+                <!-- <member segment="2"/> -->
+            </segmentGroup>
+
+        </morphology>
+
+        <biophysicalProperties id="bioPhys1">
+            
+            <membraneProperties>
+                
+                <channelDensity id="leak" ionChannel="passiveChan" condDensity="3.0 S_per_m2" erev="-54.3mV" ion="non_specific"/>
+                
+                <spikeThresh value="-64.5mV"/>
+                <specificCapacitance value="1.0 uF_per_cm2"/>
+				
+				<initMembPotential value="-65mV" />
+
+            </membraneProperties>
+
+            <intracellularProperties>
+                <resistivity value="1 kohm_cm"/>   
+            </intracellularProperties>
+
+        </biophysicalProperties>
+    </cell>
+	
+    <network id="EdenTestNetwork1">
+
+        <population id="pop0" type="populationList" component="MultiCompCell">
+            <instance id="0">
+                <location x="0" y="0" z="0"/>
+            </instance>
+            <instance id="1">
+                <location x="100" y="0" z="0"/>
+            </instance>
+            <instance id="2">
+                <location x="200" y="0" z="0"/>
+            </instance>
+            <instance id="3">
+                <location x="0" y="0" z="0"/>
+            </instance>
+            <instance id="4">
+                <location x="100" y="0" z="0"/>
+            </instance>
+            <instance id="5">
+                <location x="200" y="0" z="0"/>
+            </instance>
+        </population>
+		
+		<electricalProjection id ="testGJconn" presynapticPopulation="pop0" postsynapticPopulation="pop0">
+			<electricalConnection id="0" preCell="0" preSegment="0" postCell="2" postSegment="1" synapse="gj1"/>
+			<electricalConnection id="1" preCell="3" preSegment="0" postCell="5" postSegment="1" synapse="gj3"/>
+		</electricalProjection>
+		<projection id="projAexpo" presynapticPopulation="pop0" postsynapticPopulation="pop0" synapse="exp21">
+            <connection id="0" preCellId="../pop0/2/MultiCompCell" postCellId="../pop0/1/MultiCompCell" preSegmentId="0" preFractionAlong="0.5" postSegmentId="1" postFractionAlong="0.5"/>
+            <!-- <connection id="1" preCellId="../pop0/5/MultiCompCell" postCellId="../pop0/4/MultiCompCell" preSegmentId="0" preFractionAlong="0.5" postSegmentId="1" postFractionAlong="0.5"/> -->
+        </projection>
+        <projection id="projAexpo" presynapticPopulation="pop0" postsynapticPopulation="pop0" synapse="exp54">
+            <connection id="1" preCellId="../pop0/5/MultiCompCell" postCellId="../pop0/4/MultiCompCell" preSegmentId="0" preFractionAlong="0.5" postSegmentId="1" postFractionAlong="0.5"/>
+        </projection>
+		
+        <inputList id="stimInput1" component="pulseGen2" population="pop0">
+            <input id="0" target="../pop0/0/MultiCompCell" segmentId="0" fractionAlong="0.5" destination="synapses"/>
+            <input id="1" target="../pop0/3/MultiCompCell" segmentId="0" fractionAlong="0.5" destination="synapses"/>
+        </inputList>
+        <inputList id="stimInput2" component="pulseGen3" population="pop0">
+            <input id="0" target="../pop0/2/MultiCompCell" segmentId="0" fractionAlong="0.5" destination="synapses"/>
+        </inputList>
+        <inputList id="stimInput2" component="pulseGen6" population="pop0">
+            <input id="1" target="../pop0/5/MultiCompCell" segmentId="0" fractionAlong="0.5" destination="synapses"/>
+        </inputList>
+    </network>
+
+</neuroml>

@@ -1,0 +1,55 @@
+
+<Lems>
+
+<!-- Specify which component to run -->
+    <Target component="sim1"/>
+
+<!-- Include core NeuroML2 ComponentType definitions -->
+    <Include file="Cells.xml"/>
+    <Include file="Networks.xml"/>
+    <Include file="Simulation.xml"/>
+    <Include file="PyNN.xml"/>
+
+    <!-- Main NeuroML2 content. -->
+
+    <!-- Including file with a <neuroml> root, a "real" NeuroML 2 file -->
+    <Include file="EdenTest_CoreSynapses.nml"/>
+
+    <!-- End of NeuroML2 content -->
+
+    <Simulation id="sim1" length="50.000ms" step="0.002ms" target="EdenTestNetwork">
+		<OutputFile id="first" fileName="results.gen.txt">
+			
+			<OutputColumn id="v_chem_pre" quantity="ChemPre/0/HHCell/0/v" />
+			
+			<OutputColumn id="v_chem_post01" quantity="ChemPost/01/PassiveCell/0/v" />
+			<OutputColumn id="v_chem_post02" quantity="ChemPost/02/PassiveCell/0/v" />
+			<OutputColumn id="v_chem_post03" quantity="ChemPost/03/PassiveCell/0/v" />
+			<OutputColumn id="v_chem_post04" quantity="ChemPost/04/PassiveCell/0/v" />
+			<OutputColumn id="v_chem_post05" quantity="ChemPost/05/PassiveCell/0/v" />
+			<OutputColumn id="v_chem_post06" quantity="ChemPost/06/PassiveCell/0/v" />
+			<OutputColumn id="v_chem_post07" quantity="ChemPost/07/PassiveCell/0/v" />
+			<OutputColumn id="v_chem_post08" quantity="ChemPost/08/PassiveCell/0/v" />
+			<OutputColumn id="v_chem_post09" quantity="ChemPost/09/PassiveCell/0/v" />
+			<OutputColumn id="v_chem_post10" quantity="ChemPost/10/PassiveCell/0/v" />
+			
+			<OutputColumn id="v_chem_post21" quantity="ChemPost/21/PassiveCell/0/v" />
+			
+			
+			<OutputColumn id="v_cont_pre01" quantity="ContPre/01/PassiveCell/0/v" />
+			<OutputColumn id="v_cont_pre02" quantity="ContPre/02/PassiveCell/0/v" />
+			<OutputColumn id="v_cont_pre03" quantity="ContPre/03/PassiveCell/0/v" />
+			<!-- <OutputColumn id="v_cont_pre04" quantity="ContPre/03/PassiveCell/0/v" /> not needed since this part of the synapse is silent -->
+			
+			<!-- <OutputColumn id="v_cont_post01" quantity="ContPost/01/PassiveCell/0/v" /> not needed since this part of the synapse is silent -->
+			<OutputColumn id="v_cont_post02" quantity="ContPost/02/PassiveCell/0/v" />
+			<OutputColumn id="v_cont_post03" quantity="ContPost/03/PassiveCell/0/v" />
+			<OutputColumn id="v_cont_post04" quantity="ContPost/04/PassiveCell/0/v" />
+			
+			<!-- <OutputColumn id="v_cont_post12" quantity="ContPost/12/PassiveCell/0/v" /> TODO -->
+			
+			
+		</OutputFile>
+    </Simulation>
+
+</Lems>

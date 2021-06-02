@@ -1,0 +1,37 @@
+
+<Lems>
+
+<!-- Specify which component to run -->
+    <Target component="sim1"/>
+
+<!-- Include core NeuroML2 ComponentType definitions -->
+    <Include file="Cells.xml"/>
+    <Include file="Networks.xml"/>
+    <Include file="Simulation.xml"/>
+
+    <!-- Main NeuroML2 content. -->
+
+    <!-- Including file with a <neuroml> root, a "real" NeuroML 2 file -->
+    <Include file="EdenTest_PassiveCompartment.nml"/>
+
+    <!-- End of NeuroML2 content -->
+
+
+    <Simulation id="sim1" length="10.30ms" step="0.00012ms" target="EdenTest_PassiveCompartment">
+		
+		<!-- add logging for headless sims --> 
+		
+		<OutputFile id="first" fileName="results1.txt">
+			<OutputColumn id="v" quantity="pop0/0/PassiveCompartment/0/v"/>
+		</OutputFile>
+		<!-- 
+		<EventOutputFile id="spikeone" fileName="resultspikes.txt" format="ID_TIME">
+            <EventSelection id="thatone" select="pop0[2]/0" eventPort="spike"/> 
+		</EventOutputFile>
+		<EventOutputFile id="spiketwo" fileName="resultspikes.txt" format="TIME_ID">
+            <EventSelection id="thisone" select="pop0/2/MultiCompCell/0" eventPort="spike"/> 
+		</EventOutputFile>
+		 -->
+    </Simulation>
+
+</Lems>

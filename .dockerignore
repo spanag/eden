@@ -1,0 +1,7 @@
+# Ignore Git history
+.git
+
+# Ignore binaries, intermediate files, and sandboxes
+bin/*
+obj/*
+**/sandbox/*

@@ -1,0 +1,2 @@
+#Ignore test results, no matter where they are
+*test_results

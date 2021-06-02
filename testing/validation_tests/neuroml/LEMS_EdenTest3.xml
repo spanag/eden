@@ -1,0 +1,41 @@
+
+<Lems>
+
+
+
+<!-- Specify which component to run -->
+    <Target component="sim1"/>
+
+<!-- Include core NeuroML2 ComponentType definitions -->
+    <Include file="Cells.xml"/>
+    <Include file="Networks.xml"/>
+    <Include file="Simulation.xml"/>
+
+    <!-- Main NeuroML2 content. -->
+
+    <!-- Including file with a <neuroml> root, a "real" NeuroML 2 file -->
+    <Include file="EdenTestNetwork3.nml"/>
+
+    <!-- End of NeuroML2 content -->
+
+
+    <Simulation id="sim1" length="0.0130ms" step="0.001ms" target="net1">
+		
+	<!-- add logging for headless sims --> 
+	
+	<OutputFile id="first" fileName="results1.txt">
+		<OutputColumn id="v_cell_0" quantity="hhpop/0/hhcell/0/v"/>
+				
+		<OutputColumn id="m" quantity="hhpop/0/hhcell/0/bioPhys1/membraneProperties/naChans/naChan/m/q"/>
+		<OutputColumn id="h" quantity="hhpop/0/hhcell/0/bioPhys1/membraneProperties/naChans/naChan/h/q"/>
+		
+		<!---->
+		<OutputColumn id="n" quantity="hhpop/0/hhcell/0/bioPhys1/membraneProperties/kChans/kChan/n/q"/>
+		
+		<!-- <OutputColumn id="w" quantity="hhpop/0/hhcell/0/bioPhys1/membraneProperties/fakeCaChans/fakeCaChan/m/q"/> -->
+		
+	</OutputFile>
+		
+    </Simulation>
+
+</Lems>

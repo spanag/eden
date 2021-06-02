@@ -1,0 +1,1917 @@
+<Lems xmlns="http://www.neuroml.org/lems/0.7.4"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.neuroml.org/lems/0.7.4 ../../LEMS/Schemas/LEMS/LEMS_v0.7.4.xsd"
+	description="A number of ComponentTypes for internal use in EDEN.">
+
+<!-- Synaptic components -->
+<ComponentType name="silentSynapse"
+	extends="baseGradedSynapse"
+	description="Dummy synapse which emits no current. Used as presynaptic endpoint for analog synaptic connection.">
+
+	<Exposure name="i" dimension="current"/>
+
+	<!-- <Requirement name="v" dimension="voltage"/> -->
+
+	<Dynamics>
+		<!-- <DerivedVariable name="vpeer" dimension="voltage" select="peer/v"/> -->
+		<DerivedVariable name="i" exposure="i" dimension="current" value="0"/>
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="linearGradedSynapse"
+	extends="baseGradedSynapse"
+	description="Behaves just like a one way gap junction.">
+
+	<Parameter name="conductance" dimension="conductance"/>
+
+	<Exposure name="i" />
+
+	<!-- <Requirement name="v" dimension="voltage"/> -->
+
+	<Dynamics>
+		<!-- <DerivedVariable name="vpeer" dimension="voltage" select="peer/v"/> -->
+		<DerivedVariable name="i" exposure="i" dimension="current" value="conductance * (vpeer - v)"/>
+	</Dynamics>
+</ComponentType>
+
+<ComponentType name="gradedSynapse"
+	extends="baseGradedSynapse"
+	description="Graded/analog synapse. Based on synapse in Methods of http://www.nature.com/neuro/journal/v7/n12/abs/nn1352.html">
+
+	<Parameter name="conductance" dimension="conductance"/>
+
+	<Parameter name="delta" dimension="voltage" description="Slope of the activation curve"/>
+	<Parameter name="k" dimension="per_time" description="Rate constant for transmitter-receptor dissociation rate"/>
+	<Parameter name="Vth" dimension="voltage" description="The half-activation voltage of the synapse"/>
+	<Parameter name="erev" dimension="voltage" description="The reversal potential of the synapse"/>
+
+	<Exposure name="i" dimension="current"/>
+	<Exposure name="inf" dimension="none"/>
+	<Exposure name="tau" dimension="time"/>
+
+	<!-- <Requirement name="v" dimension="voltage"/> -->
+
+	<Dynamics>
+		<StateVariable name="s" dimension="none"/>
+
+		<!-- <DerivedVariable name="vpeer" dimension="voltage" select="peer/v"/> -->
+
+		<DerivedVariable name="inf" dimension="none" value="1/(1 + exp((Vth - vpeer)/delta))" exposure="inf"/>
+		<DerivedVariable name="tau" dimension="time" value="(1-inf)/k" exposure="tau"/>
+
+		<DerivedVariable name="i" exposure="i" dimension="current" value="conductance * s * (erev-v)"/>
+
+		<!-- To catch case where tau ~ 0 => too fast a change in s => numerical instability -->
+		<ConditionalDerivedVariable name="s_rate" dimension="per_time">
+			<Case condition="(1-inf) .gt. 1e-4" value="(inf - s)/tau"/>
+			<Case value="0"/>
+		</ConditionalDerivedVariable>
+
+		<TimeDerivative variable="s" value="s_rate" />
+
+		<!-- To catch case where tau ~ 0 => too fast a change in s => numerical instability -->
+		<OnCondition test="(1-inf) .lt. 1e-4">
+			<StateAssignment variable="s" value="inf"/>
+		</OnCondition>
+		
+		<OnStart>
+			<StateAssignment variable="s" value="0" />
+		</OnStart>
+
+	</Dynamics>
+</ComponentType>
+
+<ComponentType name="alphaCurrentSynapse"
+	extends="baseCurrentBasedSynapse"
+	description="Alpha current synapse: rise time and decay time are both _tau.">
+
+	<Property name="weight" dimension="none" defaultValue="1"/>
+	<Parameter name="tau" dimension="time" description="Time course for rise and decay"/>
+	<Parameter name="ibase" dimension="current" description="Baseline current increase after receiving a spike"/>
+
+	<Dynamics>
+
+		<StateVariable name="I" dimension="current"/>
+		<StateVariable name="J" dimension="current"/>
+
+		<DerivedVariable name="i" exposure="i" dimension="current" value="I" />
+
+		<TimeDerivative variable="I" value="(2.7182818284590451*J - I)/tau" />
+		<TimeDerivative variable="J" value="-J/tau" />
+
+		<OnStart>
+			<StateAssignment variable="I" value="0" />
+			<StateAssignment variable="J" value="0" />
+		</OnStart>
+
+		<OnEvent port="in">
+			<StateAssignment variable="J" value="J + weight * ibase" />
+		</OnEvent>
+
+	</Dynamics>
+</ComponentType>
+
+<ComponentType name="alphaSynapse"
+	extends="baseConductanceBasedSynapse"
+	description="Ohmic synapse model where rise time and decay time are both _tau. Max conductance reached during this time (assuming zero conductance before) is _gbase * _weight.">
+
+	<Property name="weight" dimension="none" defaultValue="1"/> 
+
+	<Parameter name="tau" dimension="time" description="Time course of rise/decay"/>
+
+	<Dynamics>
+
+		<StateVariable name="g" dimension="conductance" exposure="g"/>
+		<StateVariable name="A" dimension="conductance"/>
+
+		<DerivedVariable name="i" exposure="i" dimension="current" value="g * (erev - v)" />
+
+		<TimeDerivative variable="g" value="(2.7182818284590451 * A - g)/tau" />
+		<TimeDerivative variable="A" value="-A / tau" />
+
+		<OnStart>
+			<StateAssignment variable="g" value="0" />
+			<StateAssignment variable="A" value="0" />
+		</OnStart>
+
+		<OnEvent port="in">
+			<StateAssignment variable="A" value="A + (gbase*weight)" />
+		</OnEvent>
+
+	</Dynamics>
+</ComponentType>
+
+<ComponentType name="expTwoSynapse"
+	extends="baseConductanceBasedSynapse"
+	description="Ohmic synapse model whose conductance waveform on receiving an event has a rise time of _tauRise and a decay time of _tauDecay. Max conductance reached during this time (assuming zero conductance before) is _gbase * _weight.">
+
+	<Property name="weight" dimension="none" defaultValue="1"/> 
+
+	<Parameter name="tauRise" dimension="time" />
+	<Parameter name="tauDecay" dimension="time" />
+	<!-- TODO handle edge case for tauRise = tauDecay -->
+	<DerivedParameter name="peakTime" dimension="time" value="log(tauDecay / tauRise) * (tauRise * tauDecay)/(tauDecay - tauRise)"/>
+	<DerivedParameter name="waveformFactor" dimension="none" value="1 / (-exp(-peakTime / tauRise) + exp(-peakTime / tauDecay))"/>
+
+	<Dynamics>
+		<StateVariable name="A" dimension="none"/>
+		<StateVariable name="B" dimension="none"/>
+
+		<!-- TODO: catch tauRise = 0..! -->
+
+		<DerivedVariable name="g" dimension="conductance" exposure="g" value="gbase * (B - A)" />
+		<DerivedVariable name="i" exposure="i" dimension="current" value="g * (erev - v)" />
+
+		<TimeDerivative variable="A" value="-A / tauRise" />
+		<TimeDerivative variable="B" value="-B / tauDecay" />
+
+		<OnStart>
+			<StateAssignment variable="A" value="0" />
+			<StateAssignment variable="B" value="0" />
+		</OnStart>
+
+		<OnEvent port="in">
+			<StateAssignment variable="A" value="A + (weight * waveformFactor)" />
+			<StateAssignment variable="B" value="B + (weight * waveformFactor)" />
+		</OnEvent>
+		
+	</Dynamics>
+</ComponentType>
+
+<ComponentType name="expThreeSynapse"
+	extends="baseConductanceBasedSynapseTwo"
+	description="Ohmic synapse similar to expTwoSynapse but consisting of two components that can differ in decay times and max conductances but share the same rise time.">
+
+	<Property name="weight" dimension="none" defaultValue="1"/> 
+	<!-- TODO handle edge case for tauRise = tauDecay -->
+	
+	<Parameter name="tauRise" dimension="time" />
+	<Parameter name="tauDecay1" dimension="time" />
+	<Parameter name="tauDecay2" dimension="time" />
+
+	<DerivedParameter name="peakTime1" dimension="time" value="log(tauDecay1 / tauRise) * (tauRise * tauDecay1)/(tauDecay1 - tauRise)"/>
+	<DerivedParameter name="waveformFactor1" dimension="none" value="1 / (-exp(-peakTime1 / tauRise) + exp(-peakTime1 / tauDecay1))"/>
+
+	<DerivedParameter name="peakTime2" dimension="time" value="log(tauDecay2 / tauRise) * (tauRise * tauDecay2)/(tauDecay2 - tauRise)"/>
+	<DerivedParameter name="waveformFactor2" dimension="none" value="1 / (-exp(-peakTime2 / tauRise) + exp(-peakTime2 / tauDecay2))"/>
+
+	<Dynamics>
+		<StateVariable name="A" dimension="none"/>
+		<StateVariable name="B" dimension="none"/>
+		<StateVariable name="C" dimension="none"/>
+
+
+		<DerivedVariable name="g" dimension="conductance" exposure="g" value="gbase1*(B - A) + gbase2*(C-A)" />
+		<DerivedVariable name="i" exposure="i" dimension="current" value="g * (erev - v)" />
+
+		<TimeDerivative variable="A" value="-A / tauRise" />
+		<TimeDerivative variable="B" value="-B / tauDecay1" />
+		<TimeDerivative variable="C" value="-C / tauDecay2" />
+
+		<OnStart>
+			<StateAssignment variable="A" value="0" />
+			<StateAssignment variable="B" value="0" />
+			<StateAssignment variable="C" value="0" />
+		</OnStart>
+
+		<OnEvent port="in">
+			<StateAssignment variable="A" value="A + (gbase1*weight * waveformFactor1 + gbase2*weight*waveformFactor2 )/(gbase1+gbase2)" />
+
+			<StateAssignment variable="B" value="B + (weight * waveformFactor1)" />
+			<StateAssignment variable="C" value="C + (weight * waveformFactor2)" />
+
+		</OnEvent>
+		
+	</Dynamics>
+</ComponentType>
+
+
+<!-- Blocking/plastic synapses -->
+<ComponentType name="voltageConcDepBlockMechanism"
+	extends="baseBlockMechanism"
+	description="Synaptic blocking mechanism which varys with membrane potential across the synapse, e.g. in NMDA receptor mediated synapses">
+
+	<Parameter name="blockConcentration" dimension="concentration" />
+	<Parameter name="scalingConc" dimension="concentration" />
+	<Parameter name="scalingVolt" dimension="voltage" />
+
+	<Requirement name="v" dimension="voltage"/>
+
+	<!-- <Text name="species"/> -->
+
+	<Dynamics>
+		<DerivedVariable name="blockFactor" dimension="none" exposure="blockFactor" value="1/(1 + (blockConcentration / scalingConc)* exp(-1 * (v / scalingVolt)))" />
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="tsodyksMarkramDepMechanism"
+	extends="basePlasticityMechanism"
+	description="Depression-only Tsodyks-Markram model, as in Tsodyks and Markram 1997.">
+	<Parameter name="initReleaseProb" dimension="none" />
+	<Parameter name="tauRec" dimension="time" />
+
+	<Dynamics>
+		<StateVariable name="R" dimension="none"/>
+
+		<DerivedVariable name="U" dimension="none" value="initReleaseProb"/>
+		<DerivedVariable name="plasticityFactor" dimension="none" exposure="plasticityFactor" value="R * U" />
+
+		<TimeDerivative variable="R" value="(1 - R) / tauRec"/>
+
+		<OnStart>
+			<StateAssignment variable="R" value="1" />
+		</OnStart>
+
+		<OnEvent port="in">
+			<StateAssignment variable="R" value="R * (1 - U)" />
+		</OnEvent>
+	</Dynamics>
+	<!-- 
+	<Structure>
+	<With instance="parent" as="a"/>
+	<With instance="this" as="b"/>
+	<EventConnection from="a" to="b"/>
+	</Structure>
+	 -->
+</ComponentType>
+
+<ComponentType name="tsodyksMarkramDepFacMechanism"
+	extends="basePlasticityMechanism"
+	description="Full Tsodyks-Markram STP model with both depression and facilitation, as in Tsodyks, Pawelzik and Markram 1998.">
+	<Parameter name="initReleaseProb" dimension="none" />
+	<Parameter name="tauRec" dimension="time" />
+	<Parameter name="tauFac" dimension="time" />
+
+	<Dynamics>
+		<StateVariable name="R" dimension="none"/>
+		<StateVariable name="U" dimension="none"/>
+
+		<DerivedVariable name="plasticityFactor" dimension="none" exposure="plasticityFactor" value="R * U" />
+
+		<TimeDerivative variable="R" value="(1 - R) / tauRec"/>
+		<TimeDerivative variable="U" value="(initReleaseProb - U) / tauFac"/>
+
+		<OnStart>
+			<StateAssignment variable="R" value="1" />
+			<StateAssignment variable="U" value="initReleaseProb" />
+		</OnStart>
+
+		<OnEvent port="in">
+			<StateAssignment variable="R" value="R * (1 - U)" />
+			<StateAssignment variable="U" value="U + initReleaseProb * (1 - U)" />
+		</OnEvent>
+	</Dynamics>
+	<!-- 
+	<Structure>
+	<With instance="parent" as="a"/>
+	<With instance="this" as="b"/>
+	<EventConnection from="a" to="b"/>
+	</Structure>
+ 	-->
+</ComponentType>
+
+<ComponentType name="blockingPlasticSynapse"
+	extends="baseConductanceBasedSynapse"
+	description="Biexponential synapse that allows for
+	optional block and plasticity
+	mechanisms, which can be expressed as
+	child elements.">
+
+	<Property name="weight" dimension="none" defaultValue="1"/> 
+	
+	<Parameter name="tauRise" dimension="time" />
+	<Parameter name="tauDecay" dimension="time" />
+
+	<DerivedParameter name="peakTime" dimension="time" value="log(tauDecay / tauRise) * (tauRise * tauDecay)/(tauDecay - tauRise)"/>
+	<DerivedParameter name="waveformFactor" dimension="none" value="1 / (-exp(-peakTime / tauRise) + exp(-peakTime / tauDecay))"/>
+	
+	<Requirement name="blockFactor" dimension="none"/>
+	<Requirement name="plasticityFactor" dimension="none"/>
+	
+	<!-- 
+	<Children name="plasticityMechanisms" type="basePlasticityMechanism"/>
+	<Children name="blockMechanisms" type="baseBlockMechanism"/>
+	-->
+	<!-- <EventPort name="relay" direction="out" description="Used to relay incoming spikes to child plasticity mechanism"/> -->
+	<Dynamics>
+		<StateVariable name="A" dimension="none"/>
+		<StateVariable name="B" dimension="none"/>
+
+		<!-- <DerivedVariable name="plasticityFactor" dimension="none"
+		select="plasticityMechanisms[*]/plasticityFactor"
+		reduce="multiply"/> -->
+
+		<!-- <DerivedVariable name="blockFactor" dimension="none"
+		select="blockMechanisms[*]/blockFactor"
+		reduce="multiply"/> -->
+
+		<DerivedVariable name="g" dimension="conductance" exposure="g"
+		value="blockFactor * gbase * (B - A)" />
+		<DerivedVariable name="i" exposure="i" dimension="current"
+		value="g * (erev - v)" />
+
+		<TimeDerivative variable="A" value="-A / tauRise" />
+		<TimeDerivative variable="B" value="-B / tauDecay" />
+
+		<OnStart>
+			<StateAssignment variable="A" value="0" />
+			<StateAssignment variable="B" value="0" />
+		</OnStart>
+
+		<OnEvent port="in">
+			<StateAssignment variable="A" value="A + (weight * plasticityFactor * waveformFactor)" />
+			<StateAssignment variable="B" value="B + (weight * plasticityFactor * waveformFactor)" />
+			<!-- <EventOut port="relay"/> -->
+		</OnEvent>
+	</Dynamics>
+</ComponentType>
+
+
+<!-- Input sources -->
+<!-- 
+<ComponentType name="pulseGenerator" extends="basePointCurrent"
+			description="Generates a constant current pulse of a certain _amplitude for a specified _duration after a _delay. Scaled by _weight, if set">
+
+	<Property name="weight" dimension="none" defaultValue="1"/> 
+	
+	<Parameter name="delay" dimension="time" description="Delay before change in current. Current is zero  prior to this."/>
+	<Parameter name="duration" dimension="time" description="Duration for holding current at amplitude. Current is zero after delay + duration."/>
+	<Parameter name="amplitude" dimension="current" description="Amplitude of current pulse"/>
+
+	<Dynamics>
+
+		<StateVariable name="i" exposure="i" dimension="current"/>
+
+		<OnCondition test="t .lt. delay">
+			<StateAssignment variable="i" value="0"/>
+		</OnCondition>
+
+		<OnCondition test="t .geq. delay .and. t .lt. duration + delay">
+			<StateAssignment variable="i" value="weight * amplitude"/>
+		</OnCondition>
+
+		<OnCondition test="t .geq. duration + delay">
+			<StateAssignment variable="i" value="0"/>
+		</OnCondition>
+
+	</Dynamics>
+</ComponentType>
+-->
+<ComponentType name="pulseGeneratorDL" extends="basePointCurrentDL"
+				description="Dimensionless equivalent of _pulseGenerator_. Generates a constant current pulse of a certain _amplitude for a specified _duration after a _delay"> <!-- Note: a synpase also extends basePointCurrent -->
+
+	<Property name="weight" dimension="none" defaultValue="1"/> 
+	
+	<Parameter name="delay" dimension="time" description="Delay before change in current. Current is zero  prior to this."/>
+	<Parameter name="duration" dimension="time" description="Duration for holding current at amplitude. Current is zero after delay + duration."/>
+	<Parameter name="amplitude" dimension="none" description="Amplitude of current pulse"/>
+
+	<Dynamics>
+
+		<StateVariable name="I" exposure="I" dimension="none"/>
+
+		<OnCondition test="t .lt. delay">
+			<StateAssignment variable="I" value="0"/>
+		</OnCondition>
+
+		<OnCondition test="t .geq. delay .and. t .lt. duration + delay">
+			<StateAssignment variable="I" value="weight * amplitude"/>
+		</OnCondition>
+
+		<OnCondition test="t .geq. duration + delay">
+			<StateAssignment variable="I" value="0"/>
+		</OnCondition>
+
+	</Dynamics>
+</ComponentType>
+
+<ComponentType name="sineGenerator" extends="basePointCurrent"
+	description="Generates a sinusoidally varying current after a time _delay, for a fixed _duration. The _period and maximum _amplitude of the current can be set as well as the _phase at which to start.">
+
+	<Property name="weight" dimension="none" defaultValue="1"/> 
+
+	<Parameter name="phase" dimension="none"/>
+	<Parameter name="delay" dimension="time"/>
+	<Parameter name="duration" dimension="time"/>
+	<Parameter name="amplitude" dimension="current"/>
+	<Parameter name="period" dimension="time"/>
+
+	<Dynamics>
+
+		<StateVariable name="i" exposure="i" dimension="current"/>
+
+		<OnCondition test="t .lt. delay">
+			<StateAssignment variable="i" value="0"/>
+		</OnCondition>
+
+		<OnCondition test="t .geq. delay .and. t .lt. duration+delay">
+			<StateAssignment variable="i" value="weight * amplitude * sin(phase + (2 * 3.14159265 * (t-delay)/period) )"/>
+		</OnCondition>
+
+		<OnCondition test="t .geq. duration+delay">
+			<StateAssignment variable="i" value="0"/>
+		</OnCondition>
+
+	</Dynamics>
+</ComponentType>
+<ComponentType name="sineGeneratorDL" extends="basePointCurrentDL"
+				description="Generates a sinusoidally varying current after a time _delay, for a fixed _duration. The _period and maximum _amplitude of the current can be set as well as the _phase at which to start.">
+
+	<Property name="weight" dimension="none" defaultValue="1"/> 
+	
+	<Parameter name="phase" dimension="none"/>
+	<Parameter name="delay" dimension="time"/>
+	<Parameter name="duration" dimension="time"/>
+	<Parameter name="amplitude" dimension="none"/>
+	<Parameter name="period" dimension="time"/>
+
+	<Dynamics>
+
+		<StateVariable name="I" exposure="I" dimension="none"/>
+
+		<OnCondition test="t .lt. delay">
+			<StateAssignment variable="I" value="0"/>
+		</OnCondition>
+
+		<OnCondition test="t .geq. delay .and. t .lt. duration+delay">
+			<StateAssignment variable="I" value="weight * amplitude * sin(phase + (2 * 3.14159265 * (t-delay)/period) )"/>
+		</OnCondition>
+
+		<OnCondition test="t .geq. duration+delay">
+			<StateAssignment variable="I" value="0"/>
+		</OnCondition>
+
+	</Dynamics>
+</ComponentType>
+
+<ComponentType name="rampGenerator" extends="basePointCurrent"
+	description="Generates a ramping current after a time _delay, for a fixed _duration. During this time the current steadily changes from _startAmplitude to _finishAmplitude.">
+
+	<Property name="weight" dimension="none" defaultValue="1"/> 
+
+	<Parameter name="delay" dimension="time"/>
+	<Parameter name="duration" dimension="time"/>
+	<Parameter name="startAmplitude" dimension="current"/>
+	<Parameter name="finishAmplitude" dimension="current"/>
+	<Parameter name="baselineAmplitude" dimension="current"/>
+	
+	<Dynamics>
+		
+		<StateVariable name="i" exposure="i" dimension="current"/>
+
+		<OnStart>
+			<StateAssignment variable="i" value="baselineAmplitude"/>
+		</OnStart>
+
+		<OnCondition test="t .lt. delay">
+			<StateAssignment variable="i" value="weight * baselineAmplitude"/>
+		</OnCondition>
+
+		<OnCondition test="t .geq. delay .and. t .lt. duration+delay">
+			<StateAssignment variable="i" value="weight * (startAmplitude + (finishAmplitude - startAmplitude) * (t - delay) / (duration))"/>
+		</OnCondition>
+
+		<OnCondition test="t .geq. duration+delay">
+			<StateAssignment variable="i" value="weight * baselineAmplitude"/>
+		</OnCondition>
+		
+	</Dynamics>
+</ComponentType>
+<ComponentType name="rampGeneratorDL" extends="basePointCurrentDL"
+				description="Generates a ramping current after a time _delay, for a fixed _duration. During this time the dimensionless current steadily changes from _startAmplitude to _finishAmplitude.">
+
+	<Property name="weight" dimension="none" defaultValue="1"/> 
+	
+	<Parameter name="delay" dimension="time"/>
+	<Parameter name="duration" dimension="time"/>
+	<Parameter name="startAmplitude" dimension="none"/>
+	<Parameter name="finishAmplitude" dimension="none"/>
+	<Parameter name="baselineAmplitude" dimension="none"/>
+
+	<Dynamics>
+
+		<StateVariable name="I" exposure="I" dimension="none"/>
+
+		<OnStart>
+			<StateAssignment variable="I" value="baselineAmplitude"/>
+		</OnStart>
+		<OnCondition test="t .lt. delay">
+			<StateAssignment variable="I" value="weight * baselineAmplitude"/>
+		</OnCondition>
+
+		<OnCondition test="t .geq. delay .and. t .lt. duration+delay">
+			<StateAssignment variable="I" value="weight * (startAmplitude + (finishAmplitude - startAmplitude) * (t - delay) / (duration))"/>
+		</OnCondition>
+
+		<OnCondition test="t .geq. duration+delay">
+			<StateAssignment variable="I" value="weight * baselineAmplitude"/>
+		</OnCondition>
+
+	</Dynamics>
+</ComponentType>
+
+<ComponentType name="voltageClamp" extends="baseVoltageDepPointCurrent"
+	description="Voltage clamp. Applies a variable current _i to try to keep parent at _targetVoltage. Not yet fully tested!!! Consider using voltageClampTriple!!">
+
+	<Property name="weight" dimension="none" defaultValue="1"/> 
+
+	<Parameter name="delay" dimension="time" description="Delay before change in current. Current is zero  prior to this."/>
+	<Parameter name="duration" dimension="time" description="Duration for attempting to keep parent at targetVoltage. Current is zero after delay + duration."/>
+	<Parameter name="targetVoltage" dimension="voltage" description="Current will be applied to try to get parent to this target voltage"/>
+
+	<!-- seriesResistance renamed to simpleSeriesResistance & factor of 1e-5 removed from calculation of current. Still being tested... -->
+	<Parameter name="simpleSeriesResistance" dimension="resistance" description="Current will be calculated by the difference in voltage between the target and parent, divided by this value"/>
+
+	<Dynamics>
+
+		<StateVariable name="i" exposure="i" dimension="current"/>
+
+		<OnCondition test="t .lt. delay">
+		<StateAssignment variable="i" value="0"/>
+		</OnCondition>
+
+		<OnCondition test="t .geq. delay">
+			<!-- seriesResistance renamed to simpleSeriesResistance & factor of 1e-5 removed from calculation of current. Still being tested... -->
+			<StateAssignment variable="i" value="weight * (targetVoltage - v) / simpleSeriesResistance"/>
+		</OnCondition>
+
+		<OnCondition test="t .gt. duration + delay">
+			<StateAssignment variable="i" value="0"/>
+		</OnCondition>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="voltageClampTriple" extends="baseVoltageDepPointCurrent"
+	description="Voltage clamp with 3 clamp levels. Applies a variable current _i (through _simpleSeriesResistance) to try to keep parent cell at _conditioningVoltage until time _delay, _testingVoltage until _delay + _duration, and _returnVoltage afterwards. Only enabled if _active = 1. ">
+
+	<Property name="weight" dimension="none" defaultValue="1"/> 
+
+	<Parameter name="active" dimension="none" description="Whether the voltage clamp is active (1) or inactive (0)."/>
+
+	<Parameter name="delay" dimension="time" description="Delay before switching from conditioningVoltage to testingVoltage."/>
+	<Parameter name="duration" dimension="time" description="Duration to hold at testingVoltage."/>
+	<Parameter name="conditioningVoltage" dimension="voltage" description="Target voltage before time delay"/>
+	<Parameter name="testingVoltage" dimension="voltage" description="Target voltage between times delay and delay + duration"/>
+	<Parameter name="returnVoltage" dimension="voltage" description="Target voltage after time duration"/>
+
+	<Parameter name="simpleSeriesResistance" dimension="resistance" description="Current will be calculated by the difference in voltage between the target and parent, divided by this value"/>
+
+	<Dynamics>
+
+		<StateVariable name="i" exposure="i" dimension="current"/>
+
+		<OnCondition test="active .eq. 1 .and. t .lt. delay">
+			<StateAssignment variable="i" value="weight * (conditioningVoltage - v) / simpleSeriesResistance"/>
+		</OnCondition>
+
+		<OnCondition test="active .eq. 1 .and. t .geq. delay">
+			<StateAssignment variable="i" value="weight * (testingVoltage - v) / simpleSeriesResistance"/>
+		</OnCondition>
+
+		<OnCondition test="active .eq. 1 .and. t .gt. duration + delay">
+			<StateAssignment variable="i" value="weight * (returnVoltage - v) / simpleSeriesResistance"/>
+		</OnCondition>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="poissonFiringSynapse"
+	description="Poisson spike generator connected to single synapse providing an input current"
+	extends="baseVoltageDepPointCurrent"> <!-- spikes are already defined in derived -->
+
+	<Parameter name="averageRate" dimension="per_time"/>
+
+	<DerivedParameter name="averageIsi" dimension="time" value="1 / averageRate"/>
+
+	<!-- <ComponentReference name="synapse" type="baseSynapse"/> -->
+
+	<EventPort name="spike" direction="out" description="Port on which spikes are emitted"/>
+
+	<!-- <EventPort name="in" direction="in" description="Note this is not used here. Will be removed in future"/> -->
+
+	<Exposure name="tsince" dimension="time" description="Time since the last spike was emitted"/>
+
+	<!-- <Path name="spikeTarget"/> -->
+
+	<Dynamics>
+	
+		<StateVariable name="tsince" dimension="time" exposure="tsince"/>
+		<StateVariable name="isi" dimension="time"/>
+
+		<!-- <DerivedVariable name="i" dimension="current" exposure="i" select="synapse/i"/> -->
+
+		<TimeDerivative variable="tsince" value="1"/>
+
+		<OnStart>
+			<StateAssignment variable="tsince" value="0"/>
+			<StateAssignment variable="isi" value="- averageIsi * log(1 - random(1))"/>
+		</OnStart>
+
+		<OnCondition test="tsince .gt. isi">
+			<StateAssignment variable="tsince" value="0"/>
+			<StateAssignment variable="isi" value="- averageIsi * log(1 - random(1))"/>
+			<EventOut port="spike"/>
+		</OnCondition>
+
+	</Dynamics>
+	<!-- 	
+	<Structure>
+		<ChildInstance component="synapse"/>
+
+		<With instance="this" as="a"/>
+		<With instance="spikeTarget" as="b"/>
+
+		<EventConnection from="a" to="b"/>
+	</Structure> 
+	-->
+</ComponentType>
+
+<ComponentType name="transientPoissonFiringSynapse"
+	description="Poisson spike generator with delay and duration connected to single synapse providing an input current. 
+	Similar to ComponentType poissonFiringSynapse."
+	extends="baseVoltageDepPointCurrent"> <!-- spikes are already defined in derived -->
+
+	<Parameter name="averageRate" dimension="per_time"/>
+
+	<Parameter name="delay" dimension="time"/>
+	<Parameter name="duration" dimension="time" />
+
+	<DerivedParameter name="averageIsi" dimension="time" value="1 / averageRate"/>
+
+	<Constant name="LONG_TIME" dimension="time" value="1e9hour"/>
+
+	<!-- <ComponentReference name="synapse" type="baseSynapse"/> -->
+
+	<EventPort name="spike" direction="out" description="Port on which spikes are emitted"/>
+	
+	<!-- <EventPort name="in" direction="in" description="Note this is not used here. Will be removed in future"/> -->
+
+	<Exposure name="tsince" dimension="time" description="Time since the last spike was emitted"/>
+
+	<!-- <Path name="spikeTarget"/> -->
+
+	<Dynamics>
+	
+		<StateVariable name="tsince" dimension="time" exposure="tsince"/>
+		<StateVariable name="nextIsi" dimension="time"/>
+		<StateVariable name="isi" dimension="time"/>
+
+		<!-- <DerivedVariable name="i" dimension="current" exposure="i" select="synapse/i"/> -->
+
+		<TimeDerivative variable="tsince" value="1"/>
+
+		<OnStart>
+			<StateAssignment variable="tsince" value="0"/>
+			<StateAssignment variable="nextIsi" value="- averageIsi * log(1 - random(1))  +delay"/>
+			<StateAssignment variable="isi" value="nextIsi"/>
+		</OnStart>
+
+		<OnCondition test="tsince .gt. isi">
+			<StateAssignment variable="tsince" value="0"/>
+			<StateAssignment variable="nextIsi" value="- averageIsi * log(1 - random(1))"/>
+			<!--
+			Check to see whether current time + next ISI is greater than delay+duration and if so set is to a long time in future...
+			-->
+			<StateAssignment variable="isi" value="nextIsi + H(((t+nextIsi) - (delay+duration))/duration)*LONG_TIME"/>
+			<EventOut port="spike"/>
+		</OnCondition>
+
+	</Dynamics>
+	<!-- 
+	<Structure>
+		<ChildInstance component="synapse"/>
+
+		<With instance="this" as="a"/>
+		<With instance="spikeTarget" as="b"/>
+
+		<EventConnection from="a" to="b"/>
+	</Structure>
+	-->
+</ComponentType>
+
+
+<!-- Spike sources -->
+<ComponentType name="spikeGenerator"
+				extends="baseSpikeSource"
+				description="Simple generator of spikes at a regular interval set by _period.">
+
+	<Parameter name="period" dimension="time" description="Time between spikes. First spike will be emitted after this time."/>
+	
+	<Constant name="SMALL_TIME" dimension="time" value="1e-9ms"/> <!-- See below for usage -->
+	
+	<Exposure name="tnext" dimension="time" description="When the next spike should ideally be emitted (dt permitting)"/>
+	
+	<Dynamics>
+		
+		<!-- This is mainly useful as an exposed variable to plot/save to see actual spike times... -->
+		<StateVariable name="tsince" dimension="time" exposure="tsince"/>
+		<!-- This is the ideal next spike time, but dt precision will mean that it's usually slightly later than this... -->
+		<StateVariable name="tnext" dimension="time" exposure="tnext"/>
+
+		<TimeDerivative variable="tsince" value="1"/>  
+		<!-- Required to keep NEURON happy; needs tnext as 'real' state variable to use in condition below... -->
+		<TimeDerivative variable="tnext" value="0"/>
+
+		<OnStart>
+			<StateAssignment variable="tsince" value="0"/>
+			<StateAssignment variable="tnext" value="period"/>
+		</OnStart>
+
+		<!-- This is to require that the spike is emitted as close as possible to tnext.-->
+		<OnCondition test="tnext-t .lt. SMALL_TIME">
+			<StateAssignment variable="tsince" value="0"/>
+			<!-- Note the spike is emitted period after the last planned spike time, NOT period after the current spike time -->
+			<!-- This is important if period is close in size to to dt -->
+			<StateAssignment variable="tnext" value="tnext+period"/> 
+			<EventOut port="spike"/>
+		</OnCondition>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="spikeGeneratorRandom" extends="baseSpikeSource"
+				description="Generator of spikes with a random interspike interval of at least _minISI and at most _maxISI">
+
+	<Parameter name="maxISI" dimension="time" description="Maximum interspike interval"/>
+	<Parameter name="minISI" dimension="time" description="Minimum interspike interval"/>
+
+	<Constant name="MSEC" dimension="time" value="1ms"/>
+
+	<Exposure name="isi" dimension="time" description="The interval until the next spike"/>
+	<Exposure name="tnext" dimension="time" description="When the next spike should ideally be emitted (dt permitting)"/>
+
+	<Dynamics>
+		<StateVariable name="tsince" dimension="time" exposure="tsince"/>
+		<StateVariable name="tnext" dimension="time" exposure="tnext"/>
+
+		<StateVariable name="isi" dimension="time" exposure="isi"/>
+
+		<TimeDerivative variable="tsince" value="1"/>
+		<!-- Required to keep Neuron happy; needs this as 'real' state variable to use in condition below... -->
+		<TimeDerivative variable="tnext" value="0"/>
+
+		<OnStart>
+			<StateAssignment variable="tsince" value="0"/>
+			<StateAssignment variable="isi" value="minISI + MSEC * random((maxISI - minISI) / MSEC)"/>
+			<StateAssignment variable="tnext" value="isi"/>
+		</OnStart>
+
+
+		<OnCondition test="t .gt. tnext">
+			<StateAssignment variable="isi" value="minISI + MSEC * random((maxISI - minISI) / MSEC)"/>
+			<StateAssignment variable="tsince" value="0"/>
+			<!-- Important to set this to the time which is isi from the last value for tnext NOT from the current time! -->
+			<StateAssignment variable="tnext" value="tnext+isi"/> 
+			<EventOut port="spike"/>
+		</OnCondition>
+
+	</Dynamics>
+</ComponentType>
+
+<ComponentType name="spikeGeneratorPoisson" extends="baseSpikeSource"
+				description="Generator of spikes whose ISI is distributed according to an exponential pdf with scale 1/_averageRate">
+	
+	<Parameter name="averageRate" dimension="per_time"/>
+	
+	<Constant name="SMALL_TIME" dimension="time" value="1e-9ms"/> <!-- See below for usage -->
+	
+	<Exposure name="isi" dimension="time"/> <!-- See below for usage -->
+	<Exposure name="tnextIdeal" dimension="time"/> <!-- See below for usage -->
+	<Exposure name="tnextUsed" dimension="time"/> <!-- See below for usage -->
+	
+	<Dynamics>
+		
+		<!-- This is mainly useful as an exposed variable to plot/save to see actual spike times... -->
+		<StateVariable name="tsince" dimension="time" exposure="tsince"/>
+		
+		<!-- This is the ideal next spike time, but dt precision will mean that it's usually slightly later than this... -->
+		<StateVariable name="tnextIdeal" dimension="time" exposure="tnextIdeal"/>
+		<!-- This is the next spike time for practical purposes, ensuring that it's later than the current time... -->
+		<StateVariable name="tnextUsed" dimension="time" exposure="tnextUsed"/>
+		<!-- This is the calculated next interspike interval... -->
+		<StateVariable name="isi" dimension="time" exposure="isi"/>
+
+		<!-- So that tsince will increase each time step smoothly -->
+		<TimeDerivative variable="tsince" value="1"/>
+		<!-- Required to keep Neuron happy; needs these as 'real' state variables... -->
+		<TimeDerivative variable="tnextUsed" value="0"/> 
+		<TimeDerivative variable="tnextIdeal" value="0"/> 
+
+		<OnStart>
+			<StateAssignment variable="tsince" value="0"/>
+			<StateAssignment variable="isi" value="-1 * log(random(1)) / averageRate"/>
+			<StateAssignment variable="tnextIdeal" value="isi"/>
+			<StateAssignment variable="tnextUsed" value="isi"/>
+		</OnStart>
+
+		<OnCondition test="t .gt. tnextUsed">
+			
+			<!-- Reset... -->
+			<StateAssignment variable="tsince" value="0"/>
+			
+			<!-- isi is the ideal next time for a spike ... -->
+			<StateAssignment variable="isi" value="-1 * log(random(1)) / averageRate"/>
+			
+			<!-- IF (tnextIdeal+isi) is greater than current time (i.e. (tnextIdeal+isi)-t > 0), then set (tnextIdeal+isi) to the time of the next spike (tnextUsed) -->
+			<!-- OTHERWISE in the case of v small isi (i.e. smaller than dt), set tnextUsed to current time plus a small amount -->
+			<!-- This extra amount is so that tnextUsed != current time, which NEURON doesn't like for its WATCH expressions -->
+			
+			<StateAssignment variable="tnextIdeal" value="(tnextIdeal+isi)"/> 
+			<StateAssignment variable="tnextUsed" value="tnextIdeal*H( (tnextIdeal-t)/t ) + (t+SMALL_TIME)*H( (t-tnextIdeal)/t )"/> 
+			
+			<EventOut port="spike"/>
+		</OnCondition>
+	</Dynamics>
+</ComponentType>
+
+<ComponentType name="spikeGeneratorRefPoisson"
+				extends="baseSpikeSource"
+				description="Generator of spikes whose ISI distribution is the maximum entropy distribution over [_minimumISI, +infinity) with mean 1/_averageRate">
+	
+	<!-- Inherited -->
+	<Parameter name="averageRate" dimension="per_time"/>
+	
+	<Constant name="SMALL_TIME" dimension="time" value="1e-9ms"/> <!-- See below for usage -->
+	
+	<Exposure name="isi" dimension="time"/> <!-- See below for usage -->
+	<Exposure name="tnextIdeal" dimension="time"/> <!-- See below for usage -->
+	<Exposure name="tnextUsed" dimension="time"/> <!-- See below for usage -->
+	
+	<!-- Own -->
+	<Parameter name="minimumISI" dimension="time"/>
+			
+	<DerivedParameter name="averageIsi" dimension="time" value="1 / averageRate"/>
+
+	
+	<Dynamics>
+		<StateVariable name="tsince" dimension="time" exposure="tsince"/>
+		<StateVariable name="tnextIdeal" dimension="time" exposure="tnextIdeal"/>
+		<StateVariable name="tnextUsed" dimension="time" exposure="tnextUsed"/>
+		<StateVariable name="isi" dimension="time" exposure="isi"/>
+		
+		<TimeDerivative variable="tsince" value="1"/>
+		<TimeDerivative variable="tnextUsed" value="0"/> 
+		<TimeDerivative variable="tnextIdeal" value="0"/> 
+
+		<OnStart>
+			<StateAssignment variable="tsince" value="0"/>
+			<StateAssignment variable="isi" value="minimumISI - (averageIsi-minimumISI) * log(random(1))"/>
+			<StateAssignment variable="tnextIdeal" value="isi"/>
+			<StateAssignment variable="tnextUsed" value="isi"/>
+		</OnStart>
+
+		<OnCondition test="t .gt. tnextUsed">
+			<StateAssignment variable="tsince" value="0"/>
+			<StateAssignment variable="isi" value="minimumISI - (averageIsi-minimumISI) * log(random(1))"/>
+			
+			<StateAssignment variable="tnextIdeal" value="(tnextIdeal+isi)"/> 
+			<StateAssignment variable="tnextUsed" value="tnextIdeal*H( (tnextIdeal-t)/t ) + (t+SMALL_TIME)*H( (t-tnextIdeal)/t )"/> 
+			
+			<EventOut port="spike"/>
+		</OnCondition>
+	</Dynamics>
+</ComponentType>
+
+
+<!-- Ion concentration models -->
+<ComponentType name="fixedFactorConcentrationModelTraub"
+	extends="concentrationModel"
+	description="Model of buffering of concentration of an ion (currently hard coded to be calcium, due to requirement for _iCa) which has a baseline level _restingConc and tends to this value with time course 1 / _beta. A fixed factor _phi is used to scale the incoming current INDEPENDENTLY OF THE SIZE OF THE COMPARTMENT to produce a concentration change. Not recommended for use in models other than Traub et al. 2005!">
+
+	<Parameter name="restingConc" dimension="concentration"/>
+	<Parameter name="beta" dimension="per_time"/>
+	
+	<Parameter name="phi" dimension="rho_factor"/>
+	
+	<Requirement name="iCa" dimension="current"/>
+	<!-- <Requirement name="surfaceArea" dimension="area"/> -->
+
+	<!-- <Text name="species"/>  -->
+
+	<Dynamics>
+
+		<StateVariable name="concentration" exposure="concentration" dimension="concentration"/>
+		<StateVariable name="extConcentration" exposure="extConcentration" dimension="concentration"/>
+		
+		<TimeDerivative variable="concentration" value="(iCa/surfaceArea) * 1e-9 * phi - ((concentration - restingConc) * beta)"/>
+
+		<OnStart>
+			<StateAssignment variable="concentration" value="initialConcentration"/>
+			<StateAssignment variable="extConcentration" value="initialExtConcentration"/>
+		</OnStart>
+		
+		<OnCondition test="concentration .lt. 0">
+			<StateAssignment variable="concentration" value="0"/>
+		</OnCondition>
+	</Dynamics>
+</ComponentType> 
+
+
+<!-- Artificial cells -->
+<ComponentType name="iafTauCell"
+	extends="baseIaf"
+	description="Integrate and fire cell which returns to its leak reversal potential of _leakReversal with a time course _tau">
+
+	<Parameter name="leakReversal" dimension="voltage"/>
+	<Parameter name="tau" dimension="time"/>
+	
+	<!-- <Attachments name="synapses" type="basePointCurrentDL"/> -->
+	<!-- <Requirement name="ISyn" dimension="none" /> -->
+
+	<Dynamics>
+		<StateVariable name="v" exposure="v" dimension="voltage"/>
+
+		<TimeDerivative variable="v" value="(leakReversal - v) / tau"/>
+
+		<OnStart>
+			<StateAssignment variable="v" value="leakReversal"/>
+		</OnStart>
+
+		<OnCondition test="v .gt. thresh">
+			<StateAssignment variable="v" value="reset"/>
+			<EventOut port="spike"/>
+		</OnCondition>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="iafTauRefCell"
+	extends="baseIaf"
+	description="Integrate and fire cell which returns to its leak reversal potential of _leakReversal with a time course _tau. It has a refractory period of _refract after spiking">
+	
+	<!-- Inherited -->
+	<Parameter name="leakReversal" dimension="voltage"/>
+	<Parameter name="tau" dimension="time"/>	
+	<!-- <Requirement name="ISyn" dimension="none" /> -->
+	
+	<Parameter name="refract" dimension="time"/>
+	
+	<Dynamics>
+
+		<StateVariable name="v" dimension="voltage" exposure="v"/>
+		<StateVariable name="lastSpikeTime" dimension="time"/>
+
+		<ConditionalDerivedVariable name="voltage_rate" dimension="voltage_per_time">
+			<Case condition="t .gt. lastSpikeTime + refract" value="(leakReversal - v) / tau"/>
+			<Case value="0"/>
+		</ConditionalDerivedVariable>
+		
+		<TimeDerivative variable="v" value="voltage_rate" />
+		
+		<OnCondition test="(v .gt. thresh) .and. (t .gt. lastSpikeTime + refract)">
+			<EventOut port="spike"/>
+			<StateAssignment variable="lastSpikeTime" value="t" />
+			<StateAssignment variable="v" value="reset" />
+		</OnCondition>
+		
+		<OnStart>
+			<StateAssignment variable="v" value="leakReversal"/>
+			<StateAssignment variable="lastSpikeTime" value="t - refract" />
+		</OnStart>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="iafCell"
+	extends="baseIafCapCell"
+	description="Integrate and fire cell with capacitance _C, _leakConductance and _leakReversal">
+
+	<!-- Inherited -->
+	<!-- <Parameter name="C" dimension="capacitance" description="Total capacitance of the cell membrane"/> -->
+	<!-- <Parameter name="thresh" dimension="voltage"/> -->
+	<!-- <Parameter name="reset" dimension="voltage"/> -->
+
+	<Parameter name="leakConductance" dimension="conductance"/>
+	<Parameter name="leakReversal" dimension="voltage"/>
+
+	<!-- <Attachments name="synapses" type="basePointCurrent"/> -->
+
+	<Dynamics>
+
+		<StateVariable name="v" exposure="v" dimension="voltage"/>
+
+		<DerivedVariable name="iMemb" dimension="current" exposure="iMemb" value="leakConductance * (leakReversal - v) + iSyn"/>
+
+		<TimeDerivative variable="v" value="iMemb / C"/>
+
+		<OnStart>
+			<StateAssignment variable="v" value="leakReversal"/>
+		</OnStart>
+
+		<OnCondition test="v .gt. thresh">
+			<StateAssignment variable="v" value="reset"/>
+			<EventOut port="spike"/>
+		</OnCondition>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="iafRefCell"
+				extends="baseIafCapCell"
+				description="Integrate and fire cell  with capacitance _C, _leakConductance, _leakReversal and refractory period _refract">
+	
+	<!-- Inherited -->
+	<Parameter name="leakConductance" dimension="conductance"/>
+	<Parameter name="leakReversal" dimension="voltage"/>
+	
+	<Parameter name="refract" dimension="time"/>
+		
+	<Dynamics>
+
+		<StateVariable name="v" dimension="voltage" exposure="v"/>
+		<StateVariable name="lastSpikeTime" dimension="time"/>
+		
+		<DerivedVariable name="iMemb" dimension="current" exposure="iMemb" value="leakConductance * (leakReversal - v) + iSyn"/>
+		
+		<ConditionalDerivedVariable name="voltage_rate" dimension="voltage_per_time">
+			<Case condition="t .gt. lastSpikeTime + refract" value="iMemb / C"/>
+			<Case value="0"/>
+		</ConditionalDerivedVariable>
+		
+		<TimeDerivative variable="v" value="voltage_rate" />
+		
+		<OnCondition test="(v .gt. thresh) .and. (t .gt. lastSpikeTime + refract)">
+			<EventOut port="spike"/>
+			<StateAssignment variable="lastSpikeTime" value="t" />
+			<StateAssignment variable="v" value="reset" />
+		</OnCondition>
+		
+		<OnStart>
+			<StateAssignment variable="v" value="leakReversal"/>
+			<StateAssignment variable="lastSpikeTime" value="t - refract" />
+		</OnStart>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="izhikevichCell"
+	extends="baseCellMembPot"
+	description="Cell based on the 2003 model of Izhikevich, see http://izhikevich.org/publications/spikes.htm">
+
+	<Parameter name="v0" dimension="voltage"/>  <!--TEMP: needs to be removed... -->
+	<Parameter name="a" dimension="none"/>
+	<Parameter name="b" dimension="none"/>
+	<Parameter name="c" dimension="none"/>
+	<Parameter name="d" dimension="none"/>
+	<Parameter name="thresh" dimension="voltage"/>
+
+	<!-- These are needed to ensure a, b, c, d, U & I remain dimensionless... -->
+	<Constant name="MSEC" dimension="time" value="1ms"/>
+	<Constant name="MVOLT" dimension="voltage" value="1mV"/>
+
+	<!-- <Attachments name="synapses" type="basePointCurrentDL"/> -->
+	<Requirement name="ISyn" dimension="none" />
+
+	<Exposure name="U" dimension="none"/>
+
+	<Dynamics>
+
+		<StateVariable name="v" dimension="voltage" exposure="v"/>
+		<StateVariable name="U" dimension="none" exposure="U"/>
+
+		<TimeDerivative variable="v" value="(0.04 * (v*v / MVOLT) + 5 * v + (140.0 - U + ISyn) * MVOLT)/MSEC"/>
+		<TimeDerivative variable="U" value="a * (b * v / MVOLT - U) / MSEC"/>
+
+		<OnStart>
+			<StateAssignment variable="v" value="v0"/>
+			<StateAssignment variable="U" value="v0 * b / MVOLT"/>
+		</OnStart>
+
+		<OnCondition test="v .gt. thresh">
+			<StateAssignment variable="v" value="c * MVOLT"/>
+			<StateAssignment variable="U" value="U + d"/>
+			<EventOut port="spike"/>
+		</OnCondition>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="izhikevich2007Cell"
+	extends="baseCellMembPotCap"
+	description="Cell based on the modified Izhikevich model in Izhikevich 2007, Dynamical systems in neuroscience, MIT Press">
+
+	<!-- Inherited -->
+	<!-- <Parameter name="C" dimension="capacitance"/> -->
+
+	<Parameter name="v0" dimension="voltage"/>  
+	
+	<Parameter name="k" dimension="conductance_per_voltage"/>
+	
+	<Parameter name="vr" dimension="voltage"/> 
+	<Parameter name="vt" dimension="voltage"/> 
+	<Parameter name="vpeak" dimension="voltage"/> 
+	
+	<Parameter name="a" dimension="per_time"/>
+	<Parameter name="b" dimension="conductance"/>
+	<Parameter name="c" dimension="voltage"/>
+	<Parameter name="d" dimension="current"/>
+	
+	<!-- <Attachments name="synapses" type="basePointCurrent"/> -->
+
+	<Exposure name="u" dimension="current"/>
+
+	<Dynamics>
+
+		<StateVariable name="v" dimension="voltage" exposure="v"/>
+		<StateVariable name="u" dimension="current" exposure="u"/>
+
+		<DerivedVariable name="iMemb" dimension="current" exposure="iMemb" value="k * (v-vr) * (v-vt) + iSyn - u"/>
+		
+		<TimeDerivative variable="v" value="iMemb / C"/>
+		<TimeDerivative variable="u" value="a * (b * (v-vr) - u)"/>
+
+		<OnStart>
+			<StateAssignment variable="v" value="v0"/>
+			<StateAssignment variable="u" value="0"/>
+		</OnStart>
+
+		<OnCondition test="v .gt. vpeak">
+			<StateAssignment variable="v" value="c"/>
+			<StateAssignment variable="u" value="u + d"/>
+			<EventOut port="spike"/>
+		</OnCondition>
+		
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="adExIaFCell"
+	extends="baseCellMembPotCap"
+	description="Model based on Brette R and Gerstner W (2005) Adaptive Exponential Integrate-and-Fire Model as an Effective Description of Neuronal Activity. J Neurophysiol 94:3637-3642">
+	
+	<Parameter name="gL" dimension="conductance"/>
+	<Parameter name="EL" dimension="voltage"/>
+	<Parameter name="VT" dimension="voltage"/>
+	<Parameter name="thresh" dimension="voltage"/>
+	<Parameter name="reset" dimension="voltage"/>
+	<Parameter name="delT" dimension="voltage"/>
+	<Parameter name="tauw" dimension="time"/>
+
+	<Parameter name="refract" dimension="time"/>
+
+	<Parameter name="a" dimension="conductance"/>
+	<Parameter name="b" dimension="current"/>
+
+	<Exposure name="w" dimension="current"/>
+
+	<Dynamics>
+
+		<StateVariable name="v" dimension="voltage" exposure="v"/>
+		<StateVariable name="w" dimension="current" exposure="w"/>
+
+		<StateVariable name="lastSpikeTime" dimension="time"/>
+
+		<DerivedVariable name="iMemb" dimension="current" exposure="iMemb" value="-1 * gL * (v - EL) + gL * delT * exp((v - VT) / delT) - w + iSyn"/>		
+		
+		<ConditionalDerivedVariable name="voltage_rate" dimension="voltage_per_time">
+			<Case condition="t .gt. lastSpikeTime + refract" value="iMemb / C"/>
+			<Case value="0"/>
+		</ConditionalDerivedVariable>
+		
+		<TimeDerivative variable="v" value="voltage_rate" />
+		<TimeDerivative variable="w" value="(a * (v - EL) - w) / tauw"/>
+		
+		<OnCondition test="(v .gt. thresh) .and. (t .gt. lastSpikeTime + refract)">
+			<EventOut port="spike"/>
+			<StateAssignment variable="lastSpikeTime" value="t" />
+			<StateAssignment variable="v" value="reset" />
+			<StateAssignment variable="w" value="w + b"/>
+		</OnCondition>
+		
+		<OnStart>
+			<StateAssignment variable="v" value="EL"/>
+			<StateAssignment variable="w" value="0"/>
+			<StateAssignment variable="lastSpikeTime" value="t - refract" />
+		</OnStart>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType  name="fitzHughNagumo1969Cell"
+				extends="baseCellMembPotDL"
+				description="The Fitzhugh Nagumo model is a two-dimensional simplification of the Hodgkin-Huxley model of spike generation in squid giant axons.  This system was suggested by FitzHugh (FitzHugh R. [1961]: Impulses and physiological states in theoretical models of nerve membrane.  Biophysical J.  1:445-466), who called it &quot; Bonhoeffer-van der Pol model &quot;, and the equivalent circuit by Nagumo et al.  (Nagumo J., Arimoto S., and Yoshizawa S. [1962] An active pulse transmission line simulating nerve axon. Proc IRE. 50:2061-2070.1962). This version corresponds to the one described in FitzHugh R.[1969]: Mathematical models of excitation and propagation in nerve.  Chapter 1 (pp. 1-85 in H.P. Schwan, ed. Biological Engineering, McGraw-Hill Book Co., N.Y.)">
+
+	<Parameter name="a" dimension="none"/>
+	<Parameter name="b" dimension="none"/>
+	<Parameter name="I" dimension="none" description="plays the role of an external injected current"/>
+	<Parameter name="phi" dimension="none"/>
+
+	<!-- Initial Conditions -->
+	<Parameter name="V0" dimension="none"/>
+	<Parameter name="W0" dimension="none"/>
+
+	<Constant name="TS" dimension="time" value="1ms"/>
+
+	<Exposure name="V" dimension="none"/> <!-- Already exposed from baseCellMembPotDL -->
+	<Exposure name="W" dimension="none"/>
+	<Exposure name="F" dimension="none"/>
+
+	<Dynamics>
+
+		<StateVariable name="V" dimension="none" exposure="V"
+			description="V plays the role of the membrane potential"/>
+		<StateVariable name="W" dimension="none" exposure="W"
+			description="W plays the role of a recovery variable"/>
+
+		<!-- F must be a cubic polynomial in V -->
+		<DerivedVariable name="F" dimension="none" exposure="F" value="V - V^3 / 3"/>
+
+		<TimeDerivative variable="V" value="(F - W + I) / TS"/>
+		<TimeDerivative variable="W" value="phi * (V + a - b * W) / TS"/>
+
+		<OnStart>
+			<StateAssignment variable="V" value="V0"/>
+			<StateAssignment variable="W" value="W0"/>
+		</OnStart>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="fitzHughNagumoCell"
+				extends="baseCellMembPotDL"
+				description="Simple dimensionless model of spiking cell from FitzHugh and Nagumo. Based on http://www.scholarpedia.org/article/FitzHugh-Nagumo_model. Note: should be updated, see https://github.com/NeuroML/NeuroML2/issues/42">
+
+	<Parameter name="I" dimension="none"/>
+
+	<!-- Needed to ensure V, W & I remain dimensionless... -->
+	<Constant name="SEC" dimension="time" value="1s"/>
+
+	<Exposure name="W" dimension="none"/>
+
+	<Dynamics>
+
+		<StateVariable name="V" dimension="none" exposure="V"/>
+		<StateVariable name="W" dimension="none" exposure="W"/>
+
+		<TimeDerivative variable="V" value="( (V - ((V^3) / 3)) - W + I) / SEC"/>
+		<TimeDerivative variable="W" value="(0.08 * (V + 0.7 - 0.8 * W)) / SEC"/>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="pinskyRinzelCA3Cell"
+			extends="baseCellMembPot"
+			description="Reduced CA3 cell model from Pinsky and Rinzel 1994. See https://github.com/OpenSourceBrain/PinskyRinzelModel">
+
+	<Parameter name="iSoma" dimension="currentDensity"/>
+	<Parameter name="iDend" dimension="currentDensity"/>
+	
+	<Parameter name="gLs" dimension="conductanceDensity"/>
+	<Parameter name="gLd" dimension="conductanceDensity"/>
+	<Parameter name="gNa" dimension="conductanceDensity"/>
+	<Parameter name="gKdr" dimension="conductanceDensity"/>
+	<Parameter name="gCa" dimension="conductanceDensity"/>
+	<Parameter name="gKahp" dimension="conductanceDensity"/>
+	<Parameter name="gKC" dimension="conductanceDensity"/>
+	<Parameter name="gc" dimension="conductanceDensity"/>
+	
+	<Parameter name="eNa" dimension="voltage"/>
+	<Parameter name="eCa" dimension="voltage"/>
+	<Parameter name="eK" dimension="voltage"/>
+	<Parameter name="eL" dimension="voltage"/>
+	
+	<Parameter name="pp" dimension="none"/>
+	<Parameter name="cm" dimension="specificCapacitance"/>
+	<Parameter name="alphac" dimension="none"/>
+	<Parameter name="betac" dimension="none"/>
+
+	<Parameter name="gNmda" dimension="conductanceDensity"/>
+	<Parameter name="gAmpa" dimension="conductanceDensity"/>
+	<Parameter name="qd0" dimension="none"/>
+
+	<!-- Normalizing Constants -->
+	<Constant name="MSEC" dimension="time" value="1 ms"/>
+	<Constant name="MVOLT" dimension="voltage" value="1 mV"/>
+	<Constant name="UAMP_PER_CM2" dimension="currentDensity" value="1 uA_per_cm2"/>
+
+	<!-- Model Constants -->
+	<Constant name="Smax" dimension="none" value="125.0"/>
+	<Constant name="Vsyn" dimension="voltage" value="60.0 mV"/>
+	<Constant name="betaqd" dimension="none" value="0.001"/>
+	
+	<Exposure name="Vs" dimension="voltage"/>
+	<Exposure name="Vd" dimension="voltage"/>
+	<Exposure name="ICad" dimension="currentDensity"/>
+	<Exposure name="Cad" dimension="none"/>
+	<Exposure name="hs" dimension="none"/>
+	<Exposure name="ns" dimension="none"/>
+	<Exposure name="sd" dimension="none"/>
+	<Exposure name="cd" dimension="none"/>
+	<Exposure name="qd" dimension="none"/>
+	<Exposure name="Si" dimension="none"/>
+	<Exposure name="Wi" dimension="none"/>
+
+
+	<Dynamics>
+	
+		<StateVariable name="Vs" dimension="voltage" exposure="Vs"/>
+		<StateVariable name="Vd" dimension="voltage" exposure="Vd"/>
+		<StateVariable name="Cad" dimension="none" exposure="Cad"/>
+		<StateVariable name="hs" dimension="none" exposure="hs"/>
+		<StateVariable name="ns" dimension="none" exposure="ns"/>
+		<StateVariable name="sd" dimension="none" exposure="sd"/>
+		<StateVariable name="cd" dimension="none" exposure="cd"/>
+		<StateVariable name="qd" dimension="none" exposure="qd"/>
+
+
+		<!-- Synaptic Dynamics -->
+		<StateVariable name="Si" dimension="none" exposure="Si"/>
+		<StateVariable name="Wi" dimension="none" exposure="Wi"/>
+		
+		
+		<!-- baseCellMembPot compatibility -->
+		<DerivedVariable name="v" dimension="voltage" value="Vs" exposure="v"/>
+		<DerivedVariable name="ICad" dimension="currentDensity" exposure="ICad" value="gCa*sd*sd*(Vd-eCa)"/>
+	
+	
+
+		<DerivedVariable name="alphams_Vs" dimension="none" value="0.32*(-46.9-Vs/MVOLT)/(exp((-46.9-Vs/MVOLT)/4.0)-1.0)"/>
+		<DerivedVariable name="betams_Vs" dimension="none" value="0.28*(Vs/MVOLT+19.9)/(exp((Vs/MVOLT+19.9)/5.0)-1.0)"/>
+		<DerivedVariable name="Minfs_Vs" dimension="none" value="alphams_Vs/(alphams_Vs+betams_Vs)"/>
+
+		<DerivedVariable name="alphans_Vs" dimension="none" value="0.016*(-24.9-Vs/MVOLT)/(exp((-24.9-Vs/MVOLT)/5.0)-1.0)"/>
+		<DerivedVariable name="betans_Vs" dimension="none" value="0.25*exp(-1.0-0.025*Vs/MVOLT)"/>
+
+		<DerivedVariable name="alphahs_Vs" dimension="none" value="0.128*exp((-43.0-Vs/MVOLT)/18.0)"/>
+		<DerivedVariable name="betahs_Vs" dimension="none" value="4.0/(1.0+exp((-20.0-Vs/MVOLT)/5.0))"/>
+
+		<DerivedVariable name="alphasd_Vd" dimension="none" value="1.6/(1.0+exp(-0.072*(Vd/MVOLT-5.0)))"/>
+		<DerivedVariable name="betasd_Vd" dimension="none" value="0.02*(Vd/MVOLT+8.9)/(exp((Vd/MVOLT+8.9)/5.0)-1.0)"/>
+
+		
+		<DerivedVariable name="Iampa" dimension="currentDensity" value="gAmpa*Wi*(Vd-Vsyn)"/>
+		<DerivedVariable name="Inmda" dimension="currentDensity" value="gNmda*Sisat*(Vd-Vsyn)/(1.0+0.28*exp(-0.062*(Vd/MVOLT-60.0)))"/>
+		<DerivedVariable name="Isyn" dimension="currentDensity" value="Iampa+Inmda"/>
+		
+		
+		<ConditionalDerivedVariable name="alphaqd" dimension="none">
+			<Case condition="0.00002*Cad .gt. 0.01" value="0.01"/>
+			<Case value="0.00002*Cad"/>
+		</ConditionalDerivedVariable>
+	
+		<ConditionalDerivedVariable name="chid" dimension="none">
+			<Case condition="Cad/250 .gt. 1" value="1"/>
+			<Case value="Cad/250"/>
+		</ConditionalDerivedVariable>
+
+		<ConditionalDerivedVariable name="alphacd_Vd" dimension="none">
+			<Case condition="Vd .lt. -10*MVOLT" value="exp((Vd/MVOLT+50.0)/11-(Vd/MVOLT+53.5)/27)/18.975"/>
+			<Case value="2.0*exp((-53.5-Vd/MVOLT)/27.0)"/>
+		</ConditionalDerivedVariable>
+	
+		<ConditionalDerivedVariable name="betacd_Vd" dimension="none">
+			<Case condition="Vd .lt. -10*MVOLT" value="(2.0*exp((-53.5-Vd/MVOLT)/27.0)-alphacd_Vd)"/>
+			<Case value="0"/>
+		</ConditionalDerivedVariable>
+
+		<ConditionalDerivedVariable name="Sisat" dimension="none">
+			<Case condition="Si .gt. Smax" value="Smax"/>
+			<Case value="Si"/>
+		</ConditionalDerivedVariable>
+
+
+		<TimeDerivative variable="Vs" value="(-gLs*(Vs-eL)-gNa*(Minfs_Vs^2)*hs*(Vs-eNa)-gKdr*ns*(Vs-eK)+(gc/pp)*(Vd-Vs)+iSoma/pp) / cm"/>
+		<TimeDerivative variable="Vd" value="(iDend/(1.0-pp)-Isyn/(1.0-pp)-gLd*(Vd-eL)-ICad-gKahp*qd*(Vd-eK)-gKC*cd*chid*(Vd-eK)+(gc*(Vs-Vd))/(1.0-pp)) / cm"/>
+		<TimeDerivative variable="Cad" value="(-0.13*ICad/UAMP_PER_CM2-0.075*Cad) / MSEC"/>
+		<TimeDerivative variable="hs" value="(alphahs_Vs-(alphahs_Vs+betahs_Vs)*hs) / MSEC"/>
+		<TimeDerivative variable="ns" value="(alphans_Vs-(alphans_Vs+betans_Vs)*ns) / MSEC"/>
+		<TimeDerivative variable="sd" value="(alphasd_Vd-(alphasd_Vd+betasd_Vd)*sd) / MSEC"/>
+		<TimeDerivative variable="cd" value="(alphacd_Vd-(alphacd_Vd+betacd_Vd)*cd) / MSEC"/>
+		<TimeDerivative variable="qd" value="(alphaqd-(alphaqd+betaqd)*qd) / MSEC"/>
+
+		<!-- Synaptic Dynamics -->
+		<TimeDerivative variable="Si" value="-Si/150.0" />
+		<TimeDerivative variable="Wi" value="-Wi/2.0" />
+
+		<OnStart>
+			<StateAssignment variable="Vs" value="eL"/>
+			<StateAssignment variable="Vd" value="eL"/>
+			<StateAssignment variable="qd" value="qd0" />
+		</OnStart>
+
+	</Dynamics>
+
+</ComponentType>
+
+
+<!-- PyNN cells -->
+<ComponentType name="IF_curr_alpha" 
+				extends="basePyNNIaFCell"
+				description="Leaky integrate and fire model with fixed threshold and alpha-function-shaped post-synaptic current">
+	<Dynamics>
+		<StateVariable name="v" exposure="v" dimension="voltage"/>
+		<StateVariable name="lastSpikeTime" dimension="time"/>
+		
+		<OnStart>
+			<StateAssignment variable="v" value="v_init * MVOLT"/>
+			<StateAssignment variable="lastSpikeTime" value="t - (tau_refrac*MSEC)"/>
+		</OnStart>
+		
+		<DerivedVariable name="voltage_rate_active" dimension="current" value="(MVOLT * ((i_offset/cm) +  ((v_rest - (v/MVOLT)) / tau_m))/MSEC) + (iSyn / (cm * NFARAD))" />
+		
+		<ConditionalDerivedVariable name="voltage_rate" dimension="voltage_per_time">
+			<Case condition="t .gt. lastSpikeTime + (tau_refrac*MSEC)" value="voltage_rate_active"/>
+			<Case value="0"/>
+		</ConditionalDerivedVariable>
+		
+		<TimeDerivative variable="v" value="voltage_rate" />
+		
+		<OnCondition test="(v .gt. (v_thresh * MVOLT)) .and. (t .gt. lastSpikeTime + (tau_refrac*MSEC))">
+			<EventOut port="spike"/>
+			
+			<StateAssignment variable="lastSpikeTime" value="t" />
+			<StateAssignment variable="v" value="v_reset * MVOLT" />
+		</OnCondition>
+		
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="IF_curr_exp" 
+				extends="basePyNNIaFCell"
+				description="Leaky integrate and fire model with fixed threshold and decaying-exponential post-synaptic current">
+				
+	<Dynamics>
+		<StateVariable name="v" exposure="v" dimension="voltage"/>
+		<StateVariable name="lastSpikeTime" dimension="time"/>
+
+		<OnStart>
+			<StateAssignment variable="v" value="v_init * MVOLT"/>
+			<StateAssignment variable="lastSpikeTime" value="t - (tau_refrac*MSEC)"/>
+		</OnStart>
+		
+		<DerivedVariable name="voltage_rate_active" dimension="current" value="(MVOLT * ((i_offset/cm) +  ((v_rest - (v/MVOLT)) / tau_m))/MSEC) + (iSyn / (cm * NFARAD))" />
+		
+		<ConditionalDerivedVariable name="voltage_rate" dimension="voltage_per_time">
+			<Case condition="t .gt. lastSpikeTime + (tau_refrac*MSEC)" value="voltage_rate_active"/>
+			<Case value="0"/>
+		</ConditionalDerivedVariable>
+		
+		<TimeDerivative variable="v" value="voltage_rate" />
+		
+		<OnCondition test="(v .gt. v_thresh * MVOLT) .and. (t .gt. lastSpikeTime + (tau_refrac*MSEC))">
+			<EventOut port="spike"/>
+			
+			<StateAssignment variable="lastSpikeTime" value="t" />
+			<StateAssignment variable="v" value="v_reset * MVOLT" />
+		</OnCondition>
+		
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="IF_cond_alpha" 
+				extends="basePyNNIaFCondCell"
+				description="Leaky integrate and fire model with fixed threshold and alpha-function-shaped post-synaptic conductance">
+
+	<Dynamics>
+		<StateVariable name="v" exposure="v" dimension="voltage"/>
+		<StateVariable name="lastSpikeTime" dimension="time"/>
+
+		<OnStart>
+			<StateAssignment variable="v" value="v_init * MVOLT"/>
+			<StateAssignment variable="lastSpikeTime" value="t - (tau_refrac*MSEC)"/>	
+		</OnStart>
+		
+		<DerivedVariable name="voltage_rate_active" dimension="current" value="(MVOLT * ((i_offset/cm) +  ((v_rest - (v/MVOLT)) / tau_m))/MSEC) + (iSyn / (cm * NFARAD))" />
+		
+		<ConditionalDerivedVariable name="voltage_rate" dimension="voltage_per_time">
+			<Case condition="t .gt. lastSpikeTime + (tau_refrac*MSEC)" value="voltage_rate_active"/>
+			<Case value="0"/>
+		</ConditionalDerivedVariable>
+		
+		<TimeDerivative variable="v" value="voltage_rate" />
+		
+		<OnCondition test="(v .gt. v_thresh * MVOLT) .and. (t .gt. lastSpikeTime + (tau_refrac*MSEC))">
+			<EventOut port="spike"/>
+			
+			<StateAssignment variable="lastSpikeTime" value="t" />
+			<StateAssignment variable="v" value="v_reset * MVOLT" />
+		</OnCondition>
+		
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="IF_cond_exp" 
+				extends="basePyNNIaFCondCell"
+				description="Leaky integrate and fire model with fixed threshold and exponentially-decaying post-synaptic conductance">
+	<Dynamics>
+		<StateVariable name="v" exposure="v" dimension="voltage"/>
+		<StateVariable name="lastSpikeTime" dimension="time"/>
+
+		<OnStart>
+			<StateAssignment variable="v" value="v_init * MVOLT"/>
+			<StateAssignment variable="lastSpikeTime" value="t - (tau_refrac*MSEC)"/>
+		</OnStart>
+		
+		<DerivedVariable name="voltage_rate_active" dimension="current" value="(MVOLT * ((i_offset/cm) +  ((v_rest - (v/MVOLT)) / tau_m))/MSEC) + (iSyn / (cm * NFARAD))" />
+		
+		<ConditionalDerivedVariable name="voltage_rate" dimension="voltage_per_time">
+			<Case condition="t .gt. lastSpikeTime + (tau_refrac*MSEC)" value="voltage_rate_active"/>
+			<Case value="0"/>
+		</ConditionalDerivedVariable>
+		
+		<TimeDerivative variable="v" value="voltage_rate" />
+		
+		<OnCondition test="(v .gt. v_thresh * MVOLT) .and. (t .gt. lastSpikeTime + (tau_refrac*MSEC))">
+			<EventOut port="spike"/>
+			
+			<StateAssignment variable="lastSpikeTime" value="t" />
+			<StateAssignment variable="v" value="v_reset * MVOLT" />
+		</OnCondition>
+		
+	</Dynamics>
+	
+</ComponentType>
+
+<ComponentType name="EIF_cond_exp_isfa_ista" 
+				extends="basePyNNIaFCondCell"
+				description="Adaptive exponential integrate and fire neuron according to Brette R and Gerstner W (2005) with exponentially-decaying post-synaptic conductance">
+
+	<Parameter name="v_spike" dimension="none"/>
+	<Parameter name="delta_T" dimension="none"/>
+	<Parameter name="tau_w" dimension="none"/>
+
+	<Parameter name="a" dimension="none"/>
+	<Parameter name="b" dimension="none"/>
+		
+	<DerivedParameter name="eif_threshold" dimension="none" value="v_spike * H(delta_T-1e-12) + v_thresh * H(-1*delta_T+1e-9)"/>
+
+	<Exposure name="w" dimension="none"/>
+
+	<Dynamics>
+
+		<StateVariable name="v" dimension="voltage" exposure="v"/>
+		<StateVariable name="w" dimension="none" exposure="w"/>
+		<StateVariable name="lastSpikeTime" dimension="time"/>
+
+		<ConditionalDerivedVariable name="delta_I" dimension="none">
+			<Case condition="delta_T .gt. 0" value="delta_T * exp(((v / MVOLT) - v_thresh) / delta_T)"/>
+			<Case condition="delta_T .eq. 0" value="0"/>
+		</ConditionalDerivedVariable>
+		
+		<DerivedVariable name="voltage_rate_active" dimension="current" value="(MVOLT * ((-1 * ((v / MVOLT) - v_rest) + delta_I) / tau_m + (i_offset - w) / cm) / MSEC) + (iSyn / (cm * NFARAD))" />
+		
+		<ConditionalDerivedVariable name="voltage_rate" dimension="voltage_per_time">
+			<Case condition="t .gt. lastSpikeTime + (tau_refrac*MSEC)" value="voltage_rate_active"/>
+			<Case value="0"/>
+		</ConditionalDerivedVariable>
+		
+		<TimeDerivative variable="v" value="voltage_rate" />
+		<TimeDerivative variable="w" value="(1 / tau_w) * (a * ((v / MVOLT) - v_rest) - w) / MSEC"/>
+		
+		<OnStart>
+			<StateAssignment variable="v" value="v_init * MVOLT"/>
+			<StateAssignment variable="w" value="0"/>
+			<StateAssignment variable="lastSpikeTime" value="t - (tau_refrac*MSEC)"/>
+		</OnStart>
+		
+		<OnCondition test="(v .gt. eif_threshold * MVOLT) .and. (t .gt. lastSpikeTime + (tau_refrac*MSEC))">
+			<EventOut port="spike"/>
+			
+			<StateAssignment variable="lastSpikeTime" value="t" />
+			<StateAssignment variable="v" value="v_reset * MVOLT" />
+			<StateAssignment variable="w" value="w+b"/>
+		</OnCondition>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="EIF_cond_alpha_isfa_ista" 
+				extends="basePyNNIaFCondCell"
+				description="Adaptive exponential integrate and fire neuron according to Brette R and Gerstner W (2005) with alpha-function-shaped post-synaptic conductance">
+
+	<Parameter name="v_spike" dimension="none"/>
+	<Parameter name="delta_T" dimension="none"/>
+	<Parameter name="tau_w" dimension="none"/>
+
+	<Parameter name="a" dimension="none"/>
+	<Parameter name="b" dimension="none"/>
+
+	<DerivedParameter name="eif_threshold" dimension="none" value="v_spike * H(delta_T-1e-12) + v_thresh * H(-1*delta_T+1e-9)"/>
+
+	<Exposure name="w" dimension="none"/>
+
+	<Dynamics>
+
+		<StateVariable name="v" dimension="voltage" exposure="v"/>
+		<StateVariable name="w" dimension="none" exposure="w"/>
+		<StateVariable name="lastSpikeTime" dimension="time"/>
+
+		<ConditionalDerivedVariable name="delta_I" dimension="none">
+			<Case condition="delta_T .gt. 0" value="delta_T * exp(((v / MVOLT) - v_thresh) / delta_T)"/>
+			<Case condition="delta_T .eq. 0" value="0"/>
+		</ConditionalDerivedVariable>
+		
+		<DerivedVariable name="voltage_rate_active" dimension="current" value="(MVOLT * ((-1 * ((v / MVOLT) - v_rest) + delta_I) / tau_m + (i_offset - w) / cm) / MSEC) + (iSyn / (cm * NFARAD))" />
+		
+		<ConditionalDerivedVariable name="voltage_rate" dimension="voltage_per_time">
+			<Case condition="t .gt. lastSpikeTime + (tau_refrac*MSEC)" value="voltage_rate_active"/>
+			<Case value="0"/>
+		</ConditionalDerivedVariable>
+		
+		<TimeDerivative variable="v" value="voltage_rate" />
+		<TimeDerivative variable="w" value="(1 / tau_w) * (a * ((v / MVOLT) - v_rest) - w) / MSEC"/>
+		
+		<OnStart>
+			<StateAssignment variable="v" value="v_init * MVOLT"/>
+			<StateAssignment variable="w" value="0"/>
+			<StateAssignment variable="lastSpikeTime" value="t - (tau_refrac*MSEC)"/>
+		</OnStart>
+		
+		<OnCondition test="(v .gt. eif_threshold * MVOLT) .and. (t .gt. lastSpikeTime + (tau_refrac*MSEC))">
+			<EventOut port="spike"/>
+			
+			<StateAssignment variable="lastSpikeTime" value="t" />
+			<StateAssignment variable="v" value="v_reset * MVOLT" />
+			<StateAssignment variable="w" value="w+b"/>
+		</OnCondition>
+
+	</Dynamics>
+
+</ComponentType>
+
+<!-- Based on equations used for specifying cell behaviour for Brian in PyNN -->
+<ComponentType name="HH_cond_exp" 
+				extends="basePyNNCell"
+				description="Single-compartment Hodgkin-Huxley-type neuron with transient sodium and delayed-rectifier potassium currents using the ion channel models from Traub.">
+	
+	<Parameter name="gbar_K" dimension="none"/>
+	<Parameter name="gbar_Na" dimension="none"/>
+	<Parameter name="g_leak" dimension="none"/>
+
+	<Parameter name="e_rev_K" dimension="none"/>
+	<Parameter name="e_rev_Na" dimension="none"/>
+	<Parameter name="e_rev_leak" dimension="none"/>
+
+	<Parameter name="v_offset" dimension="none"/>
+	
+	<Parameter name="e_rev_E" dimension="none"/>
+	<Parameter name="e_rev_I" dimension="none"/>
+
+	<Exposure name="m" dimension="none"/>
+	<Exposure name="h" dimension="none"/>
+	<Exposure name="n" dimension="none"/>
+
+	<Dynamics>
+		<StateVariable name="v" dimension="voltage" exposure="v"/>
+		<StateVariable name="m" dimension="none" exposure="m"/>
+		<StateVariable name="h" dimension="none" exposure="h"/>
+		<StateVariable name="n" dimension="none" exposure="n"/>
+		
+		<DerivedVariable name="iLeak" dimension="none" value="g_leak * (e_rev_leak - (v / MVOLT))"/>
+		<DerivedVariable name="iNa" dimension="none" value="gbar_Na * (m * m * m) * h * (e_rev_Na - (v / MVOLT))"/>
+		<DerivedVariable name="iK" dimension="none" value="gbar_K * (n * n * n * n) * (e_rev_K - (v / MVOLT))"/>
+		<DerivedVariable name="iMemb" dimension="none" value="iLeak + iNa + iK + i_offset"/>
+
+		<DerivedVariable name="alpham" dimension="none" value="0.32 * (13 - (v / MVOLT) + v_offset) / (exp((13 - (v / MVOLT) + v_offset) / 4.0) - 1)"/>
+		<DerivedVariable name="betam" dimension="none"  value="0.28 * ((v / MVOLT) - v_offset - 40) / (exp(((v / MVOLT) - v_offset - 40) / 5.0) - 1)"/>
+		<DerivedVariable name="alphah" dimension="none" value="0.128 * exp((17 - (v / MVOLT) + v_offset) / 18.0)"/>
+		<DerivedVariable name="betah" dimension="none" value="4.0 / (1 + exp((40 - (v / MVOLT) + v_offset) / 5))"/>
+		<DerivedVariable name="alphan" dimension="none" value="0.032 * (15 - (v / MVOLT) + v_offset) / (exp((15 - (v / MVOLT) + v_offset) / 5) - 1)"/>
+		<DerivedVariable name="betan" dimension="none" value="0.5 * exp((10 - (v / MVOLT) + v_offset) / 40)"/>
+
+		<TimeDerivative variable="v" value="(MVOLT * (iMemb / cm) / MSEC) + (iSyn / (cm * NFARAD))"/>
+
+		<TimeDerivative variable="m" value="(alpham * (1 - m) - betam * m) / MSEC"/>
+		<TimeDerivative variable="h" value="(alphah * (1 - h) - betah * h) / MSEC"/>
+		<TimeDerivative variable="n" value="(alphan * (1 - n) - betan * n) / MSEC"/>
+		
+		<OnStart>
+			<StateAssignment variable="v" value="v_init * MVOLT"/>
+			<StateAssignment variable="m" value="0"/>
+			<StateAssignment variable="h" value="0"/>
+			<StateAssignment variable="n" value="0"/>
+		</OnStart>
+		
+	</Dynamics>
+
+</ComponentType>
+
+
+<!-- PyNN synapses -->
+<ComponentType name="expCondSynapse" 
+				extends="basePynnSynapse" 
+				description="Conductance based synapse with instantaneous rise and single exponential decay (with time constant tau_syn)">
+
+	<Property name="weight" dimension="none"  defaultValue="1"/>
+
+	<Parameter name="e_rev" dimension="none"/>
+
+	<Exposure name="g" dimension="none"/>
+
+	<Dynamics>
+		<StateVariable name="g" dimension="none" exposure="g"/>
+
+		<DerivedVariable name="i" exposure="i" dimension="current" value="g * (e_rev - (v/MVOLT)) * NAMP" />
+
+		<TimeDerivative variable="g" value="-g / (tau_syn*MSEC)" />
+
+		<OnEvent port="in">
+			<StateAssignment variable="g" value="g+weight" />
+		</OnEvent>
+
+	</Dynamics>
+
+</ComponentType>
+<ComponentType name="expCurrSynapse" 
+				extends="basePynnSynapse" 
+				description="Current based synapse with instantaneous rise and single exponential decay (with time constant tau_syn)">
+
+	<Property name="weight" dimension="none"  defaultValue="1"/>
+
+	<Dynamics>
+		<StateVariable name="I" dimension="none"/>
+		
+		<DerivedVariable name="i" exposure="i" dimension="current" value="I * NAMP" />
+
+		<TimeDerivative variable="I" value="-I / (tau_syn*MSEC)" />
+
+		<OnEvent port="in">
+			<StateAssignment variable="I" value="I + weight" />
+		</OnEvent>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="alphaCondSynapse" 
+				extends="basePynnSynapse" 
+				description="Alpha synapse: rise time and decay time are both tau_syn. Conductance based synapse.">
+
+	<Property name="weight" dimension="none"  defaultValue="1"/>
+
+	<Parameter name="e_rev" dimension="none"/>
+
+	<Exposure name="g" dimension="none"/>
+	<Exposure name="A" dimension="none"/> <!-- For some reason y gives an error in NEURON mod files... -->
+
+	<Dynamics>
+		<StateVariable name="g" exposure="g" dimension="none"/>
+		<StateVariable name="A" exposure="A" dimension="none"/>
+		<!--
+		Inspired by Brian impl in PyNN...
+		g(t) = e/tau * t * e^(-t/tau)   // after syn input
+		define y(t) = e^(-t/tau)
+		dy/dt = -1/tau * e^(-t/tau) = -1/tau * y
+				= -y / tau
+		dg/dt = e/tau * e^(-t/tau) + (-1/tau) * e/tau * t * e^(-t/tau)
+				= e/tau * y          + (-1/tau) * g
+				= (e*y - g) / tau
+		-->
+
+		<DerivedVariable name="i" exposure="i" dimension="current" value="g * (e_rev - (v/MVOLT)) * NAMP" />
+
+		<TimeDerivative variable="g" value="(2.7182818*A - g)/(tau_syn*MSEC)" />
+		<TimeDerivative variable="A" value="-A /(tau_syn*MSEC)" />
+
+		<OnEvent port="in">
+			<StateAssignment variable="A" value="A + weight" />
+		</OnEvent>
+
+	</Dynamics>
+
+</ComponentType>
+
+<ComponentType name="alphaCurrSynapse" 
+				extends="basePynnSynapse" 
+				description="Alpha synapse: rise time and decay time are both tau_syn. Current based synapse.">
+
+	<Property name="weight" dimension="none"  defaultValue="1"/>
+
+	<Exposure name="A" dimension="current"/>
+
+	<Dynamics>
+		<StateVariable name="I" dimension="none"/>
+		<StateVariable name="A" exposure="A" dimension="none"/>
+		
+		<DerivedVariable name="i" exposure="i" dimension="current" value="I * NAMP" />
+
+		<TimeDerivative variable="I" value="(2.7182818*A - I)/(tau_syn*MSEC)" />
+		<TimeDerivative variable="A" value="-A /(tau_syn*MSEC)" />
+
+		<OnEvent port="in">
+			<StateAssignment variable="A" value="A + weight" />
+		</OnEvent>
+
+	</Dynamics>
+
+</ComponentType>
+
+
+<!-- PyNN spike sources -->
+<ComponentType name="SpikeSourcePoisson" 
+				extends="baseSpikeSource"
+				description="Spike source, generating spikes according to a Poisson process.">
+
+	<Parameter name="start" dimension="time"/>
+	<Parameter name="duration" dimension="time"/>
+	<Parameter name="rate" dimension="per_time"/>
+	
+	<DerivedParameter name="end" dimension="time" value="start + duration"/>
+	
+	<Constant name="LONG_TIME" dimension="time" value="1e9hour"/>
+	<Constant name="SMALL_TIME" dimension="time" value="1e-9ms"/> <!-- See below for usage -->
+		
+	<!-- See spikeGeneratorPoisson for full description of tnextIdeal/tnextUsed etc. -->
+	<Exposure name="isi" dimension="time"/>
+	<Exposure name="tnextIdeal" dimension="time"/>
+	<Exposure name="tnextUsed" dimension="time"/> 
+
+	<Dynamics>
+		
+		<StateVariable name="tsince" dimension="time" exposure="tsince"/>
+		<StateVariable name="tnextIdeal" dimension="time" exposure="tnextIdeal"/>
+		<StateVariable name="tnextUsed" dimension="time" exposure="tnextUsed"/>
+		<StateVariable name="isi" dimension="time" exposure="isi"/>
+
+		<TimeDerivative variable="tsince" value="1"/>
+		<TimeDerivative variable="tnextUsed" value="0"/> 
+		<TimeDerivative variable="tnextIdeal" value="0"/> 
+
+		<OnStart>
+			<StateAssignment variable="isi" value="start - log(random(1))/rate"/>
+			<StateAssignment variable="tsince" value="0"/>
+			
+			<!-- See spikeGeneratorPoisson for full description of tnextIdeal/tnextUsed etc. -->
+			<StateAssignment variable="tnextIdeal" value="isi + H(((isi) - (start+duration))/duration)*LONG_TIME"/>
+			<StateAssignment variable="tnextUsed" value="tnextIdeal"/>
+		</OnStart>
+
+
+		<OnCondition test="t .gt. tnextUsed">
+			<StateAssignment variable="isi" value="-1 * log(random(1))/rate"/>
+			
+			<!--
+			Check to see whether tnextIdeal+isi is greater than start+duration and if so set it to a long time in the future...
+			The use of H() is necessary here (as opposed to checking this in the test of OnCondition) since NEURON requires a single boolean expression in test above
+			-->
+			<StateAssignment variable="tnextIdeal" value="(tnextIdeal+isi) + H(((tnextIdeal+isi) - (start+duration))/duration)*LONG_TIME"/> 
+			<StateAssignment variable="tnextUsed" value="tnextIdeal*H( (tnextIdeal-t)/t ) + (t+SMALL_TIME)*H( (t-tnextIdeal)/t )"/> 
+			
+			<StateAssignment variable="tsince" value="0"/>
+			
+			<EventOut port="spike"/>
+		</OnCondition>
+
+	</Dynamics>
+</ComponentType>
+
+
+</Lems>
