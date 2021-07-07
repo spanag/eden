@@ -97,7 +97,7 @@ endif
 
 # Compiler flags
 # TODO more optimization flags
-CFLAGS_basic := -Wall -Werror -Wno-unused-result -lm -DBUILD_STAMP=\"$(BUILD_STAMP)\"
+CFLAGS_basic := -Wall -Werror -Wno-unused-result -lm -DBUILD_STAMP=\"$(BUILD_STAMP)\" ${CFLAGS_extra}
 CFLAGS_release := ${CFLAGS_basic} -O3
 CFLAGS_debug := ${CFLAGS_basic} -g
 
@@ -175,6 +175,16 @@ ${BIN_DIR}/LEMS_Expr_Test${DOT_X}: ${OBJ_DIR}/LEMS_Expr_Test${DOT_O} ${OBJ_DIR}/
 ${OBJ_DIR}/LEMS_Expr_Test${DOT_O}: ${SRC_EDEN}/neuroml/LEMS_Expr_Test.cpp ${SRC_EDEN}/neuroml/LEMS_Expr.h ${OBJ_DIR}/LEMS_Expr.yy${DOT_O} 
 	$(CXX) -c $< $(CXXFLAGS) -I ${SRC_EDEN}/neuroml/  -o $@
 
+# Python wheel with embedded executable of EDEN
+# building a wheel out of tree simply doesn't work, without warning. Copy the package tree in a temporary location and build there (cwd must also be on location of setup.py or the files won't be added) 
+wheel: eden
+	rm -rf $(TESTING_DIR)/sandbox/python_package/
+	cp -r $(TESTING_DIR)/python_package/ $(TESTING_DIR)/sandbox/
+	mkdir -p $(TESTING_DIR)/sandbox/python_package/bin/
+	mv $(TESTING_DIR)/sandbox/python_package/eden_tools/ $(TESTING_DIR)/sandbox/python_package/eden_simulator/
+	cp ${BIN_DIR}/eden${DOT_X} $(TESTING_DIR)/sandbox/python_package/bin/eden
+	cd $(TESTING_DIR)/sandbox/python_package && python3 setup_wheel.py bdist_wheel 
+	python3 -m auditwheel repair --plat ${WHEEL_TARGET_PLAT} --only-plat --wheel-dir $(TESTING_DIR)/sandbox/python_package/dist/ $(TESTING_DIR)/sandbox/python_package/dist/eden_simulator-${WHEEL_VERSION}-py3-none-${WHEEL_PLAT}.whl
 
 # external libraries
 cJSON: ${OBJ_DIR}/${CJSON_NAME}${DOT_O}

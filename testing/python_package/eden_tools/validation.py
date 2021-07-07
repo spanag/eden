@@ -72,6 +72,8 @@ def ExplainVerification( Truth, Test, criteria, key ):
 		criterion = { 'type': 'box', 'dt': 0.0, 'dv': 0.0 }
 	elif key in criteria:
 		criterion = criteria[key]
+	else:
+		raise ValueError('key not found in criteria')
 
 	typ = criterion['type']
 
@@ -122,6 +124,13 @@ def VerifySimResults(
 			criterion = { 'type': 'box', 'dt': 0.0, 'dv': 0.0 }
 		elif key in criteria:
 			criterion = criteria[key]
+		else:
+			if skip_missing_criteria:
+				criterion = None
+				pass
+			else:
+				# print("Validation test missing for "+ key)
+				validation_missing.append(key)
 		
 		if criterion:
 			typ = criterion['type']
@@ -140,14 +149,9 @@ def VerifySimResults(
 				failed = dict(res)
 				failed['key'] = key
 				validation_fails.append(failed)
-				
 			
-		else:
-			if skip_missing_criteria:
-				pass
-			else:
-				# print("Validation test missing for "+ key)
-				validation_missing.append(key)    
+			
+		
 	if validation_missing:
 		ok = False
 		print("Missing time series validation criteria:")

@@ -401,6 +401,7 @@ struct SimulatorConfig{
 	bool dump_raw_layout;
 	
 	bool use_icc;
+	bool tweak_lmvec;
 	bool output_assembly;
 	
 	// TODO knobs:
@@ -422,6 +423,7 @@ struct SimulatorConfig{
 		dump_raw_layout = false;
 		
 		use_icc = false;
+		tweak_lmvec = false;
 		output_assembly = false;
 		
 		cable_solver = CABLE_SOLVER_AUTO;
@@ -5413,10 +5415,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		if(config.use_icc){
 			lm_flags = " -limf"; // TODO check if SVML should be added here too
 		}
-		if( !config.use_icc ){
+		if( !config.use_icc && config.tweak_lmvec ){
 			// some GCC versions need this for vectorization https://sourceware.org/bugzilla/show_bug.cgi?id=20539
 			// also, mvec must be linked first: https://sourceware.org/glibc/wiki/libmvec 
-			lm_flags = " -lmvec -lm" ; 
+			lm_flags = " -lmvec -lm" ; // XXX must revert automatically, if compiler is old enough 
 		}
 		// TODO extra_flags, vec_report etc.
 		
