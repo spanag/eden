@@ -16,7 +16,12 @@ Just click the Binder link on that page and you can use EDEN as shown on the bun
 ## Installing
 
 EDEN is currently available for the Linux platform.
-The program can be built from source with the provided Makefile.
+The program can be installed through PyPI:
+```sh
+pip install eden-simulator
+```
+, or built from source with the provided Makefile. (The latter option is recommended for advanced uses, like MPI builds or system-wide installation)
+
 The following software packages are required to build the source code:
 - `gcc` compiler, or alternatively the `icc` compiler. Specifically, a compiler version that supports C++14.
 - `flex`
@@ -51,7 +56,7 @@ Per-thread parallelism can be adjusted through the `OMP_NUM_THREADS` environment
 
 Alternatively to the command line, the simulator can also be run within a Python program, if the `eden_tools` Python package is installed.
 The Python lines to run EDEN are then:
-```
+```python
 import eden_tools
 results = eden_tools.runEden('<LEMS simulation file>.xml');
 ```
