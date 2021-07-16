@@ -18,8 +18,8 @@ EDEN directly runs NeuroML v2 models of neural networks.
 
 The `eden_simulator` package exposes the `runEden` method, which takes the LEMS simulation file of the NeuroML model to be run as parameter:
 ```python
-import eden_tools
-results = eden_tools.runEden('<LEMS simulation file>.xml');
+import eden_simulator
+results = eden_simulator.runEden('<LEMS simulation file>.xml');
 ```
 This interface returns the recorded trajectories specified in the simulation files in a Python dictionary, same as [`pyNeuroML`](https://pypi.org/project/pyNeuroML/) does with other simulation backends.
 

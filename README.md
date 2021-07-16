@@ -29,8 +29,6 @@ The following software packages are required to build the source code:
 
 Use environment variable `BUILD=release` or `BUILD=debug` to run a production or debugging build of the program executable, respectively. The executable will be available on `bin/eden.<build>.<compiler>.cpu.x`
 
-If the NeuroML Python package `pyNeuroML` is installed, a Python wrapper for EDEN, `eden_tools`, can also be installed - run `pip` on directory `testing/python_package` .
-
 If MPI is also installed, a MPI-enabled version of EDEN (with hybrid MPI/OpenMP parallelization) can be built, by running `make` with the `USE_MPI` flag.
 
 Alternatively, Docker images with EDEN and an assortment of tools are available and can also be built, for containerized environments. The Dockerfiles are available on the `testing/docker` folder, and they can be built in the proper order through the Makefile in the folder.
@@ -54,12 +52,13 @@ Some `.gen.c` and `.gen.so` temporary files may also be generated, these can be 
 
 Per-thread parallelism can be adjusted through the `OMP_NUM_THREADS` environment variable.
 
-Alternatively to the command line, the simulator can also be run within a Python program, if the `eden_tools` Python package is installed.
+Alternatively to the command line, the simulator can also be run within a Python program, if the `eden_simulator` Python package is installed.
 The Python lines to run EDEN are then:
 ```python
-import eden_tools
-results = eden_tools.runEden('<LEMS simulation file>.xml');
+import eden_simulator
+results = eden_simulator.runEden('<LEMS simulation file>.xml');
 ```
+
 This interface returns the recorded trajectories specified in the simulation files in a Python dictionary, same as pyNeuroML does with other simulation backends.
 Thread-level parallelism can also be controlled with the `threads` optional argument.
 
