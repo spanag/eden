@@ -1465,7 +1465,7 @@ struct Morphology{
 		//debug output
 		for(size_t i = 0; i < segments.contents.size(); i++){
 			
-			printf( "Segment %zd: ", lookupNmlId(i) );
+			printf( "Segment %ld: ", lookupNmlId(i) );
 			segments.atSeq(i).debug_print();
 			
 			printf("\n");

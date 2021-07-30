@@ -1,6 +1,23 @@
+
+
+# Before loading setuptools, play with cmdline args here. Because setuptools will complain for the parameters it doesn't recognize
+import sys
+import argparse
+# Add custom parameters to setup.py
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    '--package-version',
+    help='Version tag of the package to be built',
+    required=True
+)
+(config_options, argv) = parser.parse_known_args()
+sys.argv = [sys.argv[0]] + argv  # Write the remaining arguments back to `sys.argv` for distutils to read
+assert (config_options.package_version)
+
+# Now, setuptools can be loaded safely
 import setuptools
 
-
+# load README
 with open("README_wheel.md", "r") as fh:
     long_description = fh.read()
 
@@ -104,13 +121,13 @@ def _get_scripts():
     else:
         extension = ''
 
-    scripts = [f'bin/{script_name}{extension}'
+    scripts = ['bin/%s%s' % (script_name, extension)
                for script_name in script_names]
     return scripts
 
 setuptools.setup(
     name="eden_simulator",
-    version="0.0.1",
+    version=config_options.package_version,
     description="Standalone Python wheels for the EDEN neural simulator",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -131,7 +148,7 @@ setuptools.setup(
     keywords=['simulator','simulation','HPC','neuroscience','NeuroML'],
     # project_urls
     packages=['eden_simulator'],
-    package_data={'eden_simulator': ['../bin/eden']},
+    package_data={'eden_simulator': ['../bin/*']},
     # include_package_data=True,
     # scripts 
     scripts=_get_scripts(),  

@@ -93,7 +93,8 @@ def runEden( example_lems_file, threads=None, extra_cmdline_args=None, executabl
 	
 	if pkg_resources.resource_exists(__name__, eden_bundled_exe):
 		eden_bundled_exe_filename = pkg_resources.resource_filename(__name__, eden_bundled_exe)
-		# print("Using bundled executable: "+eden_bundled_exe+" on "+eden_bundled_exe_filename)
+		if verbose:
+			print("Using bundled executable: "+eden_bundled_exe+" on "+eden_bundled_exe_filename)
 		args[0] = eden_bundled_exe_filename
 	
 	if executable_path:
@@ -103,7 +104,9 @@ def runEden( example_lems_file, threads=None, extra_cmdline_args=None, executabl
 		args += extra_cmdline_args
 	if full_cmdline:
 		args = full_cmdline
-	#print(args)
+	
+	if verbose:
+		print(args)
 	
 	tic = time.time()
 	

@@ -1,5 +1,11 @@
 #include "Common.h"
 
+#include <fstream> // for that precious getline
+
+#ifdef	__linux__
+#include <sys/resource.h>
+#endif
+
 std::vector<std::string> string_split(const std::string& str, const std::string& delim){
 	// straight from StackOverflow https://stackoverflow.com/a/37454181
     std::vector<std::string> tokens;
@@ -18,22 +24,6 @@ std::vector<std::string> string_split(const std::string& str, const std::string&
 double TimevalDeltaSec(const timeval &start, const timeval &end){
 	return (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) * 0.000001;
 }
-
-int64_t getCurrentResidentSetBytes(){
-	int64_t ret = 0;
-	FILE* fp = fopen( "/proc/self/statm", "r" );
-	if(!fp) return 0;
-	
-	//second number should be resident size, in pages
-	int64_t resident_pages;
-	if ( fscanf( fp, "%*s %" SCNd64, &resident_pages ) == 1 ){
-		//input ok
-		ret = resident_pages * sysconf( _SC_PAGESIZE);
-	}
-	fclose( fp );
-	return ret;
-}
-
 
 bool GetLineColumnFromFile(const char *filename, const ptrdiff_t file_byte_offset, long long &line, long long &column){
 	FILE* f = fopen(filename, "rb");
@@ -70,6 +60,22 @@ bool GetLineColumnFromFile(const char *filename, const ptrdiff_t file_byte_offse
 	
 	column = file_byte_offset - last_line + 1;
 	return true;
+}
+
+#ifdef	__linux__
+int64_t getCurrentResidentSetBytes(){
+	int64_t ret = 0;
+	FILE* fp = fopen( "/proc/self/statm", "r" );
+	if(!fp) return 0;
+	
+	//second number should be resident size, in pages
+	int64_t resident_pages;
+	if ( fscanf( fp, "%*s %" SCNd64, &resident_pages ) == 1 ){
+		//input ok
+		ret = resident_pages * sysconf( _SC_PAGESIZE);
+	}
+	fclose( fp );
+	return ret;
 }
 int64_t getPeakResidentSetBytes(){
 	struct rusage rusage = {0};
@@ -114,6 +120,7 @@ int64_t getCurrentHeapBytes(){
 	if(buf) free(buf);
 	return ret;
 }
+#endif
 
 void ReportErrorInFile_Base(FILE *error_log, const char *filename, const ptrdiff_t file_byte_offset, const char *format, va_list args){
 	//file complaint header
@@ -145,14 +152,30 @@ void ReportErrorInFile_Base(FILE *error_log, const char *filename, const ptrdiff
 	auto ShowTheLine = []( const char *filename, long long file_byte_offset, long long column, FILE *error_log ){
 		if( filename && column > 0 ){
 			
-			FILE *fp = fopen( filename, "r" );
-			if( !fp ) return false;
+			std::string line;
+			std::ifstream is (filename, std::ifstream::binary);
+			if( !is ) return false;
+			is.seekg (file_byte_offset - (column - 1), is.beg);
+			std::getline(is, line);
+			if( !is ) return false;
 			
-			fseek( fp, file_byte_offset - (column - 1), SEEK_SET );
-			char *line = NULL;
-			size_t len = 0;
-			if( getline(&line, &len, fp) < 0 ) return false;
-			fprintf( error_log, "%s", line);
+			// crop any training whitespace, like, say, \r or spaces
+			// could also abuse string::resize to fit this in one line
+			int last_non_ws = line.size() - 1;
+			for( ; last_non_ws >= 0; last_non_ws-- ) if( !isspace(line[last_non_ws]) ) break;
+			line.resize(last_non_ws + 1);
+			
+			fwrite( line.c_str(), line.size(), 1, error_log);
+			fprintf( error_log, "\n" );
+			
+			// FILE *fp = fopen( filename, "rb" );
+			// if( !fp ) return false;
+			// fseek( fp, file_byte_offset - (column - 1), SEEK_SET );
+			// char *line = NULL;
+			// size_t len = 0;
+			// if( getline(&line, &len, fp) < 0 ) return false;
+			// fprintf( error_log, "%s", line);
+			
 			for(int i = 0; i < column - 1 ;i++){
 				if( line[i] == '\t' ) fprintf( error_log, ">\t" ); // for simple tab-correctness, more sophisticated LATER if ever needed
 				else fprintf( error_log, "-" );
@@ -172,3 +195,43 @@ void ReportErrorInFile(FILE *error_log, const char *filename, const ptrdiff_t fi
 	ReportErrorInFile_Base(error_log, filename, file_byte_offset, format, args);
 	va_end (args);
 }
+
+
+//------------------> Windows specific util routines
+#ifdef _WIN32
+std::string DescribeErrorCode_Windows(DWORD error_code){
+			
+	std::string result_string = "code "+std::to_string((uint32_t)error_code);
+	LPVOID lpMsgBuf = NULL;
+	DWORD format_result = 0;
+	
+	auto TryFormatWithLanguage = [](DWORD error_code, DWORD dwLanguageId, LPVOID &lpMsgBuf){
+		// XXX non-en-US non-multilanguage installs may need Unicode to show this!
+		return FormatMessageA(
+			FORMAT_MESSAGE_ALLOCATE_BUFFER | 
+			FORMAT_MESSAGE_FROM_SYSTEM |
+			FORMAT_MESSAGE_IGNORE_INSERTS,
+			NULL,
+			error_code,
+			dwLanguageId,
+			(LPSTR) &lpMsgBuf,
+			0, NULL
+		);
+	};
+	
+	format_result = TryFormatWithLanguage( error_code, MAKELANGID(LANG_ENGLISH, SUBLANG_NEUTRAL), lpMsgBuf );
+	if(!format_result){
+		format_result = TryFormatWithLanguage( error_code, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), lpMsgBuf );
+		if(!format_result){
+			return result_string;
+		}
+	}
+	
+	result_string += ": " + std::string( (char *)lpMsgBuf );
+	LocalFree(lpMsgBuf);
+	
+	return result_string;
+};
+#endif
+
+//------------------> end Windows specific util routines

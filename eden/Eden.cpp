@@ -20,7 +20,7 @@ Parallel simulation engine for ODE-based models
 #include "Common.h"
 #include "NeuroML.h"
 
-
+#include <math.h>
 #include <limits.h>
 #include <errno.h>
 
@@ -35,7 +35,15 @@ Parallel simulation engine for ODE-based models
 #include <mpi.h>
 #endif
 
+#ifdef __linux__
 #include <dlfcn.h> // for dynamic loading
+#endif
+
+#ifdef _WIN32
+// for dynamic loading and other OS specific stuff
+// #include <windows.h> // loaded through Common.h at the moment, TODO break out in Windows specific header 
+#endif
+
 extern "C" {	
 
 // do not specify alignment for the pointers, in the generic interface
@@ -1643,7 +1651,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				auto ptr = keyval.second;
 				Int req_seq = type.common_requirements.*ptr;
 				if(req_seq >= 0){
-					sprintf(tmps, "float Lems_requirement_%zd = %s;\n", req_seq, name); 
+					sprintf(tmps, "float Lems_requirement_%ld = %s;\n", req_seq, name); 
 					//ret += tab+tmps;
 					req_lines.push_back( tab+tmps );
 				}
@@ -1661,7 +1669,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				auto ptr = keyval.second;
 				Int req_seq = type.common_event_inputs.*ptr;
 				if(req_seq >= 0){
-					sprintf(tmps, "char Lems_eventin_%zd = %s;\n", req_seq, name); 
+					sprintf(tmps, "char Lems_eventin_%ld = %s;\n", req_seq, name); 
 					//ret += tab+tmps;
 					eventin_lines.push_back( tab+tmps );
 				}
@@ -1723,13 +1731,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				const auto &dervar = type.derived_variables.get(seq);
 				
 				if(dervar.type == ComponentType::DerivedVariable::VALUE){
-					sprintf(tmps, "Lems_derived_%zd = ", seq);
+					sprintf(tmps, "Lems_derived_%ld = ", seq);
 					assert( dervar.cases.size() == 0 );
 					auto expression_string = ExpressionInfix(dervar.value, type, dimensions, random_call_counter);
 					ret += tab+tmps+expression_string+";\n";
 				}
 				else if(dervar.type == ComponentType::DerivedVariable::CONDITIONAL){
-					sprintf(tmps, "Lems_derived_%zd = 0;", seq); ret += tab + tmps;
+					sprintf(tmps, "Lems_derived_%ld = 0;", seq); ret += tab + tmps;
 					
 					ret += tab + "if( 0 );\n"; // to avoid extra logic for the first 'if' and the case only 'default' case exists
 					// conditional cases
@@ -1741,7 +1749,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						ret += tab + "else if( " + condition_string + " ){\n";
 						
 						auto value_string = ExpressionInfix(deri_case.value, type, dimensions, random_call_counter);
-						sprintf(tmps, "\tLems_derived_%zd = ", seq);
+						sprintf(tmps, "\tLems_derived_%ld = ", seq);
 						ret += tab + tmps + value_string + ";\n";
 						
 						ret += tab + "}\n";
@@ -1753,14 +1761,14 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						ret += tab + "else{\n";
 						
 						auto value_string = ExpressionInfix(deri_case.value, type, dimensions, random_call_counter);
-						sprintf(tmps, "\tLems_derived_%zd = ", seq);
+						sprintf(tmps, "\tLems_derived_%ld = ", seq);
 						ret += tab + tmps + value_string + ";\n";
 						
 						ret += tab + "}\n";
 					}
 				}
 				else{
-					sprintf(tmps, "internal error: assigned derived variable %zd type %d\n", seq, dervar.type);
+					sprintf(tmps, "internal error: assigned derived variable %ld type %d\n", seq, dervar.type);
 					return tmps; // why not
 				}
 				// if(debug){
@@ -1846,7 +1854,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			};
 			
 			auto Emit_EventOut = [&](const ComponentType::EventOut &evout){				
-				sprintf(tmps, "		Lems_evout_%zd = 1", evout.port_seq );
+				sprintf(tmps, "		Lems_evout_%ld = 1", evout.port_seq );
 				ret += tab+tmps+";\n";
 			};
 			
@@ -1923,7 +1931,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// perhaps split off to different loop LATER
 			for(size_t seq = 0; seq < type.on_events.size(); seq++){
 				const auto &onen = type.on_events.at(seq);
-				sprintf(tmps, "Lems_eventin_%zd", onen.in_port_seq);
+				sprintf(tmps, "Lems_eventin_%ld", onen.in_port_seq);
 				std::string expression_string = tmps;
 				ret += tab+"if( "+expression_string+" ){\n";
 				HandleDoStuff(onen);
@@ -3004,7 +3012,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			auto &resistance = inter_segment_axial_resistance[seg_seq];
 			
 			if(!( section_diameter > 0 )){
-				printf("internal error: Diameter of compartment %zd is not positive \n", (Int)seg_seq);
+				printf("internal error: Diameter of compartment %ld is not positive \n", seg_seq);
 				return false;
 			}
 			
@@ -3774,14 +3782,14 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						char tmps[2000];
 						if( q10.type == Q10Settings::FIXED ){
 							pergate.Index_Q10 = AppendConstant( q10.q10, " Q10 Factor" );
-							sprintf( tmps, "local_constants[%zd]", pergate.Index_Q10 );
+							sprintf( tmps, "local_constants[%ld]", pergate.Index_Q10 );
 							return std::string(tmps);
 						}
 						else if( q10.type == Q10Settings::FACTOR ){
 							// NB equivalent to exp( ln(q10)*(temp - baseTemp)/10 )
 							pergate.Index_Q10 = AppendConstant( q10.q10, " Q10 Factor" );
 							pergate.Index_Q10_BaseTemp = AppendConstant( q10.experimentalTemp, " Q10 Base Temperature" );
-							sprintf( tmps, "powf(local_constants[%zd], ( temperature - local_constants[%zd] ) / 10 )", pergate.Index_Q10, pergate.Index_Q10_BaseTemp );
+							sprintf( tmps, "powf(local_constants[%ld], ( temperature - local_constants[%ld] ) / 10 )", pergate.Index_Q10, pergate.Index_Q10_BaseTemp );
 							return std::string(tmps);
 						}
 						else return std::string("1");
@@ -3808,10 +3816,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							char tmps[1000];
 							
 							tauinf_code +=   tab+"if(initial_state){\n";
-							sprintf(tmps, "	local_stateNext[%zd] = inf;\n", Index_Q); tauinf_code += tab+tmps;
+							sprintf(tmps, "	local_stateNext[%ld] = inf;\n", Index_Q); tauinf_code += tab+tmps;
 							tauinf_code +=   tab+"}else{\n";
 							//sprintf(tmps, "	local_stateNext[%zd] = %s + dt * ( alpha * ( 1 - %s ) - beta * (%s) ) * q10 %s;\n", Index_Q, fana, fana, fana, Rate_suffix.c_str() ); ccde += tab+tmps;
-							sprintf(tmps, "	local_stateNext[%zd] = local_state[%zd] + dt * ( ( inf - local_state[%zd] ) / tau ) * q10 %s;\n", Index_Q, Index_Q, Index_Q, TauInf_suffix.c_str() ); tauinf_code += tab+tmps;
+							sprintf(tmps, "	local_stateNext[%ld] = local_state[%ld] + dt * ( ( inf - local_state[%ld] ) / tau ) * q10 %s;\n", Index_Q, Index_Q, Index_Q, TauInf_suffix.c_str() ); tauinf_code += tab+tmps;
 							tauinf_code +=   "		}\n";
 							
 							return tauinf_code;
@@ -3881,12 +3889,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							
 							
 							// Allocate the gate state variable
-							std::size_t Index_Q = pergate.Index_Q = AppendStateVariable(initial, "Gatevar "+itos(gate_seq)+" for Fixed channel "+itos(inst_seq) );
+							Int Index_Q = pergate.Index_Q = AppendStateVariable(initial, "Gatevar "+itos(gate_seq)+" for Fixed channel "+itos(inst_seq) );
 							
 							// Interface with gate rates
 							
 							// Determine the gate variable
-							sprintf(tmps, "	%s = local_state[%zd]; \n", fana, Index_Q ); ccde += tmps;
+							sprintf(tmps, "	%s = local_state[%ld]; \n", fana, Index_Q ); ccde += tmps;
 							
 							// add the internal dynamics code
 							sprintf(tmps, "	// dynamics for channel %zd gate %zd \n", inst_seq, gate_seq); ccde += tmps;
@@ -3963,13 +3971,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 								
 								// Allocate the subgate state variable
 								float initial = DescribeRateThing::Value(comp_def.V0, sga.steadyState);
-								std::size_t Index_SubQ = persub.Index_Q = AppendStateVariable( initial, for_what + " Variable" );
+								Int Index_SubQ = persub.Index_Q = AppendStateVariable( initial, for_what + " Variable" );
 								
 								// and its contribution factor
 								std::size_t Index_SubQFactor = AppendStateVariable( sga.fraction_of_conductivity, for_what + " Effective Fraction" );
 								
 								// contribute to gate variable
-								sprintf(tmps, "	%s += local_state[%zd] * local_constants[%zd]; \n", fana, Index_SubQ, Index_SubQFactor ); ccde += tmps;
+								sprintf(tmps, "	%s += local_state[%ld] * local_constants[%zd]; \n", fana, Index_SubQ, Index_SubQFactor ); ccde += tmps;
 								
 								// Interface with subgate rates
 								
@@ -4028,14 +4036,14 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							}
 							// gather transition rates
 							struct FromToInfo{
-								size_t tran_seq;
+								Int tran_seq;
 								Int from;
 								Int to;
 							};
 							std::vector< std::string > transition_names( ks.transitions.size() );
 							std::vector< std::vector< FromToInfo > > trans_from(states), trans_to(states); // per state
 							
-							for( size_t tran_seq = 0; tran_seq < ks.transitions.size(); tran_seq++ ){
+							for( Int tran_seq = 0; tran_seq < (Int)ks.transitions.size(); tran_seq++ ){
 								auto &transition = ks.transitions[tran_seq];
 								
 								CellInternalSignature::IonChannelDistImplementation::SubGate pertran;
@@ -4123,7 +4131,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							
 							for( size_t state_seq = 0; state_seq < states; state_seq++ ){
 								auto Index_Q = pergate.subgates.at(state_seq).Index_Q;
-								sprintf(tmps, "			local_stateNext[%zd] = %d;\n", Index_Q, (state_seq == 0) ? 1 : 0 ); ccde += tmps;
+								sprintf(tmps, "			local_stateNext[%ld] = %d;\n", Index_Q, (state_seq == 0) ? 1 : 0 ); ccde += tmps;
 							}
 							ccde +=   "	}else{\n";
 							
@@ -4147,7 +4155,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 										actual_from = tranto.to;
 									}
 									
-									sprintf(tmps, "	+ ( %s_%s * local_state[%zd] )",
+									sprintf(tmps, "	+ ( %s_%s * local_state[%ld] )",
 										transition_names.at(tranto.tran_seq).c_str(),
 										sDirection,
 										pergate.subgates.at(actual_from).Index_Q
@@ -4177,11 +4185,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							}
 							for( size_t state_seq = 0; state_seq < states; state_seq++ ){
 								auto Index_Q = pergate.subgates.at(state_seq).Index_Q;
-								sprintf(tmps, "			local_stateNext[%zd] = local_state[%zd] + dt * ( flux_offdiag_%zd - ( rate_diag_%zd * local_state[%zd] ) ", Index_Q, Index_Q, state_seq, state_seq, Index_Q ); ccde += tmps;
+								sprintf(tmps, "			local_stateNext[%ld] = local_state[%ld] + dt * ( flux_offdiag_%zd - ( rate_diag_%zd * local_state[%ld] ) ", Index_Q, Index_Q, state_seq, state_seq, Index_Q ); ccde += tmps;
 								// for( auto tranto   : trans_to  .at(state_seq) ){
-								// 	sprintf(tmps, "	+ ( %s_rev * local_state[%zd] ) ", transition_names.at(tranto.tran_seq).c_str(), pergate.subgates.at(tranto.to).Index_Q ); ccde += tmps;
+								// 	sprintf(tmps, "	+ ( %s_rev * local_state[%ld] ) ", transition_names.at(tranto.tran_seq).c_str(), pergate.subgates.at(tranto.to).Index_Q ); ccde += tmps;
 								// }
-								// sprintf(tmps, "	- ( local_stateNext[%zd] * ( 0", Index_Q ); ccde += tmps;
+								// sprintf(tmps, "	- ( local_stateNext[%ld] * ( 0", Index_Q ); ccde += tmps;
 								// for( auto tranfrom : trans_from.at(state_seq) ){
 								// 	sprintf(tmps, "	+ %s_for ", transition_names.at(tranfrom.tran_seq).c_str() ); ccde += tmps;
 								// }
@@ -4189,19 +4197,19 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 								sprintf(tmps, " ) * q10 %s;\n", TauInf_suffix.c_str() ); ccde += tmps;
 								
 								sprintf(tmps, "			// add some sanity clipping\n" ); ccde += tmps;
-								sprintf(tmps, "			if( local_stateNext[%zd] > 1 ) local_stateNext[%zd] = 1;\n", Index_Q, Index_Q ); ccde += tmps;
-								sprintf(tmps, "			if( local_stateNext[%zd] < 0 ) local_stateNext[%zd] = 0;\n", Index_Q, Index_Q ); ccde += tmps;
+								sprintf(tmps, "			if( local_stateNext[%ld] > 1 ) local_stateNext[%ld] = 1;\n", Index_Q, Index_Q ); ccde += tmps;
+								sprintf(tmps, "			if( local_stateNext[%ld] < 0 ) local_stateNext[%ld] = 0;\n", Index_Q, Index_Q ); ccde += tmps;
 								
 							}
 							sprintf(tmps, "			// finally, preserve a total of 1, divergence goes to first state as in NEURON\n" ); ccde += tmps;
 							{
 							auto Index_Q = pergate.subgates.at(0).Index_Q;
-							sprintf(tmps, "			local_stateNext[%zd] = 1", Index_Q ); ccde += tmps;
+							sprintf(tmps, "			local_stateNext[%ld] = 1", Index_Q ); ccde += tmps;
 							for( size_t state_seq = 0; state_seq < states; state_seq++ ){
 								
 								if( state_seq == 0 ) continue;
 								auto Index_Q = pergate.subgates.at(state_seq).Index_Q;
-								sprintf(tmps, " - local_stateNext[%zd]", Index_Q ); ccde += tmps;
+								sprintf(tmps, " - local_stateNext[%ld]", Index_Q ); ccde += tmps;
 							}
 							sprintf(tmps, ";\n" ); ccde += tmps;
 							
@@ -5383,7 +5391,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		PrintWorkItemSignature(sig.cell_wig);
 		}
 		
-				
+		
 		// output model code for all present cells TODO
 		std::string code_id = sig.name + "_code";
 		std::string code_filename = code_id+ ".gen.c";
@@ -5407,7 +5415,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			" -std=c11 -Wall"
 			" -Wno-attributes"
 			" -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-function";
-		std::string dll_flags = " -shared -fpic -rdynamic"; //" -shared -fpic -nodefaultlibs";
+		std::string dll_flags = " -shared -fpic"; //" -shared -fpic -nodefaultlibs";
 		std::string optimization_flags = " -Ofast -march=native -mtune=native";
 		std::string fastbuild_flags = " -O0";
 		std::string asm_flags = " -S -masm=intel -fverbose-asm";
@@ -5416,7 +5424,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			lm_flags = " -limf"; // TODO check if SVML should be added here too
 		}
 		if( !config.use_icc && config.tweak_lmvec ){
-			// some GCC versions need this for vectorization https://sourceware.org/bugzilla/show_bug.cgi?id=20539
+			// some GCC(glibc?) versions need this for vectorization https://sourceware.org/bugzilla/show_bug.cgi?id=20539
 			// also, mvec must be linked first: https://sourceware.org/glibc/wiki/libmvec 
 			lm_flags = " -lmvec -lm" ; // XXX must revert automatically, if compiler is old enough 
 		}
@@ -5429,10 +5437,67 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		std::string code_quality_flags = optimization_flags;
 		
-		// dont't bother with optimization if code is massive
+		// don't bother with optimization if code is massive
 		if( sig.code.size() > 1024 * 1024LL ){
 			printf("Choosing fast build due to code size..\n");
 			code_quality_flags = fastbuild_flags;
+		}
+		
+		// Check if compiler is present
+		// TODO XXX hoist this check higher up, to avoid overhead !
+		// TODO more branching to pick the method to check presence LATER, for more compilers
+		if( system((compiler_name + " --version").c_str()) != 0 ){
+			std::string complaint_line = "Could not invoke '"+compiler_name+"' compiler! Make sure it is installed, and available on PATH.";
+			
+			std::string more_commentary;
+			// maybe mention that gcc is the default (or auto selected) LATER
+			
+			// Give some instructions to the astonished user, though the most complete instructions should really be in the manual (when that is written)
+			if(config.use_icc){
+				more_commentary = "Check the instructions on how to set up ICC at Intel's website:\n"
+				"https://software.intel.com/content/www/us/en/develop/articles/intel-system-studio-download-and-install-intel-c-compiler.html"
+				"\nand on setting PATH:\n"
+				"https://software.intel.com/content/www/us/en/develop/documentation/cpp-compiler-developer-guide-and-reference/top/compiler-setup/using-the-command-line/specifying-the-location-of-compiler-components.html";
+			}
+			else{
+				// gcc by default
+				#if defined _WIN32
+				more_commentary = "If a compiler is not already installed, a build for GCC on Windows can be downloaded from:\n";
+				
+				#if INTPTR_MAX == INT32_MAX
+				more_commentary += "https://sourceforge.net/projects/mingw-w64/files/Toolchains%20targetting%20Win32/Personal%20Builds/mingw-builds/8.1.0/threads-posix/sjlj/i686-8.1.0-release-posix-sjlj-rt_v6-rev0.7z";
+				#elif INTPTR_MAX == INT64_MAX
+				more_commentary += "https://sourceforge.net/projects/mingw-w64/files/Toolchains%20targetting%20Wing4/Personal%20Builds/mingw-builds/8.1.0/threads-posix/seh/x86_64-8.1.0-release-posix-seh-rt_v6-rev0.7z";
+				#endif
+				// but still may have to detect non-PC architecture ... LATER
+
+				more_commentary += "\nUnpack the file anywhere, and add the unpacked <path ...>\\bin directory to EDEN's PATH.";
+				#elif defined __linux__
+				more_commentary = "GCC is usually already installed on Linux setups. It if is not installed, refer to your distribution's documentation on how to install the essentials for building from source.";
+				#else
+					
+				#endif
+			}
+			// also note ways to set path
+			#if defined _WIN32
+			more_commentary += "If using the command line, PATH can be set as follows:\n"
+			"path <path to compiler executable>;%PATH%\n"
+			"eden.exe ..."; // maybe argv[0], whatever
+			#elif defined __linux__
+			more_commentary += "If using the command line, PATH can be set as follows:\n"
+			"PATH=<path to compiler executable>:$PATH eden ...";
+			#endif
+			
+			more_commentary += "If using Python, PATH can be set as follows:\n"
+			"os.environ[\"PATH\"] = <path to compiler executable> + os.pathsep + os.environ[\"PATH\"]\n"
+			"runEden(...)";
+			
+			fprintf(stderr, "%s\n", complaint_line.c_str());
+			if( !more_commentary.empty() ){
+				fprintf(stderr, "%s\n", more_commentary.c_str());
+			}
+			
+			return false;
 		}
 		
 		// NOTE -lm must be put last, after other obj files (like source code) have stated their dependencies on libm
@@ -5453,17 +5518,43 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		// load the code
 		std::string function_name = "doit";
+		IterationCallback callback = NULL;
 		
+		#ifdef __linux__
 		void *dll_handle = dlopen(("./"+dll_filename).c_str(), RTLD_NOW);
 		if(!dll_handle){
 			fprintf(stderr, "Error loading %s: %s\n", dll_filename.c_str(), dlerror());
 			return false;
 		}
-		IterationCallback callback;
 		*(void**)(& callback ) = dlsym(dll_handle, function_name.c_str()); // C-style voodoo to make a "valid" cast
 		if(!callback){
 			fprintf(stderr, "Error loading %s symbol %s: %s\n", dll_filename.c_str(), function_name.c_str(), dlerror());
 			dlclose(dll_handle);
+			return false;
+		}
+		#endif
+		#ifdef _WIN32
+		// TODO normalize paths to place dll's somewhere else than cwd !
+		// TODO Unicode support, with MultiByteToWideChar
+		HMODULE dll_handle = LoadLibraryA((".\\"+dll_filename).c_str());
+		if(!dll_handle){
+			DWORD errCode = GetLastError();
+			fprintf(stderr, "Error loading %s: %s\n", dll_filename.c_str(), DescribeErrorCode_Windows(errCode).c_str());
+			return false;
+		}
+		*(void**)(& callback ) = (void*)GetProcAddress(dll_handle, function_name.c_str());
+		if(!callback){
+			DWORD errCode = GetLastError();
+			fprintf(stderr, "Error loading %s symbol %s: %s\n", dll_filename.c_str(), function_name.c_str(), DescribeErrorCode_Windows(errCode).c_str());
+			FreeLibrary(dll_handle);
+			return false;
+		}
+		#endif
+		
+		if(!callback){
+			// which is already guarded against in platform specific code.
+			// the only reason this should happen is if the platform is not supported
+			fprintf(stderr, "Error loading %s: %s\n", dll_filename.c_str(), "internal error");
 			return false;
 		}
 		sig.callback = callback;
@@ -8334,12 +8425,13 @@ int main(int argc, char **argv){
 	
 	
 	printf("Config: %.3lf Setup: %.3lf Run: %.3lf \n", metadata.config_time_sec, metadata.init_time_sec, metadata.run_time_sec );
+	#ifdef __linux__
 	//get memory usage information too
 	long long memResidentPeak = metadata.peak_resident_memory_bytes = getPeakResidentSetBytes();
 	long long memResidentEnd = metadata.end_resident_memory_bytes = getCurrentResidentSetBytes();
 	long long memHeap = getCurrentHeapBytes();
 	printf("Peak: %lld Now: %lld Heap: %lld\n", memResidentPeak, memResidentEnd, memHeap );
-	
+	#endif
 	//-------------------> release sim data structures, though it's not absolutely necessary at this point
 	
 	

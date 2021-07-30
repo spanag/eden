@@ -1,5 +1,6 @@
 
 0.1
+- Add support for Microsoft Windows
 - Add build target for Python wheels, they are now available on http://pypi.org/project/eden-simulator/
 - Improved auto thread selection on Python package
 - Use of -lmvec flag for GCC is now a run-time flag, only glibc around 2.23 ~ 2.25 should need it

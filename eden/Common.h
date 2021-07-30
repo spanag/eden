@@ -1,6 +1,22 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+
+#ifdef _WIN32
+
+// Minimum supported version: Windows XP, aka 5.1
+#define WINVER       0x0501
+#define _WIN32_WINNT 0x0501
+
+#define WIN32_LEAN_AND_MEAN // because all sorts of useful keywords like PURE are defined with the full headers
+#define NOMINMAX
+#include <windows.h>
+// and more namespace pollution
+#undef IN
+#undef OUT
+#undef INOUT
+#endif
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,9 +26,10 @@
 #include <stddef.h>
 #include <inttypes.h>
 
+#define _USE_MATH_DEFINES // maybe more elegant LATER, but since it works ...
 #include <cmath> // apparently including <algorithm> undefines ::isfinite() function, on ICC
 
-//for model representation
+//for model representation and more
 #include <vector>
 #include <functional>
 #include <algorithm>
@@ -25,22 +42,26 @@
 
 //for time & memory usage measurement
 #include <unistd.h> 
-#include <sys/resource.h>
 
-// NOn-standard helper routines
-#define pow10 exp10
+
+// Non-standard helper routines
+#define pow10(powah) pow(10,(powah))
 #define stricmp strcasecmp
 
-//------------------> Utilities
+//------------------> OS-independent utilities
+// May be missing if not suported by platform, though
 
 double TimevalDeltaSec(const timeval &start, const timeval &end);
 
 
 // Memory measurements on Linux
+// TODO support on more platforms !
+#ifdef 	__linux__
 //Memory consumption getters return 0 for not available
 int64_t getCurrentResidentSetBytes();
 int64_t getPeakResidentSetBytes();
 int64_t getCurrentHeapBytes();
+#endif
 
 struct RunMetaData{
 	double config_time_sec;
@@ -94,8 +115,13 @@ bool GetLineColumnFromFile(const char *filename, const ptrdiff_t file_byte_offse
 void ReportErrorInFile_Base(FILE *error_log, const char *filename, const ptrdiff_t file_byte_offset, const char *format, va_list args);
 void ReportErrorInFile(FILE *error_log, const char *filename, const ptrdiff_t file_byte_offset, const char *format, ...);
 
-
 //------------------> Utilities end
 
+//------------------> Windows specific util routines
+#ifdef _WIN32
+// TODO replace printf with a wrapper, on UTF16 targets
+std::string DescribeErrorCode_Windows(DWORD error_code);
+#endif
+//------------------> end Windows specific util routines
 
 #endif

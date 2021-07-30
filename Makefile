@@ -1,7 +1,8 @@
 # line intentionally left blank, TODO anything to declare
 
-#Select build type. Override by vars passed to Makefile from shell (ie make target VARIABLE=value )
-BUILD_STAMP ?= $(shell date +"%Y-%m-%d")
+# Select build type. Override by vars passed to Makefile from shell (ie make target VARIABLE=value )
+# TODO auto build stamp does not work on Windows, just override it
+BUILD_STAMP ?= $(shell "date" +"%Y-%m-%d")
 BUILD ?= debug
 PLATFORM ?= cpu
 
@@ -32,8 +33,9 @@ SRC_PUGIXML := $(SRC_THIRDPARTY)/$(PUGIXML_NAME)
 CJSON_NAME := cJSON-1.7.1
 SRC_CJSON := $(SRC_THIRDPARTY)/$(CJSON_NAME)
 
+
 # Pick a toolchain
-TOOLCHAIN ?= $(CC)# maybe fon't try to take a hint from CC LATER
+TOOLCHAIN ?= $(CC)# maybe don't try to take a hint from CC LATER
 $(info TOOLCHAIN = $(TOOLCHAIN))
 
 # default toolchain is GCC
@@ -44,6 +46,21 @@ TOOLCHAIN := gcc
 endif
 # other options: USE_MPI
 
+ifndef TARGET
+# Auto-detect target OS/arch/etc, somehow
+# should work on recent gcc, icc, llvm
+# Hopefully, nobody will care to cross-compile using MSVC
+TARGET = $(shell $(TOOLCHAIN) -dumpmachine )
+endif
+
+# Negative logic to allow shorting with a positive result in shell
+MAYBE_TARGET_LINUX ?= false
+MAYBE_NOT_TARGET_LINUX ?= true
+ifneq (,$(findstring linux,$(TARGET)))
+	LIBS := $(LIBS) -ldl
+	MAYBE_TARGET_LINUX := true
+	MAYBE_NOT_TARGET_LINUX := false
+endif
 
 # (internal variable) is a compiler selected?
 COMPILER_SET := ko
@@ -109,6 +126,19 @@ CFLAGS_cpu = ${CFLAGS_omp}
 
 CFLAGS ?= ${CFLAGS_${BUILD}} ${CFLAGS_${PLATFORM}} -I ${SRC_COMMON} -I ${PROJ_BASE}
 
+LIBS ?=  
+ifneq (,$(findstring linux,$(TARGET)))
+	LIBS := $(LIBS) -ldl
+endif
+ifneq (,$(findstring darwin,$(TARGET)))
+	LIBS := $(LIBS) -ldl
+endif
+ifneq (,$(findstring mingw,$(TARGET)))
+	LIBS := $(LIBS)
+	EXE_EXTENSION := .exe
+	EXE_EXTENSION_DIST := .exe
+endif
+
 # TODO temporary till targets are better specified in makefile
 ifdef USE_MPI
 CFLAGS += -DUSE_MPI
@@ -121,9 +151,14 @@ TARGETS := eden
 # Other auxiliary modules
 MODULES := cJSON pugixml
 
+EXE_EXTENSION ?= .x
+# and one more time for dist-able executable binaries, practically omit extension on unices
+# TODO abolish .x since it's not desirable
+EXE_EXTENSION_dist ?= 
+
 DOT_O := .${BUILD}.${TOOLCHAIN}.${PLATFORM}.o
 DOT_A := .${BUILD}.${TOOLCHAIN}.${PLATFORM}.a
-DOT_X := .${BUILD}.${TOOLCHAIN}.${PLATFORM}.x
+DOT_X := .${BUILD}.${TOOLCHAIN}.${PLATFORM}$(EXE_EXTENSION)
 
 all: clean ${TARGETS} test
 
@@ -134,7 +169,7 @@ eden:  ${BIN_DIR}/eden${DOT_X}
 ${BIN_DIR}/eden${DOT_X}: ${OBJ_DIR}/eden${DOT_O} ${OBJ_DIR}/Utils${DOT_O} \
 		${OBJ_DIR}/NeuroML${DOT_O} ${OBJ_DIR}/LEMS_Expr${DOT_A} ${OBJ_DIR}/LEMS_CoreComponents${DOT_O} \
 		${OBJ_DIR}/${PUGIXML_NAME}${DOT_O} # third-party libs
-	$(CXX) $^ -ldl $(CXXFLAGS) $(CFLAGS_omp) -o $@
+	$(CXX) $^ $(LIBS) $(CXXFLAGS) $(CFLAGS_omp) -o $@
 ${OBJ_DIR}/eden${DOT_O}: ${SRC_EDEN}/Eden.cpp ${SRC_EDEN}/NeuroML.h ${SRC_EDEN}/neuroml/LEMS_Expr.h ${SRC_COMMON}/Common.h  ${SRC_COMMON}/MMMallocator.h
 	$(CXX) -c $< $(CXXFLAGS) $(CFLAGS_omp) -o $@
 
@@ -159,10 +194,10 @@ ${OBJ_DIR}/LEMS_Expr.yy${DOT_O}: ${SRC_EDEN}/neuroml/LEMS_Expr.lex ${OBJ_DIR}/LE
 # an embedded data file
 ${OBJ_DIR}/LEMS_CoreComponents${DOT_O}: ${SRC_EDEN}/neuroml/LEMS_CoreComponents.inc.xml
 #	note that this technique is arch-independent
-	# $(LD) --relocatable --format=binary --output=$@.tmp.o $<
+# $(LD) --relocatable --format=binary --output=$@.tmp.o $<
 #	to place contents in .rodata
-	# objcopy --rename-section .data=.rodata,alloc,load,readonly,data,contents $@.tmp.o $@
-	# use above when xxd's 6x inflation of embedded file (byte -> "0x00, ") becomes a problem
+# objcopy --rename-section .data=.rodata,alloc,load,readonly,data,contents $@.tmp.o $@
+# use above when xxd's 6x inflation of embedded file (byte -> "0x00, ") becomes a problem
 	xxd -i $< ${OBJ_DIR}/LEMS_CoreComponents.gen.cpp
 	$(CXX) -c ${OBJ_DIR}/LEMS_CoreComponents.gen.cpp $(CXXFLAGS) -o $@
 
@@ -180,11 +215,11 @@ ${OBJ_DIR}/LEMS_Expr_Test${DOT_O}: ${SRC_EDEN}/neuroml/LEMS_Expr_Test.cpp ${SRC_
 wheel: eden
 	rm -rf $(TESTING_DIR)/sandbox/python_package/
 	cp -r $(TESTING_DIR)/python_package/ $(TESTING_DIR)/sandbox/
-	mkdir -p $(TESTING_DIR)/sandbox/python_package/bin/
-	mv $(TESTING_DIR)/sandbox/python_package/eden_tools/ $(TESTING_DIR)/sandbox/python_package/eden_simulator/
-	cp ${BIN_DIR}/eden${DOT_X} $(TESTING_DIR)/sandbox/python_package/bin/eden
-	cd $(TESTING_DIR)/sandbox/python_package && python3 setup_wheel.py bdist_wheel 
-	python3 -m auditwheel repair --plat ${WHEEL_TARGET_PLAT} --only-plat --wheel-dir $(TESTING_DIR)/sandbox/python_package/dist/ $(TESTING_DIR)/sandbox/python_package/dist/eden_simulator-${WHEEL_VERSION}-py3-none-${WHEEL_PLAT}.whl
+	"mkdir" -p $(TESTING_DIR)/sandbox/python_package/bin/
+	mv $(TESTING_DIR)/sandbox/python_package/eden_tools $(TESTING_DIR)/sandbox/python_package/eden_simulator
+	cp ${BIN_DIR}/eden${DOT_X} $(TESTING_DIR)/sandbox/python_package/bin/eden$(EXE_EXTENSION_DIST)
+	cd $(TESTING_DIR)/sandbox/python_package && python3 setup_wheel.py --package-version ${WHEEL_VERSION} bdist_wheel 
+	$(MAYBE_NOT_TARGET_LINUX) || python3 -m auditwheel repair --plat ${WHEEL_TARGET_PLAT} --only-plat --wheel-dir $(TESTING_DIR)/sandbox/python_package/dist/ $(TESTING_DIR)/sandbox/python_package/dist/eden_simulator-${WHEEL_VERSION}-py3-none-${WHEEL_PLAT}.whl
 
 # external libraries
 cJSON: ${OBJ_DIR}/${CJSON_NAME}${DOT_O}
@@ -198,8 +233,8 @@ ${OBJ_DIR}/${PUGIXML_NAME}${DOT_O}: ${SRC_PUGIXML}/pugixml.cpp ${SRC_PUGIXML}/pu
 
 # testing for EDEN and associated machinery
 
-TESTBIN_EDEN := eden.${BUILD}.${TOOLCHAIN}.cpu.x 
-TESTBIN_NML_PROJECTOR := nml_projector.${BUILD}.${TOOLCHAIN}.cpu.x 
+TESTBIN_EDEN := eden.${BUILD}.${TOOLCHAIN}.cpu$(EXE_EXTENSION) 
+TESTBIN_NML_PROJECTOR := nml_projector.${BUILD}.${TOOLCHAIN}.cpu$(EXE_EXTENSION)
 
 nml_projector: ${BIN_DIR}/nml_projector${DOT_X}
 ${BIN_DIR}/nml_projector${DOT_X}: ${BIN_DIR}/nml_projector${DOT_O} ${OBJ_DIR}/Utils${DOT_O} \
@@ -214,8 +249,8 @@ test:
 
 clean:
 	rm -f $(OBJ_DIR)/*.o $(OBJ_DIR)/*.yy.* $(OBJ_DIR)/*.tab.* $(OBJ_DIR)/*.a  $(OBJ_DIR)/*.gen.*
-	rm -f $(BIN_DIR)/*.x
-	find $(TESTING_DIR)/sandbox/. ! -name 'README.txt' ! -name '.' -type d -exec rm -rf {} +
+	rm -f $(BIN_DIR)/*$(EXE_EXTENSION)
+	"find" $(TESTING_DIR)/sandbox/. ! -name 'README.txt' ! -name '.' -type d -exec rm -rf {} +
 
 .PHONY: all test clean ${TARGETS} ${MODULES} 
 .PHONY: toolchain
