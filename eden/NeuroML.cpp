@@ -7309,12 +7309,12 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 					{"NeuroMLCoreDimensions.xml", 11}, // yeah I know
 				};
 				
-				// href needs some preprocessing because people are funny
+				// href needs some preprocessing before matching to core filenames, because people are funny
 				const char *true_ref = href;
-				// skip all leading slashes
-				while( *true_ref == '/' ) true_ref++;
+				// don't skip leading slashes, absolute paths must be absolute
+				// skip repeated (./)* later
 				while( *true_ref == '.' && *true_ref == '/' ) true_ref += 2;
-				// don't strip leading backlashes, because they're important on Windows (read NML from network mount ?)
+				// don't strip leading backslashes, because they're important on Windows (UNC paths, SMB mounts etc.)
 				// fortunately people haven't spuriously added them yet
 				
 				if(core_filenames.count(true_ref) > 0){
@@ -7322,74 +7322,144 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 					// pass 
 				}
 				else{
-					// generate new path, replacing current name of the file with the new href
-					// contact the devs for more safety (not accessing sensitive files), or just run the program in chroot or something
-					auto new_path = file_to_read.path;
-					// find the last slash and replace everything after it with href
-					auto last_slash_pos = new_path.rfind('/');
-					if(last_slash_pos == std::string::npos) last_slash_pos = 0;
-					else last_slash_pos++; //do include the slash
+					// there are two cases here, either the path is absolute (in which case it is used)
+					// or the path is relative (in which case it is appended to dirname of the file that contained the <Include> tag)
 					
-					new_path.resize(last_slash_pos);
-					new_path += true_ref;
+					auto PathIsRelativeToCwd = []( const std::string &path ){
+						#if defined _WIN32
+							if( path.size() >= 1 && path[0] == '/' ) return false; // relative to current drive, or new-style absolute path
+							if( path.size() >= 1
+								&& (
+									(path[0] >= 'A' && path[0] <= 'Z')
+									|| (path[0] >= 'a' && path[0] <= 'z')
+								)
+								&& path[1] == ':'
+							) return false; // relative to root, or cwd, of a drive
+							// Does not include CP/M device names such as CON, LPT#, AUX, &c. which are erroneously considered to be files atm; Contact the devs if you need support on this
+							// More details on: https://docs.microsoft.com/en-us/dotnet/standard/io/file-path-formats#identify-the-path
+							return true;
+						#else
+							// basically Unix paths otherwise
+							if( path.size() > 0 && path[0] == '/' ) return false; // is absoute path
+							return true;
+						#endif
+					};
 					
-					// and get rid of all ../ nonsense, including symlinks
-					// unfortunately, realpath doesn't exist in certain environments, TODO detect and use fallback
-					// const char *sResolved = realpath( new_path, NULL );
-					// if( !sResolved ){
-					// 	perror( ("error resolving path "+new_path).c_str() );
-					// 	goto CLEANUP;
-					// }
-					// std::string resolved_path = sResolved;
-					// free( (void *)sResolved ); sResolved = NULL;
-					auto ResolvePathTextually = [  ]( const std::string &original_path ){
+					std::string resolved_path; // the path to the file to be used, eventually
+					if( PathIsRelativeToCwd(href) ){
+						// the path is relative to the directory of the file including it
 						
-						auto tokens = string_split(std::string(original_path), "/");
+						// generate new path, replacing current name of the file with the new href
+						// contact this code's devs for more safety (not accessing sensitive files), or just run the program in chroot or something
+						auto new_path = file_to_read.path;
+						// find the last slash and replace everything after it with href
 						
-						std::vector<std::string> resolved_tokens;
-						for( const auto &token : tokens ){
-							if( token == ".." ){
-								if(
-									!resolved_tokens.empty()
-									&& *resolved_tokens.rbegin() != ".."
-								){
-									// move level up from last folder
-									resolved_tokens.pop_back();
+						auto last_slash_pos = new_path.rfind('/');
+						if(last_slash_pos == std::string::npos) last_slash_pos = 0;
+						else last_slash_pos++; //do include the slash
+						
+						#if defined _WIN32
+						// consider the backslash, as well
+						auto last_backslash_pos = new_path.rfind('\\');
+						if(last_backslash_pos == std::string::npos) last_backslash_pos = 0;
+						else last_backslash_pos++; //do include the slash
+						
+						if( last_backslash_pos > last_slash_pos ) last_slash_pos = last_backslash_pos;
+						#endif
+						
+						new_path.resize(last_slash_pos);
+						new_path += true_ref;
+						
+						// and get rid of all ../ nonsense, including symlinks? (probably not including symlinks)
+						// unfortunately, realpath doesn't exist in certain environments, TODO detect and use fallback
+						// const char *sResolved = realpath( new_path, NULL );
+						// if( !sResolved ){
+						// 	perror( ("error resolving path "+new_path).c_str() );
+						// 	goto CLEANUP;
+						// }
+						// std::string resolved_path = sResolved;
+						// free( (void *)sResolved ); sResolved = NULL;
+						
+						auto ResolvePathTextually = [  ]( const std::string &original_path ){
+							
+							auto tokens = string_split(std::string(original_path), "/");
+							#if defined _WIN32
+							// do this for Windows backslashes as well
+							{
+							std::vector<std::string> new_tokens;
+							
+							// For each token, split by slash (may contain backslashes)
+							for( const auto token : tokens ){
+								// For each sub-token, split by backslash
+								for( const auto new_token : string_split( token,  "\\") ){
+									new_tokens.push_back(new_token);
+								}
+							}
+							
+							tokens = new_tokens;
+							}
+							#endif
+							
+							std::vector<std::string> resolved_tokens;
+							for( int i = 0; i < (int)tokens.size(); i++ ){
+								const auto &token = tokens[i];
+								
+								if( token == ".." ){
+									if(
+										!resolved_tokens.empty()
+										&& *resolved_tokens.rbegin() != ".."
+									){
+										// move level up from last folder
+										resolved_tokens.pop_back();
+									}
+									else{
+										// higher than cwd, probably
+										resolved_tokens.push_back(token);
+									}
+								}
+								else if( token == "." ){
+									// skip
+								}
+								else if( token == "" ){
+									if( i == 0 ){
+										// path begins with a slash, keep for the sake of Unix
+										resolved_tokens.push_back(token);
+									}
+									else{
+										// superfluous slashes, skip
+									}
 								}
 								else{
-									// higher than cwd, probably
 									resolved_tokens.push_back(token);
 								}
 							}
-							else if( token == "." ){
-								// skip
+							
+							std::string resolved_path;						
+							for( int i = 0; i < (int)resolved_tokens.size(); i++ ){
+								const auto &token = resolved_tokens[i];
+								resolved_path += token;
+								if( i + 1 < (int)resolved_tokens.size() ) resolved_path += "/";
 							}
-							else if( token == "" ){
-								// superfluous slashes, skip
-							}
-							else{
-								resolved_tokens.push_back(token);
-							}
-						}
-						
-						std::string resolved_path;						
-						for( const auto &token : resolved_tokens ){
-							if( !resolved_path.empty() ) resolved_path += "/";
-							resolved_path += token;
-						}
-						return resolved_path;
-					};
-					std::string resolved_path = ResolvePathTextually( new_path );
+							return resolved_path;
+						};
+						resolved_path = ResolvePathTextually( new_path );
+					}
+					else{
+						// the path is not relative to the file including it
+						resolved_path = href;
+					}
+					
 					
 					// TODO keep path, but print non-resolved one, to avoid leaking irrelevant and possibly sensitive absolute path
 					
-					// just an early check that file exists, so the file that included the missing file can be blamed
+					// just an early check that file exists, so that the file that included the missing file can be blamed
 					// don't trust the file to keep on (not) existing when it is actually opened, of course
 					struct stat stat_dummy;
 					if( stat( resolved_path.c_str(), &stat_dummy) < 0 ){
 						log.error(eTop,"error opening file %s : %s", resolved_path.c_str(), strerror(errno) );
 						goto CLEANUP;
 					}
+					// TODO use Windows API, instead of relying on the generosity of MinGW to contain sys/stat.h
 					
 					if(files_considered.count(resolved_path) > 0){
 						// reopen check
