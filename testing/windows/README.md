@@ -38,7 +38,7 @@ Instead, for the moment, a simple smoke test is run on Windows. Code paths are l
 
 The script to run the tests that are run in the moment for Windows, is `eden\testing\windows\run-basic-tests.bat`. Python has to be in `PATH`, with `eden-simulator` installed.  
 The script to run the tests for a specific wheel is `eden\testing\windows\run-tests-on-wheel.bat`, with a command-line argument of which wheel to test. Python has to be in `PATH`. 
-
-Finally, all the above stages of setting up tooling, building, and basic tests can be run on a fresh Windows system via the `eden\testing\windows\setup-build-test-all-in-one.bat`.
+Building 32 and 64 bit wheels and testing them can be done with the `eden\testing\windows\build-test-all-in-one.bat` script.
+Finally, all the above stages of setting up tooling, building, and basic tests can be run on a fresh Windows system via the `eden\testing\windows\setup-build-test-all-in-one.bat` script.
 
 The wheels are copied to a subdirectory of the working directory, `artifacts/`. This location can be overridden via the ARTIFACTS_DIR environment variable.
