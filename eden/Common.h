@@ -17,6 +17,14 @@
 #undef INOUT
 #endif
 
+#ifdef __APPLE__
+// use these lines for non-OSX LATER, if you're targeting an iPad or something you know how to handle the specifics 
+// #include <TargetConditionals.h>
+// #if defined(TARGET_OS_OSX) && (TARGET_OS_OSX)
+// ...
+// #endif
+#endif
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>

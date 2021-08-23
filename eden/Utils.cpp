@@ -2,7 +2,7 @@
 
 #include <fstream> // for that precious getline
 
-#ifdef	__linux__
+#if defined	(__linux__) || defined(__APPLE__)
 #include <sys/resource.h>
 #endif
 
@@ -62,7 +62,7 @@ bool GetLineColumnFromFile(const char *filename, const ptrdiff_t file_byte_offse
 	return true;
 }
 
-#ifdef	__linux__
+#if defined(__linux__) || defined(__APPLE__)
 int64_t getCurrentResidentSetBytes(){
 	int64_t ret = 0;
 	FILE* fp = fopen( "/proc/self/statm", "r" );

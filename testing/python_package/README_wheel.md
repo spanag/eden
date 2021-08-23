@@ -1,7 +1,7 @@
 # EDEN Python bindings + wheels
 
 EDEN is a high-performance [NeuroML]( http://neuroml.org )-based neural simulator written in C++.
-This wheel package contains Python bindings to use the simulator, as well as a `manylinux1`-compatible standalone build of the simulator.
+This wheel package contains Python bindings to use the simulator, as well as `win32`, `win_amd64`, `macosx_x86_64` and `manylinux1` standalone builds of the simulator.
 
 ## Installing
 
@@ -9,8 +9,8 @@ EDEN can be installed with one `pip` command:
 ```
 pip install eden-simulator
 ```
-
-The only non-`pip` requirement is for the GNU C compiler to be installed and available at run time.
+`
+The only non-`pip` requirement is for the GNU C compiler, Intel C compiler or Clang to be installed and available on `PATH` at run time.
 
 ## Usage
 
@@ -19,7 +19,7 @@ EDEN directly runs NeuroML v2 models of neural networks.
 The `eden_simulator` package exposes the `runEden` method, which takes the LEMS simulation file of the NeuroML model to be run as parameter:
 ```python
 import eden_simulator
-results = eden_simulator.runEden('<LEMS simulation file>.xml');
+results = eden_simulator.runEden('<LEMS simulation file>.xml')
 ```
 This interface returns the recorded trajectories specified in the simulation files in a Python dictionary, same as [`pyNeuroML`](https://pypi.org/project/pyNeuroML/) does with other simulation backends.
 

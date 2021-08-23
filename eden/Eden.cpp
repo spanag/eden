@@ -35,7 +35,7 @@ Parallel simulation engine for ODE-based models
 #include <mpi.h>
 #endif
 
-#ifdef __linux__
+#if defined (__linux__) || defined(__APPLE__)
 #include <dlfcn.h> // for dynamic loading
 #endif
 
@@ -5474,6 +5474,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				more_commentary += "\nUnpack the file anywhere, and add the unpacked <path ...>\\bin directory to EDEN's PATH.";
 				#elif defined __linux__
 				more_commentary = "GCC is usually already installed on Linux setups. It if is not installed, refer to your distribution's documentation on how to install the essentials for building from source.";
+				#elif defined(__APPLE__)
+				more_commentary = "A GCC-compatible compiler cn be installed with the Command Line Developer Tools for Mac. Run the following command on the Terminal to install:\n";
+				more_commentary += "xcode-select --install\n\n";
+				more_commentary += "Alternatively, the compiler used by default, GCC, can be installed through Homebrew for Mac OS X:\n";
+				more_commentary += "brew install gcc";
+				more_commentary += "\nRefer to http://brew.sh on how to set up Homebrew. (It may already be installed, in order to install Python 3.)";
 				#else
 					
 				#endif
@@ -5520,7 +5526,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		std::string function_name = "doit";
 		IterationCallback callback = NULL;
 		
-		#ifdef __linux__
+		#if defined (__linux__) || defined(__APPLE__)
 		void *dll_handle = dlopen(("./"+dll_filename).c_str(), RTLD_NOW);
 		if(!dll_handle){
 			fprintf(stderr, "Error loading %s: %s\n", dll_filename.c_str(), dlerror());

@@ -3,13 +3,15 @@
 # Before loading setuptools, play with cmdline args here. Because setuptools will complain for the parameters it doesn't recognize
 import sys
 import argparse
+import os
 # Add custom parameters to setup.py
-parser = argparse.ArgumentParser()
+parser = argparse.ArgumentParser( allow_abbrev=False )
 parser.add_argument(
     '--package-version',
     help='Version tag of the package to be built',
     required=True
 )
+
 (config_options, argv) = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + argv  # Write the remaining arguments back to `sys.argv` for distutils to read
 assert (config_options.package_version)
@@ -120,10 +122,29 @@ def _get_scripts():
         extension = '.exe'
     else:
         extension = ''
-
+        
+    if sys.platform == "darwin":
+        return [] # TODO a python wrapper instead
+        
     scripts = ['bin/%s%s' % (script_name, extension)
-               for script_name in script_names]
+        for script_name in script_names]
+        
     return scripts
+
+package_data_locations = ['../bin/*']
+
+zip_safe = True
+
+if sys.platform == "darwin":
+    package_data_locations += ['../bin/dylibs/*']
+    zip_safe = False
+    
+    # alternatively, for dylib hierarchy (TODO)
+    # or maybe graft bin/ instead?
+    # for root, _, filenames in os.walk('bin/dylibs'):
+    #         for fname in filenames:
+    #             fullname = join(root, fname)
+    #             scripts = scripts + [ for file_name in os.walk('bin/dylibs')]
 
 setuptools.setup(
     name="eden_simulator",
@@ -139,6 +160,8 @@ setuptools.setup(
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Bio-Informatics",
         "Environment :: Console",
+        "Operating System :: Microsoft :: Windows",
+        "Operating System :: MacOS",
         "Operating System :: POSIX :: Linux",
         "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
         "Development Status :: 3 - Alpha",
@@ -148,7 +171,7 @@ setuptools.setup(
     keywords=['simulator','simulation','HPC','neuroscience','NeuroML'],
     # project_urls
     packages=['eden_simulator'],
-    package_data={'eden_simulator': ['../bin/*']},
+    package_data={'eden_simulator': package_data_locations},
     # include_package_data=True,
     # scripts 
     scripts=_get_scripts(),  
@@ -164,4 +187,5 @@ setuptools.setup(
         'install': InstallPlatlib,
     },
     distclass=BinaryDistribution,
+    zip_safe=zip_safe,
 )

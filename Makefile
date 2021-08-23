@@ -17,6 +17,8 @@ BIN_DIR ?= $(OUT_DIR)/bin
 # i.e. intermediate artifacts
 OBJ_DIR ?= $(OUT_DIR)/obj
 
+# TODO WHEEL_DIR
+
 # Main product's source code
 SRC_EDEN := $(PROJ_BASE)/eden
 # the distinction may be useful LATER, with multiple build targets
@@ -60,6 +62,14 @@ ifneq (,$(findstring linux,$(TARGET)))
 	LIBS := $(LIBS) -ldl
 	MAYBE_TARGET_LINUX := true
 	MAYBE_NOT_TARGET_LINUX := false
+endif
+
+MAYBE_TARGET_MAC ?= false
+MAYBE_NOT_TARGET_MAC ?= true
+ifneq (,$(findstring darwin,$(TARGET)))
+	# LIBS := $(LIBS) -ldl
+	MAYBE_TARGET_MAC := true
+	MAYBE_NOT_TARGET_MAC := false
 endif
 
 # (internal variable) is a compiler selected?
@@ -111,6 +121,9 @@ endif
 ifneq ($(COMPILER_SET), ok)
 $(error Only gcc and icc toolchains are currently allowed, but TOOLCHAIN=$(TOOLCHAIN))
 endif
+
+# only used for building wheels on Mac, assume Homebrew by default
+TOOLCHAIN_LIBS_PATH ?= /usr/local/
 
 # Compiler flags
 # TODO more optimization flags
@@ -170,6 +183,7 @@ ${BIN_DIR}/eden${DOT_X}: ${OBJ_DIR}/eden${DOT_O} ${OBJ_DIR}/Utils${DOT_O} \
 		${OBJ_DIR}/NeuroML${DOT_O} ${OBJ_DIR}/LEMS_Expr${DOT_A} ${OBJ_DIR}/LEMS_CoreComponents${DOT_O} \
 		${OBJ_DIR}/${PUGIXML_NAME}${DOT_O} # third-party libs
 	$(CXX) $^ $(LIBS) $(CXXFLAGS) $(CFLAGS_omp) -o $@
+	$(MAYBE_NOT_TARGET_MAC) || true # /usr/bin/ld $@ -headerpad_max_install_names -o $@
 ${OBJ_DIR}/eden${DOT_O}: ${SRC_EDEN}/Eden.cpp ${SRC_EDEN}/NeuroML.h ${SRC_EDEN}/neuroml/LEMS_Expr.h ${SRC_COMMON}/Common.h  ${SRC_COMMON}/MMMallocator.h
 	$(CXX) -c $< $(CXXFLAGS) $(CFLAGS_omp) -o $@
 
@@ -210,15 +224,18 @@ ${BIN_DIR}/LEMS_Expr_Test${DOT_X}: ${OBJ_DIR}/LEMS_Expr_Test${DOT_O} ${OBJ_DIR}/
 ${OBJ_DIR}/LEMS_Expr_Test${DOT_O}: ${SRC_EDEN}/neuroml/LEMS_Expr_Test.cpp ${SRC_EDEN}/neuroml/LEMS_Expr.h ${OBJ_DIR}/LEMS_Expr.yy${DOT_O} 
 	$(CXX) -c $< $(CXXFLAGS) -I ${SRC_EDEN}/neuroml/  -o $@
 
+
+EXTRA_WHEEL_PACKAGE_TAGS ?=
 # Python wheel with embedded executable of EDEN
 # building a wheel out of tree simply doesn't work, without warning. Copy the package tree in a temporary location and build there (cwd must also be on location of setup.py or the files won't be added) 
 wheel: eden
 	rm -rf $(TESTING_DIR)/sandbox/python_package/
-	cp -r $(TESTING_DIR)/python_package/ $(TESTING_DIR)/sandbox/
+	cp -r $(TESTING_DIR)/python_package $(TESTING_DIR)/sandbox/
 	"mkdir" -p $(TESTING_DIR)/sandbox/python_package/bin/
 	mv $(TESTING_DIR)/sandbox/python_package/eden_tools $(TESTING_DIR)/sandbox/python_package/eden_simulator
 	cp ${BIN_DIR}/eden${DOT_X} $(TESTING_DIR)/sandbox/python_package/bin/eden$(EXE_EXTENSION_DIST)
-	cd $(TESTING_DIR)/sandbox/python_package && python3 setup_wheel.py --package-version ${WHEEL_VERSION} bdist_wheel 
+	$(MAYBE_NOT_TARGET_MAC) || bash $(TESTING_DIR)/mac/bundle-dylibs.bash $(TESTING_DIR)/sandbox/python_package/bin/eden$(EXE_EXTENSION_DIST) "$(TOOLCHAIN_LIBS_PATH)"
+	cd $(TESTING_DIR)/sandbox/python_package && python3 setup_wheel.py --package-version ${WHEEL_VERSION}  bdist_wheel  $(EXTRA_WHEEL_PACKAGE_TAGS)
 	$(MAYBE_NOT_TARGET_LINUX) || python3 -m auditwheel repair --plat ${WHEEL_TARGET_PLAT} --only-plat --wheel-dir $(TESTING_DIR)/sandbox/python_package/dist/ $(TESTING_DIR)/sandbox/python_package/dist/eden_simulator-${WHEEL_VERSION}-py3-none-${WHEEL_PLAT}.whl
 
 # external libraries

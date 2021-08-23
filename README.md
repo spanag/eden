@@ -15,39 +15,44 @@ Just click the Binder link on that page and you can use EDEN as shown on the bun
 
 ## Installing
 
-EDEN is currently available for the Microsoft Windows™ and Linux operating systems.
+EDEN is currently available for the Microsoft Windows™, Apple macOS™ and Linux operating systems.
 The program can be installed through PyPI:
 ```sh
 pip install eden-simulator
 ```
-, or built from source with the provided Makefile. (The latter option is recommended for advanced uses, like MPI builds or re-packaging)
+, or built from source with the provided Makefile. (The latter option is recommended for advanced uses, like MPI builds, exotic platforms, or re-packaging)
 
 ### A compiler must be available at run time
 Since EDEN generates code tailored to the model to be run each time, a C compiler must be available and accessible from `PATH`. The GNU and Intel compilers are currently supported for this purpose.
 If the compiler to be used (`gcc` by default) is not accessible on `PATH`, the simulation fails at setup and an error message with suggested actions is generated.
 
-On Linux setups, GCC is commonly installed; if it is not, refer to your distribution's documentation on how to install it (or to respective vendors for other compilers).
-
-On Windows setups, there is usually no compiler installed. A tested version of GCC can be downloaded for use with EDEN, from:
+On Windows setups, there is usually no compiler installed. A tested version of GCC can be downloaded for use with EDEN, from:  
 https://sourceforge.net/projects/mingw-w64/files/Toolchains%20targetting%20Win32/Personal%20Builds/mingw-builds/8.1.0/threads-posix/sjlj/i686-8.1.0-release-posix-sjlj-rt_v6-rev0.7z (for 32-bit EDEN)  
-https://sourceforge.net/projects/mingw-w64/files/Toolchains%20targetting%20Win64/Personal%20Builds/mingw-builds/8.1.0/threads-posix/seh/x86_64-8.1.0-release-posix-seh-rt_v6-rev0.7z (for 64-bit EDEN)
+https://sourceforge.net/projects/mingw-w64/files/Toolchains%20targetting%20Win64/Personal%20Builds/mingw-builds/8.1.0/threads-posix/seh/x86_64-8.1.0-release-posix-seh-rt_v6-rev0.7z (for 64-bit EDEN)  
+Unpack the file anywhere, and add the unpacked `<path ...>\bin` directory to EDEN's PATH. (More on how to do this [below](#setting-path-to-include-a-compiler))
 
-Unpack the file anywhere, and add the unpacked `<path ...>\bin` directory to EDEN's PATH. (More on how to do this [below](#setting-path-for-compiler))
+On macOS setups, a compatible compiler can be installed with the [Command Line Developer Tools for Mac]( https://developer.apple.com/downloads/index.action?=command%20line%20tool ). Follow the link for instructions, or simply run `xcode-select --install` from the macOS terminal and follow the GUI prompts.
+
+On Linux setups, GCC is commonly installed; if it is not, refer to your distribution's documentation on how to install it (or to respective vendors for other compilers).
 
 In all cases, make sure that the compiler targets the same architecture as the executable, see also [Usage](#usage) for more details.
 
 ### Building from source
 The following software packages are required to build the source code:
 - `gcc` compiler, or alternatively the `icc` compiler. Specifically, a compiler version that supports C++14.
-- `flex`
+- `flex` version 2.6 or later
 - `bison` version 3.0 or later
 
 On Linux, most other tools for building are pre-installed or they can be easily installed; consult your distribution's reference on installing essential build tools.  
+
 For building on Windows, batch scripts are available on the [testing/windows](testing/windows) directory for installing all the necessary build tools and libraries, setting the shell's PATH to use them and building the standalone executable or Python wheel, all without affecting the system or user setup.
+
+For building on macOS, shell scripts are available on the [testing/mac](testing/mac) directory for installing all the necessary build tools and libraries, setting the shell's PATH to use them and building the standalone executable or Python wheel.
+*Note* The `testing/mac/download-setup-requirements.bash` script installs Command Line Developer Tools for Mac, Homebrew and various Homebrew packages in the system, in the process installing the required tooling.
 
 Use environment variable `BUILD=release` or `BUILD=debug` to run a production or debugging build of the program executable, respectively. The executable will be available on `bin/eden.<build>.<compiler>.cpu.x` (`.exe` on Windows)
 
-If the NeuroML Python package `pyNeuroML` is installed, a Python wrapper for EDEN, `eden_tools`, can also be installed - run `pip` on directory `testing/python_package` . EDEN should then be on `PATH` to be invoked by the Python package.
+If the NeuroML Python package `pyNeuroML` is installed, a Python wrapper for the local build of EDEN, `eden_tools`, can also be installed - run `pip` on directory `testing/python_package` . EDEN should then be on `PATH` to be invoked by the Python package.
 
 If MPI is also installed, a MPI-enabled version of EDEN (with hybrid MPI/OpenMP parallelization) can be built, by running `make` with the `USE_MPI` flag. This configuration has been tested with standard MPICH on Linux; consult your HPC cluster's documentation for specific details on the MPI build process.
 
@@ -58,7 +63,7 @@ The Dockerfiles are at the moment available for Linux; support for other platfor
 If Docker is installed and accessible to the user, an automated testing suite can also be run to verify EDEN's results against the NEURON simulator's for deterministic models. Run `make test` to run the automated tests.
 
 
-## Usage {#usage}
+## Usage
 EDEN directly runs NeuroML models of neural networks. (For more information about the NeuroML model format, refer to http://neuroml.org ) 
 It can be run from the command line, with the following command referencing the LEMS simulation file of the NeuroML model to be run:  
 ```
@@ -83,7 +88,7 @@ results = eden_simulator.runEden('<LEMS simulation file>.xml')
 This interface returns the recorded trajectories specified in the simulation files in a Python dictionary, same as pyNeuroML does with other simulation backends.
 Thread-level parallelism can also be controlled with the `threads` optional argument.
 
-### Setting `PATH` to include a compiler {#setting-path-for-compiler}
+### Setting `PATH` to include a compiler
 
 When running EDEN, make sure that the selected compiler (`gcc` by default) is available on PATH and has the same bitness and architecture as the build of EDEN in use. This is a concern on Windows (where both 32 and 64 bit programs are common) and on certain HPC clusters where the login and job nodes may run different instruction sets.
 
