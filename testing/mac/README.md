@@ -14,7 +14,7 @@ In order to build EDEN on a typical Mac setup, certain tools have to be in place
 
 The rest of the tools (namely: GNU Compiler Collection,  recent flex and bison, Python3) are installed as Homebrew packages.  
 
-A convenient script to set up all requirements is `eden/testing/mac/download-setup-requirements.bat`.
+A convenient script to set up all requirements is `eden/testing/mac/download-setup-requirements.bash`.
 This installs Homebrew on its default (system-wide) location if it is not already available, gets the command line developer tools also installed in the process, and gets the necessary Homebrew packages installed.
 
 This script is provided as a convenience only; feel free to modify the script to your specific needs (such as when the necessary tooling is already installed, by a different system).
@@ -29,7 +29,7 @@ cd eden
 make eden <build options ...>
 ```
 
-The provided script `eden/testing/mac/build-wheel.bat` builds EDEN and packages the `eden-simulator` Python wheel for the machine's CPU architecture (or the simulated one, if it is run on Rosetta).
+The provided script `eden/testing/mac/build-wheel.bash` builds EDEN and packages the `eden-simulator` Python wheel for the machine's CPU architecture (or the simulated one, if it is run on Rosetta).
 
 
 ### Testing 

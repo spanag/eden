@@ -23,7 +23,7 @@ fi
 WHEEL_PLAT_NAME="macosx${WHEEL_MACOS_VER}-$(uname -m)"
 WHEEL_PLAT_NAME_FILENAME=$( echo "$WHEEL_PLAT_NAME" | tr .- __ )
 
-# make clean
+make clean
 make -j$(sysctl -n hw.logicalcpu) eden wheel BUILD=release BUILD_STAMP="$VERSION" WHEEL_VERSION="$VERSION_PY" EXTRA_WHEEL_PACKAGE_TAGS="--plat-name $WHEEL_PLAT_NAME"
 
 cd -

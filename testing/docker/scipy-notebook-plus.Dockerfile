@@ -2,6 +2,7 @@
 # author Russell Jarvis rjjarvis@asu.edu
 # author Rick Gerkin rgerkin@asu.edu
 
+# 2020-06 version
 FROM jupyter/scipy-notebook:dd2087c75645
 
 USER root
@@ -22,7 +23,7 @@ RUN apt-get install -y wget bzip2 ca-certificates \
     default-jre default-jdk maven emacs \
     libxml2-dev libxslt-dev python-dev sudo
 
-RUN pip install --upgrade pip
+# RUN python3 -m pip install --upgrade pip venv
 
 # Upgrade to version 2.0
 # RUN conda update -n base conda anaconda=2019.10
@@ -36,6 +37,7 @@ RUN find -L /opt/conda -type l -delete
 # Make sure every Python file is writable
 RUN find /opt/conda ! -writable -print0 | xargs -0 -I {} chmod 744 {}
 
+# TODO disallow sudo!!
 RUN chown -R $NB_USER $HOME
 RUN rm -rf /var/lib/apt/lists/*
 RUN echo "${NB_USER} ALL=NOPASSWD: ALL" >> /etc/sudoers

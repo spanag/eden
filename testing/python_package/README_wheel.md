@@ -9,7 +9,7 @@ EDEN can be installed with one `pip` command:
 ```
 pip install eden-simulator
 ```
-`
+
 The only non-`pip` requirement is for the GNU C compiler, Intel C compiler or Clang to be installed and available on `PATH` at run time.
 
 ## Usage

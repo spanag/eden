@@ -128,12 +128,12 @@ RUN git clone https://github.com/NeuroML/pyNeuroML.git
 
 WORKDIR $HOME/libNeuroML
 # 2020-05 version
-RUN git checkout 2807173626d3d00e6ffadd728a43465603a54431
+RUN git checkout 632c1bce797d44308d5ec8246c0aac360c862f1a
 RUN pip3 install . -r requirements.txt
 
 WORKDIR $HOME/pyNeuroML
 # 2020-05 version
-RUN git checkout d34dd127c3875c89700678ddbc2219d35b4f0e7e
+RUN git checkout 9e070467498c57d4244d44f9996bb8e0eecc5dc3
 RUN python3 -m pip install .
 
 

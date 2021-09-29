@@ -24,19 +24,26 @@ USER jovyan
 # Use numpy 1.12.1 until quantities is compatible with 1.13.
 # RUN conda install -y scipy numpy==1.12.1 matplotlib
 RUN sudo chown -R jovyan /home/jovyan
+
+
+# TODO move these somewhere else
 ENV HOME /home/jovyan
 ENV PATH /opt/conda/bin:/opt/conda/bin/conda:/opt/conda/bin/python:$PATH
 
-#Test matplotlib
+# Test matplotlib, just check if it is imported ok
 RUN python -c "import matplotlib"
 #Install General MPI, such that mpi4py can later bind with it.
 
+
+# ---> MPI is actually already installed in previous image
+
+# ---> Install NEURON
 WORKDIR $HOME
 
 ARG NEURON_VERSION=7.7
 ARG NEURON_VERSIONED=nrn-${NEURON_VERSION}
 
-# could make stderr more quiet or sth, to suppress red text
+# could make stderr more quiet or sth, to suppress output while building
 RUN \
   wget http://www.neuron.yale.edu/ftp/neuron/versions/v${NEURON_VERSION}/${NEURON_VERSIONED}.tar.gz && \
   tar -xzf ${NEURON_VERSIONED}.tar.gz && \
@@ -57,7 +64,7 @@ ENV NEURON_HOME $HOME/${NEURON_VERSIONED}/x86_64
 ENV PATH $NEURON_HOME/bin:$PATH
 
 
-# Install NeuroML tools
+# ---> Install NeuroML tools
 USER root
 # required for libNeuroML
 RUN apt-get install -y python-lxml python3-pip python-dev python3-setuptools
@@ -90,13 +97,15 @@ RUN git clone https://github.com/NeuroML/pyNeuroML.git
 # Build from source code
 
 WORKDIR $HOME/libNeuroML
-# 2020-05 version
-RUN git checkout 2807173626d3d00e6ffadd728a43465603a54431
-RUN pip3 install . -r requirements.txt
+# 2021-03 version
+RUN git checkout 632c1bce797d44308d5ec8246c0aac360c862f1a
+
+RUN python3 -m pip install . -r requirements.txt
 
 WORKDIR $HOME/pyNeuroML
-# 2020-05 version
-RUN git checkout d34dd127c3875c89700678ddbc2219d35b4f0e7e
+# 2021-03 version
+RUN git checkout 9e070467498c57d4244d44f9996bb8e0eecc5dc3
+
 RUN python3 -m pip install .
 
 

@@ -4,8 +4,15 @@ FROM scidash/neuron-mpi-neuroml
 MAINTAINER Sotirios Panagiotou <info@sotiriospanagiotou.com>
 
 USER $NB_USER
-# Get some auxiliar packages, for network generation on the test environment
-RUN pip install netpyne==0.9.6
+
+# Get some auxiliar packages, for network generation on the testing environment
+# NetPyNE
+RUN python3 -m pip install netpyne==1.0.0.2
+
+# HDF5 support on JupyterLab
+RUN python3 -m pip install hdf5plugin jupyterlab_hdf hdf5widget
+RUN jupyter labextension install @jupyterlab/hdf5 && \
+    fix-permissions /etc/jupyter/
 
 USER root
 
