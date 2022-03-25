@@ -737,7 +737,7 @@ struct ComponentType{
 		
 		INPUT,
 		
-		CELL
+		CELL // an "artificial" cell, since "biophysical" ones cannot be fully captured in LEMS
 	};
 	
 	struct EventPortIn{
@@ -974,7 +974,7 @@ struct ComponentType{
 		Int current;
 		//Int conductance;
 		
-		// for whole ion channel components, and conductance-based synaptic components
+		// for whole ion channel components, and conductance-based synaptic components or inputs
 		Int conductance;
 		
 		// for gate variable and kinetic scheme rates
@@ -1145,9 +1145,11 @@ struct ComponentInstance{
 	Int id_seq; // of the component
 	
 	std::vector<ParameterOverride> parms;
-	ComponentInstance(){ id_seq = -1; }
+	
 	bool ok() const { return ( id_seq >= 0 ); }
 	void clear() { id_seq = -1; }
+	
+	ComponentInstance(){ clear(); }
 };
 
 // A part of a whole synapse, actually;
@@ -1377,7 +1379,8 @@ struct Morphology{
 			Real x,y,z,d;
 		};
 		//Int id; not really necessary
-		Int parent; Real fractionAlong;
+		Int parent; // sequential index, not id !
+		Real fractionAlong;
 		Point3DWithDiam proximal, distal;
 		
 		void debug_print() const {
@@ -1396,11 +1399,47 @@ struct Morphology{
 	
 	CollectionWithIds<Segment> segments;
 	
+	struct InhomogeneousParameter{
+		// Note: This concept is a direct port of the SubsetDomainIterator class and its style parameters, found in  NEURON's CellBuilder scripts.
+		// SubsetDomainIterator Documentation: share/lib/hoc/celbild/celset.hoc , proc hints() (NEURON source tree)
+		// SubsetDomainIterator Source code: share/lib/hoc/subiter.hoc
+		// Note that the dimensions of the value are not accounted for yet !!!
+		// The only parameter in use (distance) is passed as dimensionless microns.
+		
+		// the inhomogeneous parameter comes from a source metric, such as tha following:
+		enum{
+			PATH_LENGTH_FROM_ROOT
+		}metric;
+		
+		// flags for pre-processing the source metric through the context of this segment group, 
+		// before passing it to the function that eventually determines an inhomogeneous distribution
+		
+		// from the metric that is evaluated over the group, should the minimum be subtracted from all samples so that the new minimum is zero?
+		bool subtract_the_minimum;
+		// after posibly subtracting the minimum, should all samples be divided by the maximum so that the new maximum is one (if the samples are non zero )
+		bool divide_by_maximum;
+		
+		// The name of the variable within the variableParameter formulae that use it. Not to be confused with the id of the inhomogeneousParameter. 
+		std::string variable;
+	};
+	
 	struct SegmentGroup{
+		// List of segments that the group eventually contains
 		IdListRle list;
 		
-		// also a possible property
-		Int nseg; // -1 if unset
+		// The group could be be a cable, in which case:
+        //    This group contains an unbranched set of segments, and all of the segmentGroups marked with
+        //    neuroLexId = sao864921383 form a non-overlapping set of all of the segments. 
+        //    These segmentGroups correspond to the 'cables' of NeuroML v1.8.1.
+		bool is_cable; // unbranched section of neurite, represents neuroLexId="sao864921383" attribute
+		Int cable_nseg; // number of compartments to use for this cable, -1 if unset (default number: 1 compartment for the whole section). Represents numberInternalDivisions property
+		
+		// Note: In the current implementaion of the jNML exporter, it seems that the names of inhomogeneousParameters have global scope - they are not prefixed by morphology and segment group explicitly.
+		// Maybe it is intended for the functional of an inhomogeneousParameter to be applied on other segment groups.
+		// In that case, the inhomogeneousParaemters should either have a local scope inside the morphology or segmentGroup, 
+		// or they should be accompanied by a mapping from a model-wide unique name for an inhomogeneousParameter to the morphology and segmentGroup which contains it.
+		
+		CollectionWithNames<InhomogeneousParameter> inhomogeneous_parameters;
 		
 		void addd(Int id){ list.Addd(id); }
 		void add(const SegmentGroup &group){ list.Add(group.list); }
@@ -1411,19 +1450,12 @@ struct Morphology{
 			printf("\n");
 		}
 		SegmentGroup(){
-			nseg = -1;
+			is_cable = false;
+			cable_nseg = -1;			
 		}
 	};
 	std::vector<SegmentGroup> segment_groups;
-	NameIndexer segment_groups_by_name; // TODO compine intio
-	
-	struct InhomogeneousParameter{
-		enum{
-			PATH_LENGTH_FROM_ROOT
-		}metric;
-		std::string name;
-	};
-	CollectionWithNames<InhomogeneousParameter> inhomogeneous_parameters;
+	NameIndexer segment_groups_by_name; // TODO combine into CollectionWithNames
 	
 	//Get internal position in the segments array, from NeuroML id
 	Int lookupSegId(Int nml_id) const{
@@ -1450,10 +1482,10 @@ struct Morphology{
 		segment_groups_by_name.insert(std::make_pair(new_name, segment_groups.size()-1));
 		return true;
 	}
-	std::string Stringify(const SegmentGroup &group) const{
+	std::string Stringify_SegSeq_List(const IdListRle &seg_seq_list) const{
 		//Now this is tricky because the internal id's are not the same as. the NeuroML id's.
 		IdListRle nml_id_list;
-		group.list.reduce(
+		seg_seq_list.reduce(
 			[&](Int internal_id){
 				nml_id_list.Addd(lookupNmlId(internal_id));
 			}
@@ -1461,6 +1493,10 @@ struct Morphology{
 		nml_id_list.Compact();
 		return nml_id_list.Stringify();
 	}
+	std::string Stringify(const SegmentGroup &group) const{
+		return Stringify_SegSeq_List(group.list);
+	}
+	
 	void debug_print() const {
 		//debug output
 		for(size_t i = 0; i < segments.contents.size(); i++){
@@ -1526,6 +1562,7 @@ struct AcrossSegOrSegGroup{
 struct ValueAcrossSegOrSegGroup : public AcrossSegOrSegGroup{
 	Real value;
 	//Fill a segment count-sized array
+	// NOTE: perhaps this should be removed, since segments do not exactly map to compartments. So why else would one apply the spec?
 	template<typename SegmentPropertyArray>
 	void apply( const Morphology &morph, SegmentPropertyArray &arr ) const {
 		AcrossSegOrSegGroup::reduce( morph, [ &arr, this ] (Int seqid) {
@@ -1546,7 +1583,7 @@ struct SpeciesAcrossSegOrSegGroup : public AcrossSegOrSegGroup{
 // All ion channel density specifications, rolled into one
 struct ChannelDistribution : public AcrossSegOrSegGroup{
 	
-	// NOTE this may be the same for different objects, since it may be instantiated on different sectionss (lossibly LATER).
+	// NOTE this may be the same for different objects, since it may be instantiated on different section s (possibly LATER).
 	// Is an empty string if absent.
 	const char * name; 
 	
@@ -1556,8 +1593,11 @@ struct ChannelDistribution : public AcrossSegOrSegGroup{
 	Int ion_channel;
 	
 	struct InhomogeneousValue{
-		Int parm; //of associated morphology
-		const char *formula;
+		Int parm; // of associated morphology and segment group. The distribution must refer to a specific segment group to pass parsing
+		
+		// this syntax tree does not need its symbols resolved, since there is only one possible symbol: the referenced inhomogeneous parameter. 
+		// (Even that could be missing when the expression is a constant)
+		TermTable value;
 	};
 	
 	enum Type{
@@ -1578,10 +1618,10 @@ struct ChannelDistribution : public AcrossSegOrSegGroup{
 				FIXED,
 				NON_UNIFORM
 			} type;
-			union{
+			// union{
 				Real value; // if fixed
 				InhomogeneousValue inho; // if non-uniform
-			};
+			// };
 		} conductivity; // for most
 		Int number; // for integral population of channels
 		Real permeability; // for GHK1
@@ -1877,7 +1917,7 @@ struct ArtificialCell{
 	Real leakConductance, leakReversal; // for leaky cells
 	Real tau; // for time-constant I&F cells
 	
-	Real refract; // for reftactory-period cells
+	Real refract; // for refractory-period cells
 	
 	Real a,b,c,d, v0, vpeak, k; // for Izhikevich cells
 	
@@ -2013,8 +2053,15 @@ struct Simulation{
 		// TODO move this to segment-based
 		// Note that fractionAlong is missing ! Assume 0.5 (in the middle of the segment)
 		
+		// default invalid values, just in case
+		LemsSegmentLocator(){
+			population = -1;
+			cell_instance = -1;
+			segment_seq = -1;
+		}
 	};
 	
+	// reference to inside the instance of a LEMS component
 	struct LemsInstanceQuantityPath{
 		Int namespace_thing_seq;
 		// may support multiple levels of inheritance, etc LATER
@@ -2276,6 +2323,6 @@ struct Model{
 
 //------------------> Parsed representations of NeuroML entities end
 
-bool ReadNeuroML(const char *filename, Model &model, bool entire_simulation, FILE *info_log = stdout, FILE *error_log = stderr);
+bool ReadNeuroML(const char *filename, Model &model, bool entire_simulation, bool verbose = false, FILE *info_log = stdout, FILE *error_log = stderr);
 
 #endif

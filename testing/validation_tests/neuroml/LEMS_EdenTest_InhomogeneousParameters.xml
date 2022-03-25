@@ -1,0 +1,50 @@
+
+<Lems>
+
+<!-- Specify which component to run -->
+    <Target component="sim1"/>
+
+<!-- Include core NeuroML2 ComponentType definitions -->
+    <Include file="Cells.xml"/>
+    <Include file="Networks.xml"/>
+    <Include file="Simulation.xml"/>
+
+    <!-- Main NeuroML2 content. -->
+
+    <!-- Including file with a <neuroml> root, a "real" NeuroML 2 file -->
+    <Include file="EdenTest_InhomogeneousParameters.nml"/>
+
+    <!-- End of NeuroML2 content -->
+
+
+    <Simulation id="sim1" length="100.30ms" step="0.025ms" target="EdenTest_InhomogeneousParameters">
+		
+		<!-- add logging for headless sims --> 
+		
+		<OutputFile id="first" fileName="results.gen.txt">
+            
+			<!-- Reference traces frim a cell with a flat distribution of an ion channel over its dendrites -->
+            <OutputColumn id="v_Flat_0" quantity="Pop_Flat/0/SimpleCell_Flat/0/v"/>
+			<OutputColumn id="v_Flat_1" quantity="Pop_Flat/0/SimpleCell_Flat/1/v"/>
+			<OutputColumn id="v_Flat_2" quantity="Pop_Flat/0/SimpleCell_Flat/2/v"/>
+            
+			<!-- Voltage traces from a cell with a flat distribution of an ion channel over its dendrites -->
+            <OutputColumn id="v_InhF_0" quantity="Pop_InhF/0/SimpleCell_InhF/0/v"/>
+			<OutputColumn id="v_InhF_1" quantity="Pop_InhF/0/SimpleCell_InhF/1/v"/>
+			<OutputColumn id="v_InhF_2" quantity="Pop_InhF/0/SimpleCell_InhF/2/v"/>
+            
+            <!-- Voltage traces from a cell with a variable distribution of an ion channel over its dendrites -->
+            <OutputColumn id="v_Inho_0" quantity="Pop_Inho/0/SimpleCell_Inho/0/v"/>
+			<OutputColumn id="v_Inho_1" quantity="Pop_Inho/0/SimpleCell_Inho/1/v"/>
+			<OutputColumn id="v_Inho_2" quantity="Pop_Inho/0/SimpleCell_Inho/2/v"/>
+            
+            <!-- Voltage traces from another cell with a variable distribution of an ion channel over its dendrites -->
+            <OutputColumn id="v_InhN_0" quantity="Pop_InhN/0/SimpleCell_InhN/0/v"/>
+			<OutputColumn id="v_InhN_1" quantity="Pop_InhN/0/SimpleCell_InhN/1/v"/>
+			<OutputColumn id="v_InhN_2" quantity="Pop_InhN/0/SimpleCell_InhN/2/v"/>
+            
+		</OutputFile>
+    
+    </Simulation>
+
+</Lems>

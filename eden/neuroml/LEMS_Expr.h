@@ -154,7 +154,8 @@ struct TermTable{
 	std::vector<Term> terms;
 	int expression_root;
 	
-	std::vector<std::string> symbol_refs;
+	// Each string in this list is different and references a different symbol.
+	std::vector<std::string> symbol_refs; 
 	
 	int add( const Term &new_term ){
 		int new_id = terms.size();

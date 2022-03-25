@@ -31,6 +31,8 @@ Parallel simulation engine for ODE-based models
 
 #include "MMMallocator.h"
 
+#include <omp.h>
+
 #ifdef USE_MPI
 #include <mpi.h>
 #endif
@@ -183,6 +185,11 @@ struct FixedWidthNumberPrinter{
 	}
 };
 
+//Linear interpolation from a -> b with respective parameter from 0 -> 1
+static Real Lerp(Real a, Real b, Real ratio){
+	return a + (b-a)*ratio;
+}
+
 template <typename Real>
 struct GeomHelp_Base{
 	inline static Real Length(Real dx, Real dy, Real dz){
@@ -194,6 +201,8 @@ struct GeomHelp_Base{
 		// do what NEURON does, ignore them and let higher-level modelling software apply corrections
 		if(length == 0){
 			// spherical soma or something, TODO more robust detection at parse time too!
+			// XXX this is ambiguous, since a section with zero length can be thought of as an annular disc!!
+			// A workaround for the current use is to add a minuscule non-zero length to segments that represent annular discs, to follow the appropriate code path  for that case
 			return M_PI * diam_distal * diam_distal;
 		}
 		else return (M_PI / 2.0) * (diam_proximal + diam_distal) * std::sqrt( ((diam_proximal - diam_distal) * (diam_proximal - diam_distal) / 4.0) + length * length);
@@ -206,8 +215,27 @@ struct GeomHelp_Base{
 		else return (M_PI / 3.0) * length * ( diam_proximal*diam_proximal + diam_distal*diam_distal + diam_proximal*diam_distal ) / 4.0;
 	}
 };
-typedef GeomHelp_Base<float> GeomHelp;\
+typedef GeomHelp_Base<float> GeomHelp;
 
+// some math on (x,y,z,d) tuples of segments, to avoid copy pasting 
+static Morphology::Segment::Point3DWithDiam LerpPt3d(
+	Morphology::Segment::Point3DWithDiam from,
+	Morphology::Segment::Point3DWithDiam to, Real ratio
+){
+	Morphology::Segment::Point3DWithDiam ret = {
+		Lerp(from.x, to.x, ratio),
+		Lerp(from.y, to.y, ratio),
+		Lerp(from.z, to.z, ratio),
+		Lerp(from.d, to.d, ratio)
+	};
+	return ret;
+}
+static Real DistancePt3d(
+	Morphology::Segment::Point3DWithDiam from,
+	Morphology::Segment::Point3DWithDiam to
+){
+	return GeomHelp::Length( to.x - from.x, to.y - from.y, to.z - from.z );
+}
 
 // MPI context, just a few globals like world size, rank etc.
 #ifdef USE_MPI
@@ -740,6 +768,62 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		// The mapping of properties to offsets, for physical cells
 		struct PhysicalCell{
+			
+			// The mapping of NeuroML segments to compartments.
+			// When the the "cable" attribute is not used, each segment maps to one compartment.
+			// But when cables are introduced, multiple segments could map to compartments and vice versa, and not exclusively:
+			// 	two compartments could include (separate) parts of the same segment and two segments
+			// This is because NeuroML2 <segment>s have the semantics of 3D points of a section, as well as sections themselves.
+			struct CompartmentDiscretization{
+				
+				int32_t number_of_compartments;
+				
+				// for each segment(seg_seq), keep a list of the compartments it spans, and up to which fractionAlong it spans them.
+				// NB: Each segment overlapping a cable is fully contained by it, thus it 
+				std::vector< std::vector<int32_t> >segment_to_compartment_seq; 
+				std::vector< std::vector<Real> >segment_to_compartment_fractionAlong;
+				// for each compartment, keep a list of the segments it contains, and fractionAlong for beginning and end.
+				// (Implicitly, each segment in between is included until its end and from its start.)
+				std::vector< std::vector<int32_t> >compartment_to_segment_seq; 
+				std::vector< Real >compartment_to_first_segment_start_fractionAlong;
+				std::vector< Real >compartment_to_last_segment_end_fractionAlong;
+				
+				// Also keep the tree-parent relationships, for they are not immediately clear without re-analysing cables
+				std::vector<int32_t>tree_parent_per_compartment; //-1 for root
+				
+				// Note that every cell could be unique, and perhaps 16 bits are enough to describe neurons...
+				// LATER efficiency trick: keep the above lists empty, non existent or something, for cases where the mapping is 1 to 1
+				
+				
+				
+				// Get the comp_seq which contains the fractionAlong across seg_seq (for this abstract mapping; lauout in memory could be different)
+				int32_t GetCompartmentForSegmentLocation(Int seg_seq, Real fractionAlong) const {
+					// printf("Compartment for seg_seq %d fractionAlong %g \n", (int)seg_seq, fractionAlong );
+					// There is a possibillity for fractionAlong to deviate due to roundoff, perhaps the value could be clipped instead
+					assert( (0 <= fractionAlong) && (fractionAlong <= 1) );
+					
+					// the correct compartment is the first whose ending fractionAlong exceeds (thus it overlaps) the target fractionAlong
+					// use std::lower_bound if you find it better, through measurement
+					for( int i = 0; i < (int) segment_to_compartment_fractionAlong[seg_seq].size(); i++ ){
+						// printf("\tcheck %d %g ...\n", (int)segment_to_compartment_seq[seg_seq][i] , segment_to_compartment_fractionAlong[seg_seq][i] );
+						// <= used for fractionAlong = 1 case
+						if( fractionAlong <= segment_to_compartment_fractionAlong[seg_seq][i] ){
+							return segment_to_compartment_seq[seg_seq][i];
+						}
+					}
+					// on second thought, the whole range of fractionAlong should be covered, since segment_to_compartment_fractionAlong[seg_seq] ends in 1...
+					// Last chance fallback: produce the last segment (more likely to not include fractionAlong = 1, because of roundoff)
+					assert(false);
+					int32_t last_compartment = segment_to_compartment_fractionAlong[seg_seq].size() - 1;
+					if(last_compartment >= 0){
+						return last_compartment;
+					}
+					else return -1;
+				}
+				
+			};
+			CompartmentDiscretization compartment_discretization;
+			
 			// some indexing structure to map symbolic representation to realized memory addresses and vice versa
 			// indices to retrieve which state variable is which
 			// LATER replace ints by something more type-safe (such as ints for F32 tables)
@@ -754,9 +838,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			CompartmentGrouping compartment_grouping;
 			
 			struct CompartmentGroupingImplementation{
-				
 				// definition
-				std::vector< IdListRle > distinct_compartment_types; // seg_seq per compartment type 
+				std::vector< IdListRle > distinct_compartment_types; // comp_seq per compartment type 
 				std::vector< std::string > preupdate_codes, postupdate_codes; // code blocks per compartment type
 				
 				
@@ -841,7 +924,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				std::vector<IonChannelDistributionInstance> ionchans;
 				std::map< Int, IonSpeciesDistributionInstance > ions;
 				
-				std::vector<Int> adjacent_compartments;
+				std::vector<int32_t> adjacent_compartments;
 				
 				IdListRle input_types;
 				IdListRle synaptic_component_types;
@@ -852,7 +935,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// TODO perhaps create a structure subset, that is enough to generate the code and differentiate the codes
 				
 			};
-			std::vector< CompartmentDefinition > seg_definitions;
+			std::vector< CompartmentDefinition > comp_definitions;
 			
 			// indices to retrieve which table is which
 			// mirror the structure of the cell's components in the NeuroML definition
@@ -944,13 +1027,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					Index_AdjComp = -1;
 				}
 			};
-			std::vector<CompartmentImplementation> seg_implementations; // per segment
+			std::vector<CompartmentImplementation> comp_implementations; // per segment
 			
 			
-			size_t GetVoltageStatevarIndex( Int seg_seq, Real fractionAlong ) const {
-				// compartmental subdivision LATER
-				// perhaps check here? if all previous validation is not enough
-				return Index_Voltages + seg_seq;
+			size_t GetVoltageStatevarIndex( Int comp_seq ) const {
+				// alternate memory layouts LATER
+				return Index_Voltages + comp_seq;
 			}
 		};
 		// just for convenience
@@ -1059,11 +1141,402 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		std::string name;
 	};
 	std::vector<CellInternalSignature> cell_sigs;
+	// Allocate empty signatures for neuron types, and start filling them in in multiple pases
+	cell_sigs.resize(cell_types.contents.size());
 	
-	
-	
+	//------------------>  Determine just how neurons are discretised. This will aid in determining which synapses are located on which compartments.
+	printf("Analyzing cell morphologies...\n");
+	for(size_t cell_seq = 0; cell_seq < cell_types.contents.size(); cell_seq++){
+		const auto &cell_type = cell_types.contents[cell_seq];
+		auto &sig = cell_sigs[cell_seq];
+		
+		if( cell_type.type == CellType::PHYSICAL ){
+			const PhysicalCell &cell = cell_type.physical;
+			const Morphology &morph = morphologies.get(cell.morphology);
+			
+			const bool debug_log_discretisation = (config.debug && 0);
+			
+			// Before determining the values of compartments, it would be convenient to lay out their symbolic layout on an array.
+			// Fortunately, we can determine this for the NeuroML 'cables' description, before actually chopping the neurite segments;
+			// though this might not be generalisable for other algorithms.
+			// The invariant of the array representation of compartments is the same as the array representation of segments: that parents must come before children.
+			// Therefore the cables may appear in a different order than the one they were specified in the original NeuroML description, since segment groups may appear in mostly any order.
+			
+			// Determine which segments belong to which 'cable' group.
+			std::vector<Int> cable_per_segment(morph.segments.size(), -1); //group_seq of cable for each segment
+			
+			const bool config_use_cable_discretization = 1;
+			if( config_use_cable_discretization ){
+			for( Int group_seq = 0; group_seq < (Int) morph.segment_groups.size(); group_seq++){
+				const auto &group = morph.segment_groups[group_seq];
+				
+				if( !group.is_cable ) continue;
+				
+				std::vector<Int> segs_in_cable = group.list.toArray();
+				for( Int seg_seq : segs_in_cable ){
+					// perhaps the segment is already included in another group?
+					Int previous_group_seq = cable_per_segment[seg_seq];
+					if(!(previous_group_seq < 0)){
+						// cables should not overlap!!
+						fprintf(stderr, "internal error: segment groups %ld and %ld should be non-overlapping, yet they overlap on segment %ld", group_seq, previous_group_seq, morph.lookupNmlId(seg_seq));
+						return false;
+					}
+					cable_per_segment[seg_seq] = group_seq;
+				}
+				
+			}
+			}
+			
+			// Assign compartments to the parts of the neuron. Each cable is assigned a continuous span of compartments, each non-cable segment is assigned its own compartment.
+			std::vector<Int> free_segment_to_compartment(morph.segments.size(), -1);
+			std::vector<Int> cable_to_compartment_offset(morph.segment_groups.size(), -1);
+			// TODO clarify: nseg is the number of *compartments* per cable
+			std::vector<Int> nseg_per_cable(morph.segment_groups.size(), -1);
+			
+			// LATER d_lambda rule perhaps?
+			Int number_of_compartments = 0;
+			for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
+				Int cable_seq = cable_per_segment[seg_seq];
+				
+				if( cable_seq >= 0 ){
+					// a cable
+					const Morphology::SegmentGroup &group = morph.segment_groups[cable_seq];
+					
+					assert(group.is_cable);
+					// allocate only if not the cable has not been allocated already, by a previous segment
+					if(!(cable_to_compartment_offset[cable_seq] < 0)) continue;
+					
+					Int cable_nseg = group.cable_nseg;
+					if( cable_nseg < 0 ) cable_nseg = 1; // by default, TODO add a shorthand getter in model
+					nseg_per_cable[cable_seq] = cable_nseg;
+					
+					cable_to_compartment_offset[cable_seq] = number_of_compartments;
+					number_of_compartments += cable_nseg;
+				}
+				else{
+					// a free-standing segment
+					// since NML segments are being sweeped, this free-standing segment should be encountered only once in this loop
+					assert(free_segment_to_compartment[seg_seq] < 0);
+					free_segment_to_compartment[seg_seq] = number_of_compartments;
+					number_of_compartments++;
+				}
+			}
+			if(debug_log_discretisation){
+				printf("Number of compartments in cell: %ld\n", number_of_compartments);
+				printf("Compartments of Free-standing segments:\n");
+				for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
+					if( free_segment_to_compartment[seg_seq] >= 0 ){
+						printf("%ld ",seg_seq);
+					}
+				}
+				printf("\n");
+				printf("Compartments of Cables:\n");
+				for( Int group_seq = 0; group_seq < (Int)morph.segment_groups.size(); group_seq++ ){
+					Int first_comp = cable_to_compartment_offset[group_seq];
+					if( first_comp < 0 ) continue;
+					
+					printf("%ld - %ld ", first_comp, nseg_per_cable[group_seq] - 1 );
+				}
+				printf("\n");
+			}
+			auto &pig = sig.physical_cell;
+			auto &comp_disc  = pig.compartment_discretization;
+			auto &segment_to_compartment_seq                       = comp_disc.segment_to_compartment_seq                      ;
+			auto &segment_to_compartment_fractionAlong             = comp_disc.segment_to_compartment_fractionAlong            ;
+			auto &compartment_to_segment_seq                       = comp_disc.compartment_to_segment_seq                      ;
+			auto &compartment_to_first_segment_start_fractionAlong = comp_disc.compartment_to_first_segment_start_fractionAlong;
+			auto &compartment_to_last_segment_end_fractionAlong    = comp_disc.compartment_to_last_segment_end_fractionAlong   ;
+			
+			
+			comp_disc.number_of_compartments = number_of_compartments;
+			// Prepare the maps from compartments to cells, by allocating them to the right size
+			// for each compartment, keep a list of the segments it contains, and fractionAlong for beginning and end.
+			// (Implicitly, each segment in between is included until its end and from its start.)
+			segment_to_compartment_seq.resize( morph.segments.size() ); 
+			segment_to_compartment_fractionAlong.resize( morph.segments.size() );
+			
+			compartment_to_segment_seq.resize( number_of_compartments ); 
+			compartment_to_first_segment_start_fractionAlong.assign( number_of_compartments, -1 ); 
+			compartment_to_last_segment_end_fractionAlong.assign( number_of_compartments, -1 ); 
+			
+			// Process the structure of cables: slice them into compartments of equal length.
+			// later on, the density mechanism specs have to be applied on segments anyway,
+			// 	so the discretisation can be pre-scribed without evaluating any physical comp properties (other than path length) in advance.
+			for(Int group_seq = 0; group_seq < (Int)morph.segment_groups.size(); group_seq++){
+				const Morphology::SegmentGroup &group = morph.segment_groups[group_seq];
+				
+				if(!(group.is_cable && config_use_cable_discretization)) continue;
+				
+				auto cable_nseg = nseg_per_cable[group_seq];
+				
+				// Iterate the segments, chop them into the prescribed number of compartments.
+				// First, count the length of the cable
+				std::vector<Real> segment_length_over_cable(group.list.Count(),NAN);
+				Real running_total_segment_length = 0;
+				
+				// the sorted list of seg_seq 
+				std::vector<Int> segs_in_cable = group.list.toArray(); 
+				for(Int i = 0; i < (Int)segs_in_cable.size(); i++){
+					const auto &seg = morph.segments.atSeq(segs_in_cable[i]); 
+					if( i > 0 ){
+						if(seg.parent != segs_in_cable[i-1]){
+							fprintf(stderr, "internal error: group is not a proper unbranched cable: segment %ld 's parent is %ld when it should be %ld",
+								morph.segments.getId(segs_in_cable[i]), morph.segments.getId(seg.parent), morph.segments.getId(segs_in_cable[i-1]));
+							return false;
+						}
+						// check that fractionAlong = 1 (attached to end of parent) for a properly unbranched cable
+						if(seg.parent >= 0 && seg.fractionAlong != 1){
+							fprintf(stderr, "internal error: group is not a proper unbranched cable: segment %ld is not attached to end of parent but on fractionAlong = %.17g instead",
+								morph.segments.getId(segs_in_cable[i]), seg.fractionAlong);
+							return false;
+						}
+					}
+					running_total_segment_length += DistancePt3d( seg.proximal, seg.distal );
+					segment_length_over_cable[i] = running_total_segment_length;
+					
+				}
+				// running_total_segment_length has total length of the cable by now
+				const auto total_cable_length = running_total_segment_length;
+				
+				if(debug_log_discretisation){
+					printf("segcumlen\n");
+					for(int i = 0; i < (Int)segs_in_cable.size(); i++){
+						printf("%f\n", segment_length_over_cable[i]);
+					}
+				}
+				
+				// now slide along the cable, and chop/merge segments into the new compartments
+				Int segment_under_compartment = 0; // invariant: after each iteration, segment_under_compartment points to the segment over the farthest edge of the last processed compartment
+				// therefore end_compartment_path_length <= segment_length_over_cable[segment_under_compartment]
+				
+				// NB this variable is not used since compartment borders are distributed evenly along path length of the cable. 
+				// It might be useful in case the distribution is not even LATER
+				// std::vector<Real> compartment_length_over_cable(cable_nseg,NAN);
+				// TODO special case where soma is spherical and yet participating in a cable! Keep the soma spherical and distribute nseg - 1?
+				// current implementation will simply not account for the segment as it has zero length
+				for(Int comp_in_cable = 0; comp_in_cable < cable_nseg; comp_in_cable++){
+					
+					// The borders of path_length that this compartment covers
+					// The mapping is fixed and linear over path_length, for now
+					Real start_compartment_path_length = ((comp_in_cable+0)/Real(cable_nseg)) * total_cable_length; // Divide by nseg before multiplying other factors, to get a perfect 1.0 for the last seg
+					Real end_compartment_path_length = ((comp_in_cable+1)/Real(cable_nseg)) * total_cable_length;
+					
+					Int comp_seq = cable_to_compartment_offset[group_seq] + comp_in_cable;
+					
+					if(debug_log_discretisation) printf("cable group_seq %d comp %d, comp_seq %d begin\n", (int) group_seq, (int)comp_in_cable, (int) comp_seq);
+					
+					
+					// Gather the slices of NML segments
+					// Since all said properties are directly summable from their component parts, this is an inline method to avoid extra complexity, for now.
+					auto AddSegmentSliceToCompartment = [ 
+						&segment_to_compartment_seq, &segment_to_compartment_fractionAlong,
+						&compartment_to_segment_seq, &compartment_to_first_segment_start_fractionAlong, &compartment_to_last_segment_end_fractionAlong
+					]( 
+						Int comp_seq, Int seg_seq, Real segment_fractionAlong_start, Real segment_fractionAlong_end 
+					){
+						assert(0 <= segment_fractionAlong_start && segment_fractionAlong_start <= segment_fractionAlong_end && segment_fractionAlong_end <= 1);
+						
+						// for each segment, keep a list of the compartments it spans, and up to which fractionAlong it spans them.
+						// for each compartment, keep a list of the segments it contains, and fractionAlong for beginning and end.
+						
+						// if it is the first segment being added to the compartment, set the fractionAlong
+						if( compartment_to_segment_seq[comp_seq].empty() ){
+							compartment_to_first_segment_start_fractionAlong[comp_seq] = segment_fractionAlong_start;
+						}
+						// set the fractionAlong of last segment incrementally, to be updated by following segments being attached.
+						compartment_to_last_segment_end_fractionAlong[comp_seq] = segment_fractionAlong_end;
+						// maybe setting the first and last fractionAlong can be done explicitly in the per-cable chopping loop, but this is less fragile.
+						
+						
+						compartment_to_segment_seq[comp_seq].push_back(seg_seq);
+						
+						segment_to_compartment_seq[seg_seq].push_back(comp_seq);
+						segment_to_compartment_fractionAlong[seg_seq].push_back(segment_fractionAlong_end);
+						
+					};
+					
+					// helpers for converting path length to fractionAlong, whet else is there to say, with a fallback for zero length segments
+					// TODO make it more elegant
+					auto PathLengthToFractionAlong_OrZero = [](Real start, Real end, Real query){
+						Real fractionAlong = (query - start)/(end - start);
+						if( abs(end - start) < 0.001 ){
+							// in case the diameter changes in an abruptly short span of path length, fix segment_fractionAlong to a valid and quite accurate value
+							// NB: this remains ambiguous! fractionAlong could be 1 as well, therefore this must be checked beforehand or this routine should be called on a codepath where 1 is explicitly used
+							fractionAlong = 0;
+						}
+						return fractionAlong;
+					};
+					auto SegmentQueryToFractionAlong_OrZero = [PathLengthToFractionAlong_OrZero, &segment_length_over_cable](Int seg_idx, Real query_path_along){
+						Real start_segment_path_length = 0;
+						if( seg_idx > 0 ) start_segment_path_length = segment_length_over_cable[seg_idx-1];
+						Real end_segment_path_length = segment_length_over_cable[seg_idx];
+						
+						return PathLengthToFractionAlong_OrZero(start_segment_path_length, end_segment_path_length, query_path_along);
+					};
+					
+					// The path_length that has been accumulated in the compartment so far
+					Real index_compartment_path_length = start_compartment_path_length;
+					
+					// merge all segments that end up to end_compartment_path_length
+					while( 
+						segment_under_compartment < (Int)segment_length_over_cable.size() 
+						&& segment_length_over_cable[segment_under_compartment] <= end_compartment_path_length 
+					){
+						// Integrate frustum from index_compartment_path_length to end of current segment.
+						
+						Real segment_fractionAlong = SegmentQueryToFractionAlong_OrZero(segment_under_compartment, index_compartment_path_length); // NB: returns zero for empty segment
+						if( abs(segment_fractionAlong - 1) < 0.0001 ){
+							// no need to integrate this minuscule part, skip
+							//would add abs(index_compartment_path_length - segment_length_over_cable[segment_under_compartment]) < 0.001 condition but have to account for zero length segments
+						}
+						else{
+							auto seg_seq = segs_in_cable[segment_under_compartment];
+							if(debug_log_discretisation) printf("complete seg %ld (%d) fractionAlong %f->end\n", segment_under_compartment, (int) seg_seq, segment_fractionAlong);
+							AddSegmentSliceToCompartment(comp_seq, seg_seq, segment_fractionAlong, 1);
+						}
+						
+						index_compartment_path_length = segment_length_over_cable[segment_under_compartment];
+						segment_under_compartment++;
+					}
+					// If the compartments spans a part of the, 
+					if( segment_under_compartment < (Int)segment_length_over_cable.size() 
+						&& end_compartment_path_length < segment_length_over_cable[segment_under_compartment] 
+					){
+						// Integrate frustum from index_compartment_path_length to end of current compartment, on current segment.
+						Real segment_fractionAlong_start = SegmentQueryToFractionAlong_OrZero(segment_under_compartment, index_compartment_path_length);
+						Real segment_fractionAlong_end = SegmentQueryToFractionAlong_OrZero(segment_under_compartment, end_compartment_path_length);
+						// add an exception to include the whole segment to the end, if it is the last compartment of the cable. To avoid letting this end be unaccounted for.
+						if( comp_in_cable + 1 == cable_nseg ){
+							// segment_fractionAlong_end = 1;
+						}
+						
+						
+						if( abs(segment_fractionAlong_end - segment_fractionAlong_start) < 0.0001 ){
+							// no need to integrate this minuscule part, skip
+						}
+						else{
+							if(debug_log_discretisation) printf("partial seg %ld fractionAlong %f->%f\n", segment_under_compartment, segment_fractionAlong_start, segment_fractionAlong_end);
+							AddSegmentSliceToCompartment(comp_seq, segs_in_cable[segment_under_compartment], segment_fractionAlong_start, segment_fractionAlong_end);
+						}
+						
+						// compartment_length_over_cable[comp_in_cable] = end_compartment_path_length;
+					}
+				}
+				
+			}
+			
+			// Define the segments not in cables as individual compartments.
+			// Perhaps save memory somehow, in this case LATER
+			for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
+				Int comp_seq = free_segment_to_compartment[seg_seq];
+				if(!( comp_seq >= 0 )) continue;
+				
+				segment_to_compartment_seq[seg_seq].push_back(comp_seq);
+				segment_to_compartment_fractionAlong[seg_seq].push_back(1);
+				
+				compartment_to_segment_seq[comp_seq].push_back(seg_seq);
+				compartment_to_first_segment_start_fractionAlong[comp_seq] = 0;
+				compartment_to_last_segment_end_fractionAlong[comp_seq] = 1;
+				
+			}
+			
+			// Resolving the (parent-child) connections between segments to the corresponding compartments
+			// is done here, it is more convenient since the cables are processed in this pass over cell types.
+			// This could be rolled in the preceding loops (per cable and per segment) but it would complicate that code further.
+			// (Also by requiring iterating over cables to follow a seg_seq_compatible order so that prent cable is already resolved)
+			// Another alternative is to ierate through each segment, linking compartments in series along each,
+			// 	and linking compartments that the segment starts with since fractionAlong=0, to their parents. But why make this more difficult than it has to be
+			// {
+			auto &tree_parent_per_compartment = comp_disc.tree_parent_per_compartment;
+			tree_parent_per_compartment.assign( number_of_compartments, -1 );
+			// std::vector<bool> cable_processed( morph.segment_groups.size(), false );
+			
+			// Resolve parents for free segments.
+			for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
+				Int comp_seq = free_segment_to_compartment[seg_seq];
+				if( comp_seq < 0 ) continue;
+				
+				//the segment maps to exactly one compartment, map it
+				const auto &seg = morph.segments.atSeq(seg_seq); 
+				if( seg.parent >= 0 ){
+					tree_parent_per_compartment[comp_seq] = comp_disc.GetCompartmentForSegmentLocation( seg.parent, seg.fractionAlong );
+				}
+				else tree_parent_per_compartment[comp_seq] = -1;
+				
+			}
+			// Resolve parents for cables.
+			for(Int group_seq = 0; group_seq < (Int)morph.segment_groups.size(); group_seq++){
+				const Morphology::SegmentGroup &group = morph.segment_groups[group_seq];
+				
+				if(!(group.is_cable && config_use_cable_discretization)) continue;
+				
+				
+				auto cable_nseg = nseg_per_cable[group_seq];
+				assert( cable_nseg >= 1 );
+				
+				auto first_comp_on_cable = cable_to_compartment_offset[group_seq];
+				
+				// For all compartments succeeding the first one, their parent property is obvious: i is the previous comp_seq in order obviously to their predecessors
+				for( int comp_seq = first_comp_on_cable + 1; comp_seq < first_comp_on_cable + cable_nseg; comp_seq++){
+					tree_parent_per_compartment[comp_seq] = comp_seq - 1;
+				}
+				// For the first compartment, use the parent of the first seg of the fisrt compartment
+				// (the first seg should, of course, be included in the first compartment starting from fractionAlong = 0)
+				Int first_seg_on_cable = compartment_to_segment_seq[first_comp_on_cable][0];
+				
+				assert(compartment_to_first_segment_start_fractionAlong[first_comp_on_cable] == 0);
+				
+				const auto &seg = morph.segments.atSeq(first_seg_on_cable); 
+				if( seg.parent >= 0 ){
+					tree_parent_per_compartment[first_comp_on_cable] = comp_disc.GetCompartmentForSegmentLocation( seg.parent, seg.fractionAlong );
+				}
+				else tree_parent_per_compartment[first_comp_on_cable] = -1;
+				
+			}
+			
+			if(debug_log_discretisation){
+				printf("Mapping:\n");
+				for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
+					printf("Seg %d:", (int) seg_seq);
+					for( Int j = 0; j < (Int) segment_to_compartment_seq[seg_seq].size(); j++ ){
+						printf(" %d (%g)", (int) segment_to_compartment_seq[seg_seq][j], segment_to_compartment_fractionAlong[seg_seq][j]);
+					}
+					printf("\n");
+					
+				}
+				for( Int comp_seq = 0; comp_seq < (Int)compartment_to_segment_seq.size(); comp_seq++ ){
+					printf("Comp %d:", (int) comp_seq);
+					printf(" (%g)", compartment_to_first_segment_start_fractionAlong[comp_seq]);
+					for( Int j = 0; j < (int) compartment_to_segment_seq[comp_seq].size(); j++ ){
+						printf(" %d", (int) compartment_to_segment_seq[comp_seq][j]);
+					}
+					printf(" (%g)", compartment_to_last_segment_end_fractionAlong[comp_seq]);
+					printf("\n");
+				}
+				
+				printf("Parents:\n");
+				for( Int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ) 	printf("\t%d", (int) comp_seq);	
+				printf("\n");
+				for( Int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ) 	printf("\t%d", (int) tree_parent_per_compartment[comp_seq]);	
+				printf("\n");
+			}
+			
+		}
+		else if( cell_type.type == CellType::ARTIFICIAL ){
+			// no segments no worries
+		}
+		else{
+			assert(false);
+		}
+	}
+	// assert(false);
 	printf("Analyzing connectivity...\n");
 	//------------------>  Scan inputs, to aid cell type analysis
+	// Current approach: For each cell type, aggregate a set of possible incident synapse or input mechanisms.
+	// This is far from the only appropriate analysis method. 
+	// 	For example, it could be smarter to discriminate between populations of the same cell types, or subsets of individual instances.
+	// 	Or even forgoing grouping by cell, instead grouping compartments with the same sets of attachment types.
+	// The current approach is targeting the existing code generation approach of making one code block for each cell type.
 	// per cell, per segment
 	auto GetInputIdId = [ &input_sources ]( Int input_seq ){
 		const InputSource &inp = input_sources.get( input_seq );
@@ -1080,20 +1553,40 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		else id_id = Int(inp.type) - InputSource::Type::MAX;
 		return id_id;
 	};
-	std::vector< std::map<Int, IdListRle> > input_types_per_cell( cell_types.contents.size() );
+	
+	// NOTE this is just a helper for this sort of mapping to compartments (includes mapping all to compartment zero for artificial cells).
+	// TODO either roll it into CellInternalSignature or restrict its scope.
+	auto GetCompSeqForCell = []( const CellType &cell_type, const CellInternalSignature &sig,  Int seg_seq, Real fractionAlong ){
+		if( cell_type.type == CellType::Type::PHYSICAL ){
+			return sig.physical_cell.compartment_discretization.GetCompartmentForSegmentLocation(seg_seq, fractionAlong);
+		}
+		else if( cell_type.type == CellType::Type::ARTIFICIAL ){
+			return 0;
+		}
+		else{
+			assert(false);
+			return -1;
+		}
+	};
+	
+	std::vector< std::map<Int, IdListRle> > input_types_per_cell_( cell_types.contents.size() );
+	std::vector< std::map<Int, IdListRle> > input_types_per_cell_per_compartment( cell_types.contents.size() );
 	for(size_t inp_seq = 0; inp_seq < net.inputs.size(); inp_seq++){
 		const auto &inp = net.inputs[inp_seq];
 		
 		const auto &pop = net.populations.get(inp.population);
+		
+		const Int comp_seq = GetCompSeqForCell( cell_types.get(pop.component_cell), cell_sigs[pop.component_cell], inp.segment, inp.fractionAlong );
+		
 		// LATER could specialize code to elide weight
 		int id_id = GetInputIdId( inp.component_type );
 		// TODO perhaps discriminate between same-type input types, to re-use globals LATER
-		input_types_per_cell[pop.component_cell][inp.segment].Addd(id_id); //TODO when work unit is compartment, probably after morpho analysis
+		input_types_per_cell_per_compartment[pop.component_cell][comp_seq].Addd(id_id); //TODO when work unit is compartment, probably after morpho analysis
 		
 	}
-	// and normalize input_types_per_cell lists after that
+	// and normalize input_types_per_cell_per_compartment lists after that
 	for(size_t cell_seq = 0; cell_seq < cell_types.contents.size(); cell_seq++){
-		for(auto keyval : input_types_per_cell[cell_seq]){
+		for(auto keyval : input_types_per_cell_per_compartment[cell_seq]){
 			keyval.second.Compact();
 		}
 	}
@@ -1104,7 +1597,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	// Gather all pre- and post- synaptic components applicable on a cell type
 	// todo name bijection
 	// per cell, set of segments
-	std::vector< std::set<Int> > spiking_outputs_per_cell( cell_types.contents.size() );
+	std::vector< std::set<Int> > spiking_outputs_per_cell_( cell_types.contents.size() );
+	std::vector< std::set<Int> > spiking_outputs_per_cell_per_compartment( cell_types.contents.size() );
+	
 	// per cell, per segment, list of components
 	// for aggregation of tabular types TODO refactor
 	// clashes with deduplication of constants
@@ -1120,14 +1615,20 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		else id_id = Int(syn.type) - SynapticComponent::Type::MAX;
 		return id_id;
 	};
-	std::vector< std::map<Int, IdListRle> > synaptic_component_types_per_cell( cell_types.contents.size() );
+	std::vector< std::map<Int, IdListRle> > synaptic_component_types_per_cell_( cell_types.contents.size() );
+	std::vector< std::map<Int, IdListRle> > synaptic_component_types_per_cell_per_compartment( cell_types.contents.size() );
 	
 	for(size_t proj_seq = 0; proj_seq < net.projections.contents.size(); proj_seq++){
 		const auto &proj = net.projections.get(proj_seq);
 		const auto &prepop = net.populations.get(proj.presynapticPopulation);
 		const auto &postpop = net.populations.get(proj.postsynapticPopulation);
 		
+		
 		for(const auto &conn : proj.connections.contents){
+			
+			const Int pre_comp_seq  = GetCompSeqForCell( cell_types.get( prepop.component_cell  ), cell_sigs[prepop.component_cell ], conn.preSegment , conn.preFractionAlong  );
+			const Int post_comp_seq = GetCompSeqForCell( cell_types.get( postpop.component_cell ), cell_sigs[postpop.component_cell], conn.postSegment, conn.postFractionAlong );
+		
 			
 			// If a syn.component needs Vpeer, make indices for Vpeer
 			// If a syn.component needs spike, make indices for peer to send spikes
@@ -1143,18 +1644,18 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				int id_id = GetSynapseIdId( conn.synapse );
 				
-				spiking_outputs_per_cell[prepop.component_cell].insert(conn.preSegment); //TODO when work unit is compartment, probably after morpho analysis
-				synaptic_component_types_per_cell[postpop.component_cell][conn.postSegment].Addd(id_id); //TODO when work unit is compartment, probably after morpho analysis
+				spiking_outputs_per_cell_per_compartment[prepop.component_cell ].insert(pre_comp_seq );
+				synaptic_component_types_per_cell_per_compartment[postpop.component_cell][post_comp_seq].Addd(id_id);
 			}
 			else if(conn.type == Network::Projection::Connection::ELECTRICAL){
 				// same behaviour for pre-and post-synaptic
 				// Vpeer is required, and it always exists for physical compartments
 				
-				//printf("yeo %ld %ld %ld\n\n",conn.synapse, prepop.component_cell, conn.preSegment);
+				//printf("yeo %ld %ld %ld\n\n",conn.synapse, prepop.component_cell, pre_comp_seq);
 				int id_id = GetSynapseIdId( conn.synapse );
 				
-				synaptic_component_types_per_cell[prepop.component_cell][conn.preSegment].Addd(id_id); //TODO when work unit is compartment, probably after morpho analysis
-				synaptic_component_types_per_cell[postpop.component_cell][conn.postSegment].Addd(id_id); //TODO when work unit is compartment, probably after morpho analysis
+				synaptic_component_types_per_cell_per_compartment[prepop.component_cell ][pre_comp_seq ].Addd(id_id);
+				synaptic_component_types_per_cell_per_compartment[postpop.component_cell][post_comp_seq].Addd(id_id);
 			}
 			else if(conn.type == Network::Projection::Connection::CONTINUOUS){
 				
@@ -1164,15 +1665,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				int id_id_post = GetSynapseIdId( conn.continuous.postComponent );
 				
 				if( synaptic_components.get( conn.continuous.postComponent ).HasSpikeIn( component_types ) ){
-					spiking_outputs_per_cell[prepop.component_cell].insert(conn.preSegment); //TODO when work unit is compartment, probably after morpho analysis
+					spiking_outputs_per_cell_per_compartment[prepop.component_cell ].insert(pre_comp_seq );
 				}
 				
 				if( synaptic_components.get( conn.continuous.preComponent ).HasSpikeIn( component_types ) ){
-					spiking_outputs_per_cell[postpop.component_cell].insert(conn.postSegment); //TODO when work unit is compartment, probably after morpho analysis
+					spiking_outputs_per_cell_per_compartment[postpop.component_cell].insert(post_comp_seq);
 				}
 				
-				synaptic_component_types_per_cell[prepop.component_cell][conn.preSegment].Addd(id_id_pre); //TODO when work unit is compartment, probably after morpho analysis
-				synaptic_component_types_per_cell[postpop.component_cell][conn.postSegment].Addd(id_id_post); //TODO when work unit is compartment, probably after morpho analysis
+				synaptic_component_types_per_cell_per_compartment[prepop.component_cell ][pre_comp_seq ].Addd(id_id_pre );
+				synaptic_component_types_per_cell_per_compartment[postpop.component_cell][post_comp_seq].Addd(id_id_post);
 			}
 			else{
 				// TODO internal error
@@ -1180,9 +1681,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 		}
 	}
-	// and normalize synaptic_component_types_per_cell lists after that
+	// and normalize synaptic_component_types_per_cell_per_compartment lists after that
 	for(size_t cell_seq = 0; cell_seq < cell_types.contents.size(); cell_seq++){
-		for(auto keyval : synaptic_component_types_per_cell[cell_seq]){
+		for(auto keyval : synaptic_component_types_per_cell_per_compartment[cell_seq]){
 			keyval.second.Compact();
 		}
 	}
@@ -1374,7 +1875,186 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		: wig(_w) { }
 	};
 	
+	// Note: symbol values are assumed to be in engine native scales
+	// TODO roll the random call counter into the random() functor, unless we want to keep a certain traversal order
+	//  ... which is still better enforced by calling the functor
+	auto EvaluateLemsExpression = []( 
+		const TermTable &expression, const auto &symbol_values, const auto &symbol_dimensions, 
+		const DimensionSet &dimensions, Int &random_call_counter, 
+		Real &val_out, Dimension &dim_out, const auto &call_random 
+	){
+		
+		auto Evaluate = [ ]( 
+			const auto &Evaluate, // the most elegant way to make a lambda recursive, oh well
+			const TermTable &expression, int node, const auto &symbol_values, const auto &symbol_dimensions, 
+			const DimensionSet &dimensions, Int &random_call_counter, 
+			Real &val_out, Dimension &dim_out, const auto &call_random 
+		)
+		-> void // Return type must be made explicit before recursive calls in the code, a line with if(0) return; could also work
+		{
+			
+			const auto &tab = expression;
+			//printf("node %d \n", node);
+			auto &term = tab[node];
+			if(term.type == Term::VALUE){
+				val_out = term.value;
+				dim_out = Dimension::Unity();
+			}
+			else if(term.type == Term::SYMBOL){
+				val_out = symbol_values[term.symbol];
+				dim_out = symbol_dimensions[term.symbol];
+			}
+			else if(term.isUnary() || term.isBinaryOperator()){
+				
+				// it is a math operation, could cause  dimension change -> possible conversion factor to shift between engine units
+				LemsUnit conversion_factor =  dimensions.GetNative(Dimension::Unity()); // or override
+				
+				if(term.isBinaryOperator()){
+					Real      val_l, val_r;
+					Dimension dim_l, dim_r;
+					
+					Evaluate(Evaluate, expression, term.left , symbol_values, symbol_dimensions, dimensions, random_call_counter, val_l, dim_l, call_random );
+					Evaluate(Evaluate, expression, term.right, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_r, dim_r, call_random );
+					
+					if(term.type == Term::PLUS){
+						val_out = val_l + val_r;
+						dim_out = dim_r; // NeuroML API should have ensured consistency
+					}
+					else if(term.type == Term::MINUS ){
+						val_out = val_l - val_r;
+						dim_out = dim_r; // NeuroML API should have ensured consistency
+					}
+					else if(term.type == Term::TIMES ){
+						val_out = val_l * val_r;
+						dim_out = dim_l * dim_r;
+						// correct for change of engine units...
+						val_out = ( dimensions.GetNative(dim_l) * dimensions.GetNative(dim_r) ).ConvertTo(val_out, dimensions.GetNative(dim_out)) ;
+					}
+					else if(term.type == Term::DIVIDE){
+						val_out = val_l / val_r;
+						dim_out = dim_l / dim_r;
+						// correct for change of engine units...
+						val_out = ( dimensions.GetNative(dim_l) / dimensions.GetNative(dim_r) ).ConvertTo(val_out, dimensions.GetNative(dim_out)) ;
+					}
+					else if(term.type == Term::LT    ){
+						val_out = ( val_l < val_r ) ? 1 : 0;
+						dim_out = Dimension::Unity(); // boolean
+					}
+					else if(term.type == Term::GT    ){
+						val_out = ( val_l > val_r ) ? 1 : 0;
+						dim_out = Dimension::Unity(); // boolean
+					}
+					else if(term.type == Term::LEQ   ){
+						val_out = ( val_l <= val_r ) ? 1 : 0;
+						dim_out = Dimension::Unity(); // boolean
+					}
+					else if(term.type == Term::GEQ   ){
+						val_out = ( val_l >= val_r ) ? 1 : 0;
+						dim_out = Dimension::Unity(); // boolean
+					}
+					else if(term.type == Term::EQ    ){
+						val_out = ( val_l == val_r ) ? 1 : 0;
+						dim_out = Dimension::Unity(); // boolean
+					}
+					else if(term.type == Term::NEQ   ){
+						val_out = ( val_l != val_r ) ? 1 : 0;
+						dim_out = Dimension::Unity(); // boolean
+					}
+					else if(term.type == Term::AND   ){
+						val_out = ( (bool)val_l && (bool)val_r ) ? 1 : 0;
+						dim_out = Dimension::Unity(); // boolean
+					}
+					else if(term.type == Term::OR    ){
+						val_out = ( (bool)val_l || (bool)val_r ) ? 1 : 0;
+						dim_out = Dimension::Unity(); // boolean
+					}
+					else if(term.type == Term::POWER ){
+						val_out = std::pow( val_l, val_r );
+						dim_out = Dimension::Unity(); // XXX i know
+					}
+					else{
+						assert(false);
+					}
+				}
+				else if( term.type == Term::RANDOM ){
+					Real val_r;
+					Dimension dim_r;
+					Evaluate(Evaluate, expression, term.right, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_r, dim_r, call_random );
+					
+					val_out = call_random(val_r, random_call_counter);
+					random_call_counter++;
+					
+					dim_out = dim_r; // should be pure number
+				}
+				else if(term.isUnaryFunction()){
+					Real val_r;
+					Dimension dim_r;
+					Evaluate(Evaluate, expression, term.right, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_r, dim_r, call_random );
+					
+							if(term.type == Term::ABS   ){ val_out = std::abs  ( val_r ); }
+					else if(term.type == Term::SQRT  ){ val_out = std::sqrt ( val_r ); }
+					else if(term.type == Term::SIN   ){ val_out = std::sin  ( val_r ); }
+					else if(term.type == Term::COS   ){ val_out = std::cos  ( val_r ); }
+					else if(term.type == Term::TAN   ){ val_out = std::tan  ( val_r ); }
+					else if(term.type == Term::SINH  ){ val_out = std::sinh ( val_r ); }
+					else if(term.type == Term::COSH  ){ val_out = std::cosh ( val_r ); }
+					else if(term.type == Term::TANH  ){ val_out = std::tanh ( val_r ); }
+					else if(term.type == Term::EXP   ){ val_out = std::exp  ( val_r ); }
+					else if(term.type == Term::LOG10 ){ val_out = std::log10( val_r ); }
+					else if(term.type == Term::LN    ){ val_out = std::log  ( val_r ); }
+					else if(term.type == Term::CEIL  ){ val_out = std::ceil ( val_r ); }
+					else if(term.type == Term::FLOOR ){ val_out = std::floor( val_r ); }
+					else if(term.type == Term::HFUNC ){ val_out = ( val_r < 0 ) ? 0 : 1; }
+					else{
+						assert(false);
+					}
+					
+					// math functions conveniently map from pure number to pure number, LATER specialcase if needed
+					dim_out = dim_r;
+				}
+				else if(term.isUnaryOperator()){
+					Real val_r;
+					Dimension dim_r;
+					Evaluate(Evaluate, expression, term.right, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_r, dim_r, call_random );
+					
+					if(term.type == Term::UMINUS ){
+						val_out = -val_r;
+						dim_out = dim_r;
+					}
+					else if(term.type == Term::UPLUS ){
+						val_out = +val_r;
+						dim_out = dim_r;
+					}
+					else if(term.type == Term::NOT ){
+						val_out = (bool)val_r;
+						dim_out = Dimension::Unity(); // boolean
+					}
+					else{
+						assert(false);
+					}
+				}
+				else{
+					assert(false);
+				}
+				
+			}
+			else{
+				printf("unknown term %d !\n", term.type);
+				assert(false); // TODO something better
+			}
+			// append debug info for e.g. dimensions
+			// printf("%g %s\n", val_out, dimensions.Stringify(dim_out).c_str());
+			//printf("bye node %d \n", node);
+		};
+		//TermTable::printTree(expression.tab, expression.tab.expression_root, 0);
+		val_out = NAN; // just to initialize
+		dim_out = Dimension::Unity(); // just to initialize
+		Evaluate(Evaluate, expression, expression.expression_root, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_out, dim_out, call_random);
+		return;
+	};
+	
 	struct DescribeLems{
+		
 		static std::string ExpressionInfix( const ComponentType::ResolvedTermTable &expression, const ComponentType &type, const DimensionSet &dimensions, Int &random_call_counter, Dimension &dim_out ){
 			struct Help{
 				static void Infix(
@@ -1386,7 +2066,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					//printf("node %d \n", node);
 					auto &term = tab[node];
 					if(term.type == Term::VALUE){
-						out += accurate_string(term.value);
+						out += "( (float)"+accurate_string(term.value)+")";
 						dim_out = Dimension::Unity();
 					}
 					else if(term.type == Term::SYMBOL){
@@ -1465,7 +2145,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 								out += " )";
 							}
 							if(term.type == Term::POWER){
-								dim_out = Dimension::Unity();
+								dim_out = Dimension::Unity(); // TODO plead to the community to come along in banning usage of pow sqrt and such with non pure numbers - otherwise the dimensionality calculus becomes extremely complicated and yet easy to break. How does Brian handle it anyway?
 							}
 							else if(term.type == Term::PLUS){
 								dim_out = dim_r; // NeuroML API should have ensured consistency
@@ -1492,7 +2172,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							out += itos( random_call_counter );
 							random_call_counter++;
 							out += " )";
-							dim_out = dim_r; // shpuld be pure number
+							dim_out = dim_r; // should be pure number
 						}
 						else if(term.isUnaryFunction()){
 							
@@ -1528,7 +2208,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						// could possibly have something like a unary square operator etc.
 						// though it really is best to keep a consistent units system, so factors are not required
 						// otherwise what should be done if no native unit is specified for an intermediate result ???
-						// what unit should be two differenty-occurring addends be normalized at?
+						// what unit should be two differently-occurring addends be normalized at?
 						// -> get a fallback basis of fundamental units, to avoid extreme rescaling TODO
 						out += Convert::Suffix(conversion_factor);
 						out += " )"; // for conversion factor
@@ -2195,13 +2875,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	};
 	
 	// LATER analyze cell types before generating codes, for compartment as work item
-	printf("Creating cell types...\n");
+	printf("Implementing cell types...\n");
 	// TODO build only the cells actually used
 	for(size_t cell_seq = 0; cell_seq < cell_types.contents.size(); cell_seq++){
 		const auto &cell_type = cell_types.contents[cell_seq];
 		
-		
-		CellInternalSignature sig;
+		CellInternalSignature &sig = cell_sigs[cell_seq];
 		
 		sig.name = "Cell_type_"+itos(cell_seq);
 		
@@ -2268,8 +2947,19 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		// helpers for common cell parts (like synapses that may stick to any type of cell)
 		
+		// TODO use a crude approximation of Δi/Δv when conductance is missing!
+		auto ExposeCurrentMaybeConductanceFromLems = [ ](const auto &comptype, const char *exponame_i, const char *exponame_g, const auto &tab){
+			std::string ret;
+			ret += tab+exponame_i+" = Lems_exposure_i;\n";
+			if( comptype.common_exposures.conductance >= 0 ){
+				ret += tab+exponame_g+" = Lems_exposure_g;\n";
+			}
+			return ret;
+		};
+				
 		auto DescribeGenericSynapseInternals = [
-			&model, &synaptic_components, &config
+			&model, &synaptic_components, &config, 
+			ExposeCurrentMaybeConductanceFromLems
 		](
 			const std::string &tab, const std::string &for_what,
 			const std::string &require_line, const std::string &expose_line,
@@ -2293,13 +2983,16 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			);
 			const std::string Ichem_suffix = Igap_suffix;
 			
+			// XXX move these temp vars into the same closer scope where the exposure is done... or roll into ExposeCurrentMaybeConductanceFromLems
+			code += tab+"	// Common exposures\n";
+			code += tab+"	float Exposure_i = NAN;\n"; // the component *must* specify current
+			code += tab+"	float Exposure_g = 0;\n"; // NOTE Exposing conductance is optional. If missing, assume 0 which reverts to Fwd Euler style handling 
+			
 			if(id_id < 0){
 			
 				SynapticComponent::Type core_id = SynapticComponent::Type(id_id + SynapticComponent::Type::MAX);
 				
-				code += tab+"	// Common core type exposures\n";
 				code += tab+"	"+ require_line +"\n";
-					
 				
 				switch(core_id){
 				case SynapticComponent::Type::GAP :{
@@ -2312,7 +3005,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					
 					sprintf(tmps, "		const float     *Gsyn_linear_gap  = local_const_table_f32_arrays[%zd];\n", table_Gsyn); code += tmps;
 					
-					sprintf(tmps, "		float Lems_exposure_i = Gsyn_linear_gap[instance] * (Vpeer - Vcomp)%s;\n", Igap_suffix.c_str()); code += tmps;
+					sprintf(tmps, "		Exposure_i = Gsyn_linear_gap[instance] * (Vpeer - Vcomp)%s;\n", Igap_suffix.c_str()); code += tmps;
+					// FIXME validate necessary conditions to aff Ggap to cable matrix
+					sprintf(tmps, "		Exposure_g = Gsyn_linear_gap[instance] * 0;\n"); code += tmps;
+					
 					
 					break;
 				}
@@ -2337,7 +3033,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					sprintf(tmps, "	float   *Gnext_exp_one = local_stateNext_table_f32_arrays[%zd];\n", table_G); code += tmps;
 					
 					
-					sprintf(tmps, "		float Lems_exposure_i = G_exp_one[instance] * ( Erev_exp_one[instance] - Vcomp)%s;\n", Ichem_suffix.c_str());  code += tmps;
+					sprintf(tmps, "		Exposure_i = G_exp_one[instance] * ( Erev_exp_one[instance] - Vcomp)%s;\n", Ichem_suffix.c_str());  code += tmps;
+					sprintf(tmps, "		Exposure_g = G_exp_one[instance] ;\n");  code += tmps;
+					
 					code   += "		if(!initial_state){\n";
 					sprintf(tmps, "			Gnext_exp_one[instance] = G_exp_one[instance] - dt * ( G_exp_one[instance] / Tau_exp_one[instance] )%s;\n", "");  code += tmps;
 					code   += "		}else{\n";
@@ -2379,7 +3077,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// TODO eliminate redundant allocations for same component type
 				
 				code += "	{\n"; // special handling start
-				
+				auto ExposeFromLems = [&](const auto &comptype){ return ExposeCurrentMaybeConductanceFromLems(comptype, "Exposure_i", "Exposure_g", tab+"\t"); };
 				// now what to do with the special type
 				if(syncomp.type == SynapticComponent::Type::BLOCKING_PLASTIC ){
 					std::string for_what = for_that + " Blocking/Plastic Synapse";
@@ -2423,8 +3121,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						}
 						
 						// then compute the synaptic component
-					
-						code += DescribeLemsInline.TableInner( tab, for_what, blopla_type, blopla_subsig, "", expose_line, config.debug ); 
+						code += DescribeLemsInline.TableInner( tab, for_what, blopla_type, blopla_subsig, "", ExposeFromLems(blopla_type)+expose_line, config.debug );
+						
 					//code += tab+"}\n";
 					
 				}
@@ -2437,13 +3135,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					CellInternalSignature::ComponentSubSignature &compsubsig = synimpl.synapse_component;
 					
 					synimpl.synapse_component = DescribeLems::AllocateSignature(comptype, compinst, &AppendMulti, for_what);
-					code += DescribeLemsInline.TableInner( tab+"\t", for_what, comptype, compsubsig, require_line, expose_line, config.debug );
-					
+					code += DescribeLemsInline.TableInner( tab+"\t", for_what, comptype, compsubsig, require_line, ExposeFromLems(comptype)+expose_line, config.debug );
 				}
 				else{
 					printf("internal error: synaptic component %ld is neither special case nor lemsified \n", syncomp_seq);
 					return false;
 				}
+				
 				
 				code += tab+"	}\n"; // special handling end
 			}
@@ -2604,8 +3302,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			};
 			auto GetGenericExposureCode = [ & ](){
 				
-				return std::string("I_syn_aggregate += Lems_exposure_i * weight;\n");
-				// TODO add conductance contrubution too
+				return std::string("I_syn_aggregate += Exposure_i * weight; G_syn_aggregate += Exposure_g * weight;\n"); // TODO merge this line with input code as well
 			};
 			
 			const std::string expose_line = GetGenericExposureCode();
@@ -2614,10 +3311,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			
 			ccde += tab+"float I_syn_aggregate = 0;\n";
+			ccde += tab+"float G_syn_aggregate = 0;\n";
 			
 			// Simple not-so-scalable solution:
 			// scan everything, don't use lazy triggering
 			ccde   += tab+"for(long long instance = 0; instance < Instances; instance++){\n";
+			
+			
 			
 			std::string syn_internal_code;
 			if( !DescribeGenericSynapseInternals( tab, for_what, require_line, expose_line, id_id, synimpl, AppendMulti, DescribeLemsInline, syn_internal_code ) ) return false;
@@ -2626,6 +3326,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			ccde   += tab+"}\n"; // for loop end
 			// add the gathered curent to total synapse current
 			sprintf(tmps, "	I_synapses_total += I_syn_aggregate;\n"); ccde += tmps;
+			sprintf(tmps, "	G_synapses_total += G_syn_aggregate;\n"); ccde += tmps;
 			ccde   += "\n";
 			
 			synapse_impls[id_id] = synimpl; // gap junctions and chemical synapses have different id_id's
@@ -2634,7 +3335,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			return true;
 		};
-		auto ImplementInputSource = [ &DescribeGenericSynapseInternals, &GetSynapseIdId, &config, &model, &input_sources ](
+		auto ImplementInputSource = [ &DescribeGenericSynapseInternals, &GetSynapseIdId, &ExposeCurrentMaybeConductanceFromLems, &config, &model, &input_sources ](
 			const SignatureAppender_Single &AppendSingle, const SignatureAppender_Table &AppendMulti,
 			const InlineLems_AllocatorCoder &DescribeLemsInline,
 			Int &random_call_counter,
@@ -2715,6 +3416,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					ccde +=   "		if( Start_input_pulse[instance] <= time && time <=  Start_input_pulse[instance] +  Duration_input_pulse[instance] ) I_input_pulse += Imax_input_pulse[instance] * Weight[instance];\n";
 					ccde   += "	}\n";
 					sprintf(tmps, "	I_input_total += I_input_pulse;\n"); ccde += tmps;
+					sprintf(tmps, "	I_input_total += 0;\n"); ccde += tmps; // the ideal current probe is invariant with voltage
 					ccde   += "\n";
 					
 					break;
@@ -2748,6 +3450,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				ccde += tab+"{\n";
 				ccde += tab+"float I_syn_aggregate = 0;\n";
+				ccde += tab+"float G_syn_aggregate = 0;\n";
+				
 				
 				if(
 					input_source.type == InputSource::Type::TIMED_SYNAPTIC
@@ -2791,8 +3495,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					ccde   += tab+"char spike_in_flag = spiker_fired_flag;\n";
 					
 					// weight is applied here since each synapse is an input instance at the same time
-					std::string expose_line = "I_syn_aggregate += Lems_exposure_i * weight;";
-					// TODO add conductance contribution
+					std::string expose_line = "I_syn_aggregate += Exposure_i * weight; G_syn_aggregate += Exposure_g * weight;";
 					
 					std::string syn_internal_code;
 					if( !DescribeGenericSynapseInternals( tab, for_what, require_line, expose_line, GetSynapseIdId(input_source.synapse), inpimpl.synimpl, AppendMulti, DescribeLemsInline, syn_internal_code ) ) return false;
@@ -2801,15 +3504,26 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					ccde   += tab+"}\n"; // for loop end
 					
 					sprintf(tmps, "I_input_total += I_syn_aggregate;\n"); ccde += tab+tmps;
+					sprintf(tmps, "G_input_total += G_syn_aggregate;\n"); ccde += tab+tmps;
 					ccde   += tab+"\n";
 					
 				}
 				else if( input_source.component.ok() ){
+	
 					std::string for_what = for_that + " LEMS Input";
 					
-					sprintf(tmps, "	I_input_total += Lems_exposure_i * weight;\n");
-					// TODO add conductance contribution
-					std::string expose_line = tmps; 
+					const auto &comptype = model.component_types.get(input_source.component.id_seq);
+				
+					// use temp variables in the place of lems exposures because g might not be exposed
+					// It's done at the scope of component based inputs because hardcoded inputs handle the loop in their inner code, unlike synpases which are fully decoupled.
+					// TODO decouple input internals for composite inputs
+					// TODO aggregate seprately for each input type, instead of accumulating on input total
+					std::string expose_line;
+					// XXX move these temp vars into the same closer scope where the exposure is done... or roll into ExposeCurrentMaybeConductanceFromLems
+					expose_line += tab+"	float Exposure_i = NAN;\n"; // the component *must* specify current
+					expose_line += tab+"	float Exposure_g = 0;\n"; // NOTE Exposing conductance is optional. If missing, assume 0 which reverts to Fwd Euler style handling 
+					expose_line += ExposeCurrentMaybeConductanceFromLems(comptype, "Exposure_i", "Exposure_g", tab);
+					expose_line += "	I_input_total += Exposure_i * weight; G_input_total += Exposure_g * weight;\n";
 				
 					// TODO return bool for error handling
 					ccde += DescribeLemsInline.TableFull( input_source.component, "\t", for_what, inpimpl.component, require_line, expose_line, config.debug );
@@ -2838,7 +3552,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// pack 1 trillion tables -> 16 million entries into 64bit indexes, upgrade if needed LATER
 			
 			size_t table_Spike_recipients = spiker.Table_SpikeRecipients = AppendMulti.ConstI64( for_what+" Spike recipients");
-			// printf("spiker send %zd %zd\n", cell_seq, seg_seq);
+			// printf("spiker send %zd %zd\n", cell_seq, comp_seq);
 			
 			sprintf(tmps, "	const long long Instances_Spike_recipients = local_const_table_i64_sizes[%zd]; //same for all parallel arrays\n", table_Spike_recipients); code += tmps;
 			sprintf(tmps, "	const long long *Spike_recipients          = local_const_table_i64_arrays[%zd];\n", table_Spike_recipients); code += tmps;
@@ -2903,193 +3617,363 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		const BiophysicalProperties &bioph = biophysics.at(cell.biophysicalProperties);
 		
 		CellInternalSignature::PhysicalCell &pig = sig.physical_cell;
+		const auto &comp_disc = pig.compartment_discretization;
+		const int32_t number_of_compartments = (int32_t) comp_disc.number_of_compartments;
 		
-		ScaleEntry microns = {"um", -6, 1.0}; // In NeuroML, Morphology is given in microns
+		const ScaleEntry microns = {"um", -6, 1.0}; // In NeuroML, Morphology is given in microns
 		
 		// preprocess Morphology for geometry, connectivity info, and compartmental subdivision
 		// interaction between state variables is, of course, also determined by connectivity between compartments
 		// NeuroML assumes a tree model of truncated cone-shaped 'segments'
 		// 	( which may be further subdivided in compartments, for compatibility with NEURON )
+		std::vector< std::vector<int32_t> > comp_connections(number_of_compartments);
 		
-		std::vector< std::vector<Int> > seg_connections( morph.segments.contents.size() );
+		// physical properties
+		std::vector<float> compartment_lengths(number_of_compartments, NAN);
+		std::vector<float> compartment_areas  (number_of_compartments, NAN);
+		std::vector<float> compartment_volumes(number_of_compartments, NAN);
+		std::vector<float> compartment_path_length_from_root(number_of_compartments, NAN);
 		
-		// TODO d_lambda rule perhaps? // FIXME add NeuroML nseg
-		// initialize with ones
-		std::vector<int> segment_compartments(morph.segments.contents.size(), 1);
 		
-		// NOTE the actual 3D points used may differ from what's stated in the NeuroML tag
-		// following obscure rules followed by the NEuroML exporter
-		std::vector<Morphology::Segment::Point3DWithDiam> segment_proximal(morph.segments.contents.size());
-		std::vector<Morphology::Segment::Point3DWithDiam> segment_distal  (morph.segments.contents.size());
+		// TODO:
+		// If the values of properties have to be sampled across the neuron, there are two ways to go about it:
+		// The first one is to sample only for the middles of compartments. 
+		// This is more accurate if few segments are split into many compartments, and less accurate if many segments are merged into few compartments.
+		// It has the additional benefit that all calculations are performed compartment-wise, which is amenable to in-line initialisation in the per-compartment code.
+		// The second one is to sample for the middles of segments.
+		// This is less accurate if few segments are split into many compartments, and more accurate if many segments are merged into few compartments.
+		// It has the complication of mapping segment values to compartment values, through the conversion process of said segments into compartments; which is not as amenable to parallel run-time code.
+		// A third one is to apply all segment-and compartment-wise intersections, and evaluate each "compartment fragment" that comes out of that.
+		// All these approaches assume that said values can be interpolated smoothly along the length of neurites.
 		
-		std::vector<float> segment_lengths(morph.segments.contents.size(), NAN);
-		std::vector<float> segment_areas  (morph.segments.contents.size(), NAN);
-		std::vector<float> segment_volumes(morph.segments.contents.size(), NAN);
+		// Another problem comes up with values which are simply not integrable over the extent of a neurite.
+		//  Examples are starting membrane voltage, and spike initiation "threshold" voltage. Exclusively one value can hold for these oer a compartment.
+		
+		// For now:
+		// - The geometric properties of the neurite compartments (area, volume) are precisely integrated using the linearly varying per segment values. This is convenient because these geometric values are laid out explicitly.
+		// - The resistance of the neurite is also precisely evaluated through the per segment values. To do otherwise would be to calculate the (1/length) factor to multiply by the per-compartment resistivity.
+		// - The conductance of density mechanisms is *IM*precisely evaluated by mapping the per-segment parameters over the compartments which overlap with the segments.
+		// - The conductance of inhomogeneous ion channel distributions is *IM*precisely evaluated through the per compartment central path lengths. This is possible through the pre-calculated per-compartment area.
+		
+		
+		
+		// Density mechanisms such as ion channels and ion pools are applied over the whole compartments that the designated segment group to apply over overlaps with, whether the overlap is partial or not.
+		// A possible unintended consequence is for a compartment that is straddling two segments with different mechanism specifications over the two segments, to contain both sets of mechanisms, each with excess conductance.
+		// This could be refined by introducing another paameter of "effective area over a compartment" to the numerical model of each mechanicm instance. 
+		// A hacky alternative could be to re-scale the Gmax, or ρmax, but this only applies if the effect is a linear function of area. (Also does not necessarily work with LEMS mechs.)
+		// But in principle, the proper way to ensure that mechnaism are applied to a specific compartment is to make an explicit semgment to represent the compartment.
 		
 		// process connectivity
 		printf("\tAnalyzing internal connectivity...\n");
-		for( Int seg_seq = 0; seg_seq < (Int)morph.segments.contents.size(); seg_seq++ ){
-			const auto &seg = morph.segments.atSeq(seg_seq);
+		for( Int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+			const auto comp_parent = comp_disc.tree_parent_per_compartment[comp_seq];
 			
-			if(!(seg.parent < 0)){
-				seg_connections[seg_seq].push_back(seg.parent);
-				seg_connections[seg.parent].push_back(seg_seq);
+			if(!(comp_parent < 0)){
+				comp_connections[comp_seq].push_back(comp_parent);
+				comp_connections[comp_parent].push_back(comp_seq);
 			}
-			// Since seg.parent < seg_seq, each seg_connections[i] list is always going to be ordered !
+			// Since comp_parent < comp_seq, each comp_connections[i] list is always going to be ordered !
 		}
 		
 		// process geometry of morphology
 		printf("\tAnalyzing geometry...\n");
-		for( size_t seg_seq = 0; seg_seq < morph.segments.contents.size(); seg_seq++ ){
-			const auto &seg = morph.segments.atSeq((Int)seg_seq);
+		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
 			
-			// XXX this is the logic used only when the segment groups have the neuroLexId="sao864921383" property
-			// AND parent is within the same group.
-			// But validation tests show so far the model doesn't work in Neuron if the cables are disjoint (using pt3dclear), so it's a fixed behaviour for now.
-			if( seg.parent >= 0 ){
-				segment_proximal[seg_seq] = morph.segments.atSeq(seg.parent).distal;
+			auto &comp_length = compartment_lengths[comp_seq];
+			auto &comp_area   = compartment_areas  [comp_seq];
+			auto &comp_volume = compartment_volumes[comp_seq];
+			
+			// summate by iterating through all segment-based fractions
+			comp_length = 0;
+			comp_area   = 0;
+			comp_volume = 0;
+			
+			const auto &segs_in_comp = comp_disc.compartment_to_segment_seq[comp_seq];
+			
+			for( int seg_in_comp = 0; seg_in_comp < (int) segs_in_comp.size(); seg_in_comp++ ){
+				Real from_fractionAlong = (seg_in_comp == 0) ? comp_disc.compartment_to_first_segment_start_fractionAlong[comp_seq] : 0;
+				Real   to_fractionAlong = (seg_in_comp+1 == (int) segs_in_comp.size()) ? comp_disc.compartment_to_last_segment_end_fractionAlong[comp_seq] : 1;
+				Int seg_seq = segs_in_comp[seg_in_comp];
+				
+				// TODO check if there is any case proximal should be the specified one, or the distal of parent seg instead
+				
+				const Morphology::Segment &seg = morph.segments.atSeq(seg_seq);
+				
+				// NOTE the actual 3D points used may differ from what's stated in the NeuroML tag
+				// following obscure rules followed by the NeuroML exporter
+				// TODO deduplicate the intra-seg mapping through lerp, to make sure it's consistent
+				
+				const Morphology::Segment::Point3DWithDiam seg_from = LerpPt3d(seg.proximal, seg.distal, from_fractionAlong);
+				const Morphology::Segment::Point3DWithDiam seg_to   = LerpPt3d(seg.proximal, seg.distal,   to_fractionAlong);
+				
+				Real comp_fragment_length = DistancePt3d( seg_from, seg_to );
+				
+				comp_length += comp_fragment_length;
+				comp_area   += GeomHelp::Area( comp_fragment_length, seg_from.d, seg_to.d );
+				comp_volume += GeomHelp::Volume( comp_fragment_length, seg_from.d, seg_to.d );
+				
+			}
+		}
+		// get path length from root too
+		// comp_seq order puts parents first always, just like seg_seq order
+		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+			const auto comp_parent = comp_disc.tree_parent_per_compartment[comp_seq];
+			
+			if( comp_parent < 0 ){
+					// well, Neuron assumes the *proximal edge* of a compartment to be the beginning of "Path length from root",
+					// (thus diastnnce(comp0) = comp0_length/2) rather than the middle of the compartment (in which case it would be disctance(comp0) = 0).
+					// compartment_path_length_from_root[comp_seq] = 0;
+					compartment_path_length_from_root[comp_seq] = (compartment_lengths[comp_seq] / 2);
+					
 			}
 			else{
-				segment_proximal[seg_seq] = seg.proximal;
+				compartment_path_length_from_root[comp_seq] = 
+					compartment_path_length_from_root[comp_parent] 
+					+ (compartment_lengths[comp_parent] + compartment_lengths[comp_seq])/2 ;
 			}
-			segment_proximal[seg_seq] = seg.proximal;
-			segment_distal  [seg_seq] = seg.distal  ;
-			
-			const Morphology::Segment::Point3DWithDiam &seg_proximal = segment_proximal[seg_seq];
-			const Morphology::Segment::Point3DWithDiam &seg_distal   = segment_distal  [seg_seq];
-			
-			segment_lengths[seg_seq] = GeomHelp::Length(
-				seg_proximal.x - seg_distal.x,
-				seg_proximal.y - seg_distal.y,
-				seg_proximal.z - seg_distal.z
-			);
-			
-			segment_areas[seg_seq] = GeomHelp::Area( segment_lengths[seg_seq], seg_proximal.d, seg_distal.d );
-			segment_volumes[seg_seq] = GeomHelp::Volume( segment_lengths[seg_seq], seg_proximal.d, seg_distal.d );
-			
 		}
-		
-		// std::vector<int> segments_to_compartments; TODO
 		
 		// process passive biophysics
 		printf("\tAnalyzing cable equation...\n");
-		// membrane specific capacitance, axial resistivity, initial potential, threshold for (almost) every compartment(segment,actually)
-		// d_lambda rule can be calculated from Cm and Ra (NEURON book, chapter 5)
-		std::vector<float> segment_Cm(morph.segments.contents.size(), NAN);
-		std::vector<float> segment_Ra(morph.segments.contents.size(), NAN);
-		std::vector<float> segment_V0(morph.segments.contents.size(), NAN);
-		std::vector<float> segment_Vt(morph.segments.contents.size(), NAN); // TODO verify it is not NAN when a spiking connection is defined in respective segment
+		// membrane specific capacitance, axial resistivity for every segment, sample them to integrate capacitance and resistance for each compartment.		
+		// d_lambda rule can also be calculated from Cm and Ra (NEURON book, chapter 5)
+		std::vector<Real> segment_Cm_(morph.segments.contents.size(), NAN);
+		std::vector<Real> segment_Ra_(morph.segments.contents.size(), NAN);
 		
-		for( auto spec : bioph.membraneProperties.initvolt_specs ) spec.apply(morph, segment_V0);
-		for( auto spec : bioph.membraneProperties.capacitance_specs ) spec.apply(morph, segment_Cm);
-		for( auto spec : bioph.intracellularProperties.resistivity_specs ) spec.apply(morph, segment_Ra);
-		for( auto spec : bioph.membraneProperties.threshold_specs ) spec.apply(morph, segment_Vt);
+		for( auto spec : bioph.membraneProperties.capacitance_specs ) spec.apply(morph, segment_Cm_);
+		for( auto spec : bioph.intracellularProperties.resistivity_specs ) spec.apply(morph, segment_Ra_);
 		
-		// TODO throw a mighty fit in case Cm, V0 and Ra are incomplete
+		// TODO throw a mighty fit in case Cm and Ra are incomplete
 		
-		// NB abuse NeuroML's tree morphology limitation to set axial resistances in a segment-parallel vector
+		// 
+		std::vector<Real> compartment_capacitance(number_of_compartments, NAN);
+		
+		// NB abuse NeuroML's tree morphology limitation to set axial resistance values in a compartment-parallel vector
 		// where each value is child's axial resistance to its *parent*
 		// Will need a more general way to store conductivity constants when
 		//  non-tree neuron topologies are implemented LATER
-		std::vector<Real> inter_segment_axial_resistance(morph.segments.contents.size(), NAN);
-		for( Int seg_seq = 0; seg_seq < (Int)morph.segments.contents.size(); seg_seq++ ){
-			const auto &seg = morph.segments.atSeq( (Int)seg_seq );
-			if(seg.parent < 0) continue; // soma is root, N-1 connections available
-			// const auto &seg_par = morph.segments.atSeq( seg.parent );
+		std::vector<Real> inter_compartment_axial_resistance(number_of_compartments, NAN);
+		
+		// Resistance is not derived by the total edge-to-edge resistance of compartments, 
+		// because modellers ofter taper the ends of neurite to zero or another tiny value.
+		// And this causes the half total resistance of a compartment to be disproportionally 
+		// 	higher than the anticipated resistance of the proximal half of it,
+		// 	since it accounts for the tapered end thich is not important for inter-compartment resistivity (since the neurite ends there).
+		// Instead, the resistance between two compartments is the sum of the resistance 
+		// 	of the distal half of the parent compartment and that of the proximal half of the child compartment.
+		// Refer also to the code of NEURON that follows the same approach: treeset.cpp, routine diam_from_list
+		// and to notes on the NEURON message board:
+		// 	https://www.neuron.yale.edu/phpBB/viewtopic.php?f=15&t=2539&p=10078&hilit=axial+resistivity#p10078
+		// 	https://www.neuron.yale.edu/phpBB/viewtopic.php?f=8&t=3904&p=16807&hilit=axial+resistivity#p16808
+		// Note: This model is accurate for unbranched sections of neurite, but not for branches.
+		// Conductance and area in that case are not that well defined, since integrating from the middle of the compartment to the precise fractionALong the compartment still may not include the small-scale details of the branch: a model should be made by an expert for that LATER, or more generally getting to override such conductance values. 
+		// In any case, the true value of Ra 𓁛 is obscure anyway, so why should it matter... again, only an expert can tell.
+		// Note: Compartments with zero length are assumed to have zero resistance, (as they have zero length) even though they have non-zero area and volume (as implied spheres).
+		std::vector<Real> compartment_axial_resistance_proximal(number_of_compartments, NAN);
+		std::vector<Real> compartment_axial_resistance_distal(number_of_compartments, NAN);
+		
+		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
 			
-			// NB Inter-compartment resistance is derived from the cross-section of the child segment's proximal edge, and Ra child and Ra parent, and Length child and Length parent
-			// see also https://www.neuron.yale.edu/phpBB/viewtopic.php?f=15&t=2539&p=10078&hilit=axial+resistivity#p10078
-			//      and https://www.neuron.yale.edu/phpBB/viewtopic.php?f=8&t=3904&p=16807&hilit=axial+resistivity#p16808
-			
-			// using the cylinder approximation, R = ( (Ra_child * L_child/2) + (Ra_parent * L_parent/2) ) / ( pi * r_section^2 ) 
-			// TODO use the volumetric frustum integral, instead of cylinder approximation
-			// R = (Ra/pi)*( (1/(S*r_start)) - (1/(S*r_end)) ) 
-			// where r_start, r_end are the radii for fractionAlong = 0 and 0.5 or 0.5 and 1
-			// and S = (r_distal + r_proximal) / Length
-			// and look out for length = 0
-			
-			const auto &section_diameter = segment_proximal[seg_seq].d;
-			auto &resistance = inter_segment_axial_resistance[seg_seq];
-			
-			if(!( section_diameter > 0 )){
-				printf("internal error: Diameter of compartment %ld is not positive \n", seg_seq);
-				return false;
-			}
-			
-			Real seglen = segment_lengths[seg_seq];
-			Real parlen = segment_lengths[seg.parent];
-			// NOTE: an improvization, because funny modellers add zero-length compartments
-			// Assume spherical compartments, then
-			if( seglen <= 0 ){
-				seglen = segment_proximal[seg_seq].d / 2;
-			}
-			if( parlen <= 0 ){
-				parlen = segment_distal  [seg_seq].d / 2;
-			}
-			
-			resistance =
-				(
-					( (seglen * segment_Ra[seg_seq]) + (parlen * segment_Ra[seg.parent]) )
-					/ 2.0
-				)
-				/ ( (M_PI / 4.0) * section_diameter * section_diameter )
-			;
-			// and rescale to engine units
-			resistance = ( (Scales<Resistivity>::native * microns)/(microns^2) ).ConvertTo( resistance, Scales<Resistance>::native );
 			if(config.verbose){
-			printf(" Ra_child %g %s L_child %g %s Ra_parent %g %s L_parent %g %s D_section %g %s\n",
-				segment_Ra[seg_seq], Scales<Resistivity>::native.name, seglen/2, microns.name,
-				segment_Ra[seg.parent], Scales<Resistivity>::native.name, parlen/2, microns.name,
-				section_diameter, microns.name
-			);
+				printf("Summating resistance and conductance for comp_seq %d\n", (int) comp_seq );
 			}
-			if(!( std::isfinite(resistance) && resistance > 0 )){
-				// TODO prettier printing, though it shouldn't happen
-				printf("internal error: Conductance between compartments %ld, %ld is undefined \n", seg_seq, seg.parent);
-				return false;
-			}
-		}
-		std::vector<Real> segment_capacitance(morph.segments.contents.size(), NAN);
-		for( size_t seg_seq = 0; seg_seq < morph.segments.contents.size(); seg_seq++ ){
-			// const auto &seg = morph.segments.atSeq((Int)seg_seq);
 			
-			segment_capacitance[seg_seq] = segment_Cm[seg_seq] * segment_areas[seg_seq];
-			// and rescale to engine units
-			segment_capacitance[seg_seq] = ( (Scales<SpecificCapacitance>::native) * (microns*microns) ).ConvertTo( segment_capacitance[seg_seq], Scales<Capacitance>::native );
-		}
-		
-		
-		// try checking the d_lambda rule
-		for( size_t seg_seq = 0; seg_seq < morph.segments.contents.size(); seg_seq++ ){
-			// const auto &seg = morph.segments.atSeq((Int)seg_seq);
-			const Morphology::Segment::Point3DWithDiam &seg_proximal = segment_proximal[seg_seq];
-			const Morphology::Segment::Point3DWithDiam &seg_distal   = segment_distal  [seg_seq];
+			const auto comp_length = compartment_lengths[comp_seq];
+			const auto comp_midpoint_length = comp_length / 2;
 			
-			const float d_lambda = 0.1;
-			// inputs in native units
-			auto lambda_f_microns = [&microns](float diam, float freq_Hz, float Ra, float Cm, bool verbose){
-				ScaleEntry scale_Ra = Scales<Resistivity>::native; // {"ohm_cm" ,-2, 1.0}; // NEURON units
-				ScaleEntry scale_Cm = Scales<SpecificCapacitance>::native; // {"uF_per_cm2",-2, 1.0}; // NEURON units
+			auto &comp_axial_resistance_proximal = compartment_axial_resistance_proximal[comp_seq];
+			auto &comp_axial_resistance_distal   = compartment_axial_resistance_distal  [comp_seq];
+			compartment_axial_resistance_proximal[comp_seq] = 0;
+			compartment_axial_resistance_distal  [comp_seq] = 0;
+
+			auto &comp_capacitance = compartment_capacitance [comp_seq];
+			comp_capacitance = 0;
+			
+			// also evaluate the d_lambda rule for the component, as a diagnostic for users who want to inspect the numerics at play
+			const Real compartment_lambda_hertz = 100;
+			Real compartment_lambda = 0;
+			
+			// summate by iterating through all segment-based fractions
+			Real running_comp_length = 0;
+			
+			const auto &segs_in_comp = comp_disc.compartment_to_segment_seq[comp_seq];
+			
+			for( int seg_in_comp = 0; seg_in_comp < (int) segs_in_comp.size(); seg_in_comp++ ){
+				Real from_fractionAlong = (seg_in_comp == 0) ? comp_disc.compartment_to_first_segment_start_fractionAlong[comp_seq] : 0;
+				Real   to_fractionAlong = (seg_in_comp+1 == (int) segs_in_comp.size()) ? comp_disc.compartment_to_last_segment_end_fractionAlong[comp_seq] : 1;
+				Int seg_seq = segs_in_comp[seg_in_comp];
 				
-				float lambda_f = std::sqrt( diam/( 4 * M_PI * freq_Hz * Ra * Cm ) );
-				ScaleEntry dla_scale = ( microns / (scale_Ra * scale_Cm) )^(0.5);
-				if( verbose ){
-					printf("dla %g %g %g\n", lambda_f, pow10(dla_scale.pow_of_10)*dla_scale.scale, lambda_f*(pow10(dla_scale.pow_of_10)*dla_scale.scale) );
+				// TODO check if there is any case proximal should be the specified one, or the distal of parent seg instead
+				
+				if(config.verbose){
+					printf("seg %d (id %d), fractionAlong from %g to %g\n", (int) seg_seq, (int) morph.lookupNmlId(seg_seq), from_fractionAlong, to_fractionAlong );
 				}
-				return dla_scale.ConvertTo( lambda_f, microns );
-			};
+				
+				const Morphology::Segment &seg = morph.segments.atSeq(seg_seq);
+				
+				const Morphology::Segment::Point3DWithDiam seg_from = LerpPt3d(seg.proximal, seg.distal, from_fractionAlong);
+				const Morphology::Segment::Point3DWithDiam seg_to   = LerpPt3d(seg.proximal, seg.distal,   to_fractionAlong);
+				
+				Real comp_fragment_length = DistancePt3d( seg_from, seg_to );
+				Real comp_fragment_area   = GeomHelp::Area( comp_fragment_length, seg_from.d, seg_to.d );
+				
+				// Add capacitance to compartment fragment
+				Real comp_fragment_capacitance = segment_Cm_[seg_seq] * comp_fragment_area;
+				// and rescale to engine units
+				comp_fragment_capacitance = ( (Scales<SpecificCapacitance>::native) * (microns*microns) ).ConvertTo( comp_fragment_capacitance, Scales<Capacitance>::native );
 			
-			auto lambda_microns = lambda_f_microns( (seg_distal.d + seg_proximal.d) / 2, 100, segment_Ra[seg_seq], segment_Cm[seg_seq], config.verbose );
+				comp_capacitance += comp_fragment_capacitance;
+				
+				// Add resistance to the proximal and distal halves of the compartment
+				// running_comp_length is the sum of path length (arc length in NEURON lingo) of compartment fragments up to, excluding this iteration
+				Real Ra = segment_Ra_[seg_seq];
+				
+				// input: Ra in native unit, start-end in microns, returns resistance in native unit
+				auto GetFrustumResistance = [ &microns ]( Real Ra, Morphology::Segment::Point3DWithDiam from, Morphology::Segment::Point3DWithDiam to ){
+					// using the volumetric frustum integral, instead of cylinder approximation
+					// R = (Ra/pi)*( Length/(Radius_start*Radius_end) ) 
+					// To get this formula, integrate dR = dx * Ra/CrossSection = dx * Ra /( pi * ( (1-x/Length)*Radius_start + (x/Length)*Radius_end )^2 ) for x = 0...Length
+					Real resistance = Ra * (4/M_PI) * DistancePt3d(from, to) / ( from.d * to.d );
+					// and rescale to engine units
+					resistance = ( (Scales<Resistivity>::native * microns)/(microns^2) ).ConvertTo( resistance, Scales<Resistance>::native );
+					return resistance;
+				};
+				
+				if(config.verbose){
+					printf("resistance measurement: from_comp_length %g to_comp_length %g midpoint_length %g\n", 
+						running_comp_length, running_comp_length + comp_fragment_length, comp_midpoint_length
+					);
+				}
+				// XXX this is a workaround for isolated zero length sections.
+				// The advantages with this approach are that it:
+				// - is simple to implement
+				// - will behave like the NML exporter for the simple, expected cases (soma as sphere)
+				// - can attempt to simulate any model, when the NML exporter's trick does not account for some contrived cases that will still get ill defined numerically. 
+				// TODO follow the precise workaround that NeuroML does: If a segment has zero length AND proximal diameter = distal diameter AND ( it is the only segment in a cable  OR it is a self standing segment ) then consider it a cylinder with length = proximal diameter.
+				// Accounting for path length on this cylinder should also have a small(insignificant?) effect on inhomogeneous distributions.
+				// This also resolves the issue with whether Area should be based on a frustum or sphere.
+				// TODO put warnings in place for improper tracing of neurons, to avoid halting when axial resistance predictably ends up invalid, when the specific conditions for the NML exporter's edge case do not apply (for example, if a segment has zero length but varying diameter and it is the only one in the cable, or when a cable includes multiple segments with zero diameter)
+				// A variation could be to assume that all segments in a zero length cable are spheres...
+				if( comp_length == 0 ){
+					// Consider the form of a cylinder with diameter = length to calculate resistance.
+					// Note that proximal and distal diameters amy differ, assume both are something sane...
+					auto seg_to_extrapolated = seg_from;
+					seg_to_extrapolated.y += seg_to.d;
+					const Morphology::Segment::Point3DWithDiam seg_midpoint = LerpPt3d(seg.proximal, seg_to_extrapolated, 0.5);
+					
+					if(config.verbose){
+						printf("\t zero length segment\n" );
+					}
+					
+					comp_axial_resistance_proximal += GetFrustumResistance( Ra, seg_from, seg_midpoint);
+					comp_axial_resistance_distal   += GetFrustumResistance( Ra, seg_midpoint, seg_to_extrapolated  );
+				}
+				else if( running_comp_length + comp_fragment_length < comp_midpoint_length ){
+					// whole part of seg belongs to the proximal half
+					if(config.verbose){
+						printf("\t proximal half\n" );
+					}
+					comp_axial_resistance_proximal += GetFrustumResistance( Ra, seg_from, seg_to);
+				}
+				else if( comp_midpoint_length <= running_comp_length ){
+					// whole part of seg belongs to the distal half
+					if(config.verbose){
+						printf("\t distal half\n" );
+					}
+					comp_axial_resistance_distal   += GetFrustumResistance( Ra, seg_from, seg_to);
+				}
+				else{
+					assert( running_comp_length < comp_midpoint_length && comp_midpoint_length <= running_comp_length + comp_fragment_length );
+					// seg straddles the proximal and distal half
+					
+					// NB: this is the fraction to lerp over the seg fraction, from seg_from to seg_to.
+					// Not over the full extent of the seg, proximal to distal. 
+					Real compartment_midpoint_fragment_fraction = (comp_midpoint_length - running_comp_length) / comp_fragment_length;
+					// prefer NaN values to be mapped to fractionAlong = end, to keep the ilusion of zero length segments being processed whole
+					if(!( compartment_midpoint_fragment_fraction < 1 )) compartment_midpoint_fragment_fraction = 1;
+					if(!( 0 < compartment_midpoint_fragment_fraction )) compartment_midpoint_fragment_fraction = 0;
+					
+					const Morphology::Segment::Point3DWithDiam seg_midpoint = LerpPt3d(seg_from, seg_to, compartment_midpoint_fragment_fraction);
+					
+					if(config.verbose){
+						printf("\t midpoint: fragment fraction %g\n", compartment_midpoint_fragment_fraction );
+					}
+					
+					comp_axial_resistance_proximal += GetFrustumResistance( Ra, seg_from, seg_midpoint);
+					comp_axial_resistance_distal   += GetFrustumResistance( Ra, seg_midpoint, seg_to  );
+				}
+				
+				// Add the estimate of AC wave length as per the NEURON book, just as a diagnostic value. 
+				
+				// inputs in native units, except for time whoch is in Hz, and that is in order to omit it from the scaling factor... it seems to be wbe working nonetheless, why not leave it that way ... because Ra * Cm = Time/Length and that must be counterbalanced!!! The correctioun would be to set the ScaleEntry of Hz explicitly, and correct if it doesn't match Ra*Cm/microns XXX
+				// Note that the average diameter is used in the calculation even though the integrand is a non linear function of diameter, if it's accurate enough for Hines it's good enough.
+				auto lambda_f_microns = [&microns](float diam, float freq_Hz, float Ra, float Cm, bool debug){
+					ScaleEntry scale_Ra = Scales<Resistivity>::native; // {"ohm_cm" ,-2, 1.0}; // NEURON units
+					ScaleEntry scale_Cm = Scales<SpecificCapacitance>::native; // {"uF_per_cm2",-2, 1.0}; // NEURON units
+					
+					float lambda_f = std::sqrt( diam/( 4 * M_PI * freq_Hz * Ra * Cm ) );
+					ScaleEntry dla_scale = ( microns / (scale_Ra * scale_Cm) )^(0.5);
+					if( debug ){
+						printf("dla %g %g %g\n", lambda_f, pow10(dla_scale.pow_of_10)*dla_scale.scale, lambda_f*(pow10(dla_scale.pow_of_10)*dla_scale.scale) );
+					}
+					return dla_scale.ConvertTo( lambda_f, microns );
+				};
+				
+				Real comp_fragment_lambda_microns = lambda_f_microns( (seg_from.d + seg_to.d) / 2, compartment_lambda_hertz, Ra, segment_Cm_[seg_seq], config.debug );
+				compartment_lambda += comp_fragment_length / comp_fragment_lambda_microns;
+				
+				// done for this compartment fragment, add path length to sum
+				running_comp_length += comp_fragment_length;
+			}
 			
-			// FIXME why is this 0.9 factor here again ??
-			float nseg_factor = segment_lengths[seg_seq] / ( d_lambda * lambda_microns ) + 0.9;
+			if(config.verbose){
+				printf("Compartment %d  capacitance: %g %s  proximal resistance: %g %s  distal resistance: %g %s\n", (int) comp_seq,
+					comp_capacitance              , Scales<Capacitance>::native.name,
+					comp_axial_resistance_proximal, Scales<Resistance >::native.name,
+					comp_axial_resistance_distal  , Scales<Resistance >::native.name
+				);
+			}
 			
+			// report total 100Hz ac wavelength
+			// try checking the d_lambda rule
+			const float d_lambda = 0.1;
+			// XXX why is this 0.9 factor here again ?? not a fixme since it matches the formula in NEURON
+			float nseg_factor = ( compartment_lambda / d_lambda ) + 0.9;
 			if( config.verbose ){
 			printf("nseg %.9f\n", nseg_factor);
 			}
-			
 			int nseg = int( nseg_factor / 2 ) * 2 + 1 ; //really should be odd, to avoid midpoint shenanigans
-			(void) nseg; // TODO compartmental subdivision
+			(void) nseg; // It is useful as a diagnostic to show for modellers. subdivision perhaps LATER, but it would be better to use a separate neuron design tool for that
+			
+			// also take advantage of comp_seq order to resolve resistance with parent as well
+			auto comp_parent = comp_disc.tree_parent_per_compartment[comp_seq];
+			if(comp_parent >= 0){
+				inter_compartment_axial_resistance[comp_seq] = comp_axial_resistance_proximal + compartment_axial_resistance_distal[comp_parent];
+			
+			}
+			else{
+				inter_compartment_axial_resistance[comp_seq] = NAN;
+			}
+		}
+		if(config.verbose){
+		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+			printf("Compartment %d resistance with parent %d: %g %s\n", 
+				(int) comp_seq, (int) comp_disc.tree_parent_per_compartment[comp_seq],
+				inter_compartment_axial_resistance[comp_seq] , Scales<Resistance>::native.name
+			);
+		}
+		}
+		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+			auto comp_parent = comp_disc.tree_parent_per_compartment[comp_seq];
+			if( comp_parent < 0 ) continue;
+			auto resistance = inter_compartment_axial_resistance[comp_seq];
+			if(!( std::isfinite(resistance) && resistance > 0 )){
+				// TODO prettier printing, though it shouldn't happen
+				
+				printf("internal error: Conductance between compartments %d, %d is undefined \n", 
+				(int) comp_seq, (int) comp_parent );
+				return false;
+			};
 		}
 		
 		// Approximate the smallest time constant of the passive system, using the Method of Time Constants. for RC circuits:
@@ -3097,21 +3981,20 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// fastest pole = sum (pole of each capacitor with conductivities to ground, if all other capacitors were shorted)
 		Real rate_total = 0;
 		ScaleEntry RC_scale = (Scales<Resistance>::native * Scales<Capacitance>::native);
-		for( Int seg_seq = 0; seg_seq < (Int)morph.segments.contents.size(); seg_seq++ ){
-			
+		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
 			//conveniently, in neural compartment models, other capacitors being shorted means only directly adjacent resistances matter
 			//  R1    R2    R3    R4
 			// -vvv-+-vvv-+-vvv-+-vvv-
 			//      |     =     |   
 		    // GND -+-----+-----+- GND
 			float Gtotal = 0;
-			for( Int adjacent_seg : seg_connections[seg_seq] ){
-				size_t Ra_index = (adjacent_seg > seg_seq) ? adjacent_seg : seg_seq ;
-				float R = inter_segment_axial_resistance[Ra_index];
+			for( Int adjacent_comp : comp_connections[comp_seq] ){
+				size_t R_index = (adjacent_comp > comp_seq) ? adjacent_comp : comp_seq ; // NB: remember how inter_compartment_axial_resistance is structured
+				Real R = inter_compartment_axial_resistance[R_index];
 				Gtotal += 1/R;
 			}
 			
-			float rate = Gtotal / segment_capacitance[seg_seq] ;
+			float rate = Gtotal / compartment_capacitance[comp_seq] ;
 			rate_total += rate;
 			
 			float tau = RC_scale.ConvertTo( 1/rate, Scales<Time>::native); //TODO check values once more
@@ -3120,17 +4003,25 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 		}
 		float tau_total = RC_scale.ConvertTo( 1/rate_total, Scales<Time>::native);
-		printf(" total axial %g %s\n", tau_total, Scales<Time>::native.name );
+		if(config.verbose) printf(" total axial %g %s\n", tau_total, Scales<Time>::native.name );
+		
 		
 		// Now perform analysis for Backward Euler method
 		printf("\tAnalyzing Bwd Euler...\n");
+		// Gauss elimination of one neuron's conductance matrix for Bwd Euler can be performed as a tree traversal, with the benefit of O(N) run time.
+		// The process followed is thus equivalent to the Hines algorithm (1983).
+		// The particular order of circuit nodes to visit could be tweaked. Here we use a depth-first traversal starting from node 0 (supposed to be the soma), but a BFS order could be used as well to reduce tree depth (and hopefully numerical error).
 		struct BackwardEuler{
-			
-			const std::vector< std::vector<Int> > &conn_list;
+			public:
+			// just a reference to the connection matrix to be traversed
+			// typename could be made implicit with some template magic
+			const std::vector< std::vector<int32_t> > &conn_list;
+			// intermediate result: tha nodes visited by DFS.
 			std::vector< bool > node_gray;
-			std::vector< Int > order_list;
-			std::vector< Int > order_parent;
-			
+			// results: the sequence of nodes to visit, and the map of each node to its parent.
+			std::vector< Int > order_list; // per processing step
+			std::vector< Int > order_parent; // per node_seq
+			// Recursivly traverse
 			void DFS(
 				Int i // node being visited
 			){
@@ -3148,7 +4039,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				order_list.push_back(i);
 			}
 			
-			BackwardEuler( const std::vector< std::vector<Int> > &_conn ) : conn_list(_conn) {
+			protected:
+			BackwardEuler( const std::vector< std::vector<int32_t> > &_conn ) : conn_list(_conn) {
 				
 				Int nCells = (Int)conn_list.size();
 				
@@ -3157,9 +4049,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				order_parent = std::vector< Int >( nCells, -1 );
 				
 			}
-			
+			public:
 			static void GetOrderLists(
-				const std::vector< std::vector<Int> >conn_list,
+				const std::vector< std::vector<int32_t> >conn_list,
 				std::vector< Int > &order_list,
 				std::vector< Int > &parent_list,
 				Int start_from = 0
@@ -3173,10 +4065,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 		};
 		
+		// Fill in the Bwd Euler order for the tree
 		auto &order_list = pig.cable_solver.BwdEuler_OrderList;
 		auto &order_parent = pig.cable_solver.BwdEuler_ParentList;
+		BackwardEuler::GetOrderLists( comp_connections, order_list, order_parent );
 		
-		BackwardEuler::GetOrderLists( seg_connections, order_list, order_parent );
 		if( config.verbose ){
 		printf("Order: ");
 		for( Int val : order_list ){
@@ -3190,48 +4083,131 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		printf("\n");
 		}
 		
-		auto &segment_adjacent_InvRC = pig.cable_solver.BwdEuler_InvRCDiagonal;
-		segment_adjacent_InvRC = std::vector<Real>( morph.segments.contents.size(), 0 );
+		// Also fill in the part of the diagonal that's axial conductance to other, since it's going to be fixed during the simulation
+		// 	(a made variable LATER)
+		auto &compartment_adjacent_InvRC = pig.cable_solver.BwdEuler_InvRCDiagonal;
+		compartment_adjacent_InvRC = std::vector<Real>(number_of_compartments, 0 );
 		// and get the connectivity diagonals for bwd Euler
-		for( Int seg_seq = 0; seg_seq < (Int)segment_compartments.size(); seg_seq++){
-			for( Int adjacent_seg : seg_connections[seg_seq] ){
-				Int idx = std::max( seg_seq, adjacent_seg );
-				auto R = inter_segment_axial_resistance[ idx ];
-				auto C = segment_capacitance[ seg_seq ];
+		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+			for( int adjacent_comp : comp_connections[comp_seq] ){
+				Int idx = std::max( comp_seq, adjacent_comp ); // NB: remember how inter_compartment_axial_resistance is structured
+				auto R = inter_compartment_axial_resistance[ idx ];
+				auto C = compartment_capacitance[ comp_seq ];
 				auto D = ( (Scales<Resistance>::native * Scales<Capacitance>::native)^(-1) ).ConvertTo( 1/(R*C), Scales<Frequency>::native );
-				segment_adjacent_InvRC[seg_seq] += D;
+				compartment_adjacent_InvRC[comp_seq] += D;
 			}
 		}
 		
 		if( config.verbose ){
 		printf("Diagonal 1/RC Constant(%s): ", Scales<Frequency>::native.name );
-		for( auto val : segment_adjacent_InvRC ){
+		for( auto val : compartment_adjacent_InvRC ){
 			printf("%g ", val);
 		}
 		printf("\n");
 		}
 		
+		// initial potential, threshold for every compartment
+		std::vector<float> compartment_V0(number_of_compartments, NAN);
+		std::vector<float> compartment_Vt(number_of_compartments, NAN); // TODO verify it is not NAN when a spiking connection is defined in respective compartment
+		// TODO throw a mighty fit in case V0 is incomplete
+		
+		// the mapping from segments to compartments is not necessarily direct.
+		// 	Produce a list that contains all compartments that overlap with said segments
+		auto SpecToCompList = [](
+			const Morphology &morph, const AcrossSegOrSegGroup &spec, 
+			const CellInternalSignature::PhysicalCell::CompartmentDiscretization &comp_disc
+		){
+			IdListRle comp_list;
+			spec.reduce( morph, [ &comp_disc, &comp_list ]( Int seg_seq ){
+				for( Int comp_seq : comp_disc.segment_to_compartment_seq[seg_seq] ) comp_list.Addd(comp_seq);
+			} );
+			comp_list.Compact();
+			return comp_list;
+		};
+		auto ApplyFixedValue = []( const IdListRle &id_list, const auto &value, auto &array ){
+			id_list.reduce( [&value, &array]( Int comp_seq ){
+				array[comp_seq] = value;
+			} );
+		};
+		
+		for( auto spec : bioph.membraneProperties.initvolt_specs ) ApplyFixedValue(SpecToCompList(morph, spec, comp_disc), spec.value, compartment_V0);
+		for( auto spec : bioph.membraneProperties.threshold_specs ) ApplyFixedValue(SpecToCompList(morph, spec, comp_disc), spec.value, compartment_Vt);
 		
 		// Realize per-compartment signatures
 		
-		auto &seg_definitions = pig.seg_definitions;
-		seg_definitions.resize(morph.segments.contents.size());
+		auto &comp_definitions = pig.comp_definitions;
+		comp_definitions.resize(number_of_compartments);
 		
-		for( size_t seg_seq = 0; seg_seq < segment_compartments.size(); seg_seq++ ){
-			auto &comp_def = seg_definitions[seg_seq]; 
-			comp_def.V0 = segment_V0[seg_seq];
-			comp_def.Vt = segment_Vt[seg_seq];
-			comp_def.AxialResistance = inter_segment_axial_resistance[seg_seq];
-			comp_def.Capacitance = segment_capacitance[seg_seq];
+		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+			auto &comp_def = comp_definitions[comp_seq]; 
+			comp_def.V0 = compartment_V0[comp_seq];
+			comp_def.Vt = compartment_Vt[comp_seq];
+			comp_def.AxialResistance = inter_compartment_axial_resistance[comp_seq];
+			comp_def.Capacitance = compartment_capacitance[comp_seq];
 			
-			comp_def.adjacent_compartments = seg_connections[seg_seq];
+			comp_def.adjacent_compartments = comp_connections[comp_seq];
 		}
 		
 		// add the ion channel distributions too
-		for(auto spec : bioph.membraneProperties.channel_specs){
+		for(const auto &spec : bioph.membraneProperties.channel_specs){
 			
-			auto seq_arr = spec.toList(morph).toArray();
-			for( Int seqid : seq_arr ){
+			auto comp_arr = SpecToCompList(morph, spec, comp_disc).toArray();
+			
+			// used when the is not uniform uniform per compartment
+			std::vector<Real> inho_parameter_values;
+			
+			if(spec.conductivity.type == ChannelDistribution::Conductivity::NON_UNIFORM){
+				inho_parameter_values.assign(comp_arr.size(), NAN);
+				
+				assert( ((const AcrossSegOrSegGroup &) spec).type == AcrossSegOrSegGroup::Type::GROUP );
+				const auto &seg_group = morph.segment_groups[spec.seqid];
+				
+				const auto &inho = spec.conductivity.inho;
+				assert( inho.parm >= 0 );
+				const auto &inhoparm = seg_group.inhomogeneous_parameters.get(inho.parm);
+				
+				// Fetch the parameter values
+				if( inhoparm.metric == Morphology::InhomogeneousParameter::PATH_LENGTH_FROM_ROOT ){
+					for( int32_t comp_in_spec = 0; comp_in_spec < (int32_t)comp_arr.size(); comp_in_spec++ ){
+						int32_t comp_seq = comp_arr[comp_in_spec];
+						inho_parameter_values[comp_in_spec] = compartment_path_length_from_root[comp_seq];
+					}
+				}
+				else{
+					printf("internal error: unknown inhomogeneous parameter type %d", (int)inhoparm.metric );
+					return false;
+				}
+				
+				// Optionally post-process in the context of this segment group's set of values.
+				// p0 is the minimum value found in the set of samples, and p1 is the maximum found. 
+				// These "guard" values are chosen intentionally, to match NEURON's SubsetDomainIterator behaviour. (Refer to subiter.hoc file)
+				Real p0 = 1e9;
+				Real p1 = 1;
+				for( auto &val : inho_parameter_values ) p0 = std::min(p0, val);
+				for( auto &val : inho_parameter_values ) p1 = std::max(p1, val);
+				
+				if( inhoparm.subtract_the_minimum ){
+					for( auto &val : inho_parameter_values ) val -= p0;
+					p1 -= p0;
+					p0 = 0;
+				}
+				if( inhoparm.divide_by_maximum ){
+					for( auto &val : inho_parameter_values ) val /= p1;
+					p0 /= p1;
+					p1 = 1;
+				}
+				
+				// Also make sure that random() is not used in the arithmetic expression of the distribution
+				for( const auto &term : inho.value.terms ){
+					if( term.type == Term::Type::RANDOM ){
+						printf("inhomogeneous ion channel conductivity involving random() not supported yet\n");
+						return false;
+					}
+				}
+			}
+			
+			for( int32_t comp_in_spec = 0; comp_in_spec < (int32_t)comp_arr.size(); comp_in_spec++ ){
+				int32_t comp_seq = comp_arr[comp_in_spec];
 				
 				CellInternalSignature::IonChannelDistributionInstance instance;
 				
@@ -3243,8 +4219,35 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					instance.conductivity = spec.conductivity.value;
 				}
 				else if(spec.conductivity.type == ChannelDistribution::Conductivity::NON_UNIFORM){
-					printf("inhomogeneous ion channel conductivity not supported yet\n");
-					return false;
+					// XXX the inhomogeneous parameters may contain random(). Thus, in the general case, they have to be evaluated separately for each cell, at instantiation time !
+					
+					const auto &inho = spec.conductivity.inho;
+					
+					// the only symbol is the inhomogeneous parameter, and it could be either dimensionless microns or dimensionless pure, 
+					// depending on if inhoparm.divide_by_maximum was used 
+					Real value_context[1] = { inho_parameter_values[comp_in_spec] };
+					const Dimension dimension_context[1] = { Dimension::Unity() };
+					assert( inho.value.symbol_refs.size() <= 1 );
+					
+					Real val = NAN;
+					Dimension dim_unused = Dimension::Unity(); // should be dimensionless SI conductivity when parsed
+					Int random_call_counter = 0; // no other calls to random() that need to be put on a counter
+					EvaluateLemsExpression(
+						inho.value, value_context, dimension_context,
+						dimensions, random_call_counter, val, dim_unused, 
+						[]( Real random_arg, Int random_call_counter ){
+							(void) random_arg; (void) random_call_counter;
+							// random numbers might be used LATER, only if necessary. In this scope, we can't really use a value because Evaluate must be called seperately for each neuron instance, at instantiation stage ... not codegen stage
+							return NAN;
+						}
+					);
+					
+					// val is given in SI value, convert it to engine value
+					const ScaleEntry mhos_per_m2 = {"S_per_m2"  , 0, 1.0};
+					// assume that the returned value is always SI conductivity whether the factor is length or normalised, TODO explain this somewhere!
+					// printf("evall %10g %10g %10g\n",value_context[0],val, mhos_per_m2.ConvertTo( val, Scales<Conductivity>::native) );
+					
+					instance.conductivity = mhos_per_m2.ConvertTo( val, Scales<Conductivity>::native );
 				}
 				else{
 					printf("internal error: unknown inhomogeneous ion channel conductivity type\n");
@@ -3257,12 +4260,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				instance.number = spec.number;
 				
 				
-				seg_definitions[seqid].ionchans.push_back(instance);
+				comp_definitions[comp_seq].ionchans.push_back(instance);
 			};
 		}
 		
 		// and the concentration models
-		for(auto spec : bioph.intracellularProperties.ion_species_specs){
+		for(const auto &spec : bioph.intracellularProperties.ion_species_specs){
 			CellInternalSignature::IonSpeciesDistributionInstance instance;
 			
 			//instance.ion_species = spec.species;
@@ -3271,21 +4274,21 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			instance.initialConcentration = spec.initialConcentration;
 			instance.initialExtConcentration = spec.initialExtConcentration;
 			
-			spec.reduce(morph, [&seg_definitions, spec, instance]( Int seqid ){
-				seg_definitions[seqid].ions[spec.species] = instance;
+			SpecToCompList(morph, spec, comp_disc).reduce([&comp_definitions, &spec, instance]( Int comp_seq ){
+				comp_definitions[comp_seq].ions[spec.species] = instance;
 			});
 		}
 		// what TODO with external concentrations ??
 		
 		// fill in input/synapse occurences to compartment signatures
-		for( const auto &keyval : input_types_per_cell[cell_seq] ){
-			seg_definitions[keyval.first].input_types = keyval.second;
+		for( const auto &keyval : input_types_per_cell_per_compartment[cell_seq] ){
+			comp_definitions[keyval.first].input_types = keyval.second;
 		}
-		for( const auto &keyval : synaptic_component_types_per_cell[cell_seq] ){
-			seg_definitions[keyval.first].synaptic_component_types = keyval.second;
+		for( const auto &keyval : synaptic_component_types_per_cell_per_compartment[cell_seq] ){
+			comp_definitions[keyval.first].synaptic_component_types = keyval.second;
 		}
-		for( const auto &key : spiking_outputs_per_cell[cell_seq] ){
-			seg_definitions[key].spike_output = true;
+		for( const auto &key : spiking_outputs_per_cell_per_compartment[cell_seq] ){
+			comp_definitions[key].spike_output = true;
 		}
 		
 		
@@ -3304,25 +4307,21 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// split the signature-construction part here, to separate per-cell from per-compartment analysis
 
 		
-		// TODO multi-compartment segments
-		// TODO multi-comparment decomposition process (evaluate parametric conductance, remap synapses etc.)
-		
 		// constants
-		size_t Index_Capacitance = AppendSingle_CellScope.Constant( segment_capacitance, "Compartment Capacitance ("+std::string(Scales<Capacitance>::native.name)+")" );
-		size_t Index_AxialResistance = AppendSingle_CellScope.Constant( inter_segment_axial_resistance, "Axial Resistance ("+std::string(Scales<Resistance>::native.name)+")" );
-		size_t Index_VoltageThreshold = AppendSingle_CellScope.Constant( segment_Vt, "Spike Threshold ("+std::string(Scales<Voltage>::native.name)+")" );
-		size_t Index_MembraneArea = AppendSingle_CellScope.Constant( segment_areas, "Membrane Surface Area (microns^2)" );
+		size_t Index_Capacitance = AppendSingle_CellScope.Constant( compartment_capacitance, "Compartment Capacitance ("+std::string(Scales<Capacitance>::native.name)+")" );
+		size_t Index_AxialResistance = AppendSingle_CellScope.Constant( inter_compartment_axial_resistance, "Axial Resistance ("+std::string(Scales<Resistance>::native.name)+")" );
+		size_t Index_VoltageThreshold = AppendSingle_CellScope.Constant( compartment_Vt, "Spike Threshold ("+std::string(Scales<Voltage>::native.name)+")" );
+		size_t Index_MembraneArea = AppendSingle_CellScope.Constant( compartment_areas, "Membrane Surface Area (microns^2)" );
 		size_t Index_Temperature = AppendSingle_CellScope.Constant( net.temperature, "Temperature (K)" ); // TODO move to global
 		
 		// and states
-		pig.Index_Voltages = AppendSingle_CellScope.StateVariable( segment_V0, "Voltage ("+std::string(Scales<Voltage>::native.name)+")"  );
+		pig.Index_Voltages = AppendSingle_CellScope.StateVariable( compartment_V0, "Voltage ("+std::string(Scales<Voltage>::native.name)+")"  );
 		
 		// more constants and variables will arise, as the code is composed
 		
 		// const std::string Rate_suffix = Convert::Suffix(
 		// 	( Scales<Frequency>::native * Scales<Time>::native ) // to unitless
 		// );
-		
 		
 		// now on to parts of the physical cell
 		
@@ -3351,6 +4350,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		sprintf(tmps, "	const float *V_threshold = &cell_constants[%zd]; \n", Index_VoltageThreshold); sig.code += tmps;
 		sprintf(tmps, "	const float *Area = &cell_constants[%zd]; \n", Index_MembraneArea); sig.code += tmps;
 		
+		// also append diagonal conductance matrix entries for the Hines algorithm
+		if( cell_cable_solver == SimulatorConfig::CABLE_BWD_EULER ){
+		auto &cabl_impl = pig.cable_solver_implementation;
+		cabl_impl.Index_BwdEuler_InvRCDiagonal = AppendMulti_CellScope.Constant("Bwd Euler Diagonal 1/RC Constant");
+		cabl_impl.Index_BwdEuler_WorkDiagonal = AppendMulti_CellScope.StateVariable("Bwd Euler Diagonal Scratchpad");
+		sprintf(tmps, "	const Table_F32 PerComp_InvRC_Axial  = cell_const_table_f32_arrays[%zd];\n", cabl_impl.Index_BwdEuler_InvRCDiagonal); sig.code += tmps;
+		sprintf(tmps, "	Table_F32 PerComp_InvRC_Diagonal = cell_state_table_f32_arrays[%zd];\n", cabl_impl.Index_BwdEuler_WorkDiagonal); sig.code += tmps;
+		}
+		
 		sig.code += "	\n";
 		
 		
@@ -3367,7 +4375,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		sig.code += "	\n";
 		
 		//open up this table too
-		pig.seg_implementations.resize(morph.segments.contents.size());
+		pig.comp_implementations.resize( number_of_compartments );
 		
 		// first, evaluate the internal chemical dynamics of each compartment, and integrate them inline
 		auto ImplementInternalCompartmentIntegration = [
@@ -3407,7 +4415,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			);
 			
 			// if such quantities must be communicated, they should be put in a scratch vector for compartment currents
-			sprintf(tmps, "	float I_internal = 0;\n"); ccde += tmps;
+			sprintf(tmps, "	float I_internal = 0;\n"); ccde += tmps; // total inward current of membrane mehcanisms (ie not axial)
+			// for now, integrate voltage on the spot (fwd euler can be converted to bwd euler this way just by correcting by + Gtotal * V) to store this per-compartment value
+			
+			sprintf(tmps, "	float G_internal = 0;\n"); ccde += tmps; // total conductance of internal mechanisms, coupling to GND
+			// Sum of the Thévenin equivalent series conductance of each one-port mechanism connecting the membrane to ground (such as ion channels, post-synapses, gap junctions, conductance clamps...)
+			// NOTE though that sorts of coupling that are not handled by a specific solver may also be binned to this, as Vext and associated are is assumed fixed (e.g. for gap junctions possibly)
+			// for now, use the scratchpad diagonal vector to store this per-compartment value
+			
+			// TODO also use a 'total conductivity' variable to avoid the inefficiency and precision loss of multiplying by Area before summing these factors
 			
 			
 			// peek into ion species to get some species populations
@@ -3545,6 +4561,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// could complain, but it's best to assume zero concentration for compatibility with jNeuroML
 			}
 			
+			// TODO the cable equation handling should be broken off since it involves other compartments, therefore it is not really internal (important for compartment as work itam)
 			if( uses_Iaxial ){
 				const std::string Iaxial_suffix = Convert::Suffix(
 					(Scales<Voltage>::native / Scales<Resistance>::native)
@@ -3563,13 +4580,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				if( flatten_adjacency ){
 					// add leaks (and perhaps longitudinal diffusions LATER)
 					
-					for( Int adjacent_seg : comp_def.adjacent_compartments ){						
-						ccde += tab+"adj_comp = "+itos(adjacent_seg)+"; \n";
-						ccde += tab+"adj_conductance = adj_comp; \n";				
-						ccde += tab+"// adj_conductance conditional should be optimized out in flattened code\n";
+					for( Int adjacent_comp : comp_def.adjacent_compartments ){
+						ccde += tab+"adj_comp = "+itos(adjacent_comp)+"; \n";
+						ccde += tab+"adj_conductance = adj_comp; \n";
 						
 						ccde += Both_lines;
 					}
+					ccde += tab+"// adj_conductance conditional should be optimized out in flattened code\n";
 				}
 				else{
 					// also necessary for compartment deduplication
@@ -3579,7 +4596,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					ccde += tab+ "for( long long adjcomp_idx = 0; adjcomp_idx < AdjComp_Count; adjcomp_idx++ ){\n";
 					
 					ccde += tab+"\t""int adj_comp = AdjCompartments[adjcomp_idx];\n";
-					ccde += tab+"\t""int adj_conductance = adj_comp; \n";				
+					ccde += tab+"\t""int adj_conductance = adj_comp; \n";
 					
 					ccde += Both_lines;
 					
@@ -3592,6 +4609,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			//add ion channels
 			ccde += "	// Current from ion channels\n";
 			sprintf(tmps, "	float I_channels_total = 0;\n"); ccde += tmps;
+			sprintf(tmps, "	float G_channels_total = 0;\n"); ccde += tmps;
 			
 			comp_impl.channel.resize(comp_def.ionchans.size());
 			
@@ -3664,12 +4682,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					double R = 8.3144621; // ( J / ( K * mol ) )
 					double zCa = 2; // any ion LATER
 					double F = 96485.3; // ( Cb / mol )
-					auto SI_To_Erev_suffix = Convert::Suffix( Scales<Dimensionless>::native.to( Scales<Voltage>::native ) ); // SI units to Erev
+					auto SI_To_Erev_suffix = Convert::Suffix( Scales<Dimensionless>::native.to( Scales<Voltage>::native ) ); // SI (fundamental, really) units to Erev
 					if( inst.type == ChannelDistribution::NERNST_CA2 ){
-						sprintf(tmps, "		float Erev  = ( %.17g * temperature / ( %.17g * %.17g) * logf( Ca2_concentration_extra / Ca2_concentration )%s );\n", R, zCa, F, SI_To_Erev_suffix.c_str()); ccde += tmps;
+						sprintf(tmps, "		float Erev  = ( (float)(%.17g) * temperature / (float)( %.17g * %.17g) * logf( Ca2_concentration_extra / Ca2_concentration )%s );\n", R, zCa, F, SI_To_Erev_suffix.c_str()); ccde += tmps;
 					}
 					else{
-						sprintf(tmps, "		float Erev  = ( %.17g * temperature / ( %.17g * %.17g) * logf( Ca_concentration_extra / Ca_concentration )%s );\n", R, zCa, F, SI_To_Erev_suffix.c_str()); ccde += tmps;
+						sprintf(tmps, "		float Erev  = ( (float)(%.17g) * temperature / (float)( %.17g * %.17g) * logf( Ca_concentration_extra / Ca_concentration )%s );\n", R, zCa, F, SI_To_Erev_suffix.c_str()); ccde += tmps;
 					}
 				}
 				else if(
@@ -3694,6 +4712,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					if( component_types.get(chan.component.id_seq).common_exposures.conductance >= 0 ){
 						sprintf(tmps, "	ChannelConductance = Lems_exposure_g;\n"); ccde += tmps;
 					}
+					// TODO add support for conductivity
 					ccde   += "	}\n";
 				}
 				else{
@@ -3743,13 +4762,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 								std::size_t Index_Gate_Scale    = AppendConstant(rate.formula.scale,    for_what + " Scale");
 							
 								if(rate.type == IonChannel::Rate::EXPONENTIAL){
-									sprintf(tmps, "local_constants[%zd] * exp( (Vcomp - local_constants[%zd] ) / local_constants[%zd] );\n", Index_Gate_BaseRate, Index_Gate_Midpoint, Index_Gate_Scale); rate_code += tmps;
+									sprintf(tmps, "local_constants[%zd] * expf( (Vcomp - local_constants[%zd] ) / local_constants[%zd] );\n", Index_Gate_BaseRate, Index_Gate_Midpoint, Index_Gate_Scale); rate_code += tmps;
 								}
 								else if(rate.type == IonChannel::Rate::EXPLINEAR){
-									sprintf(tmps, "local_constants[%zd] * ( ( Vcomp == local_constants[%zd]) ? 1 : ( ( (Vcomp - local_constants[%zd] ) / local_constants[%zd] )  / (1 - exp( - (Vcomp - local_constants[%zd] ) / local_constants[%zd] ) ) ) );\n", Index_Gate_BaseRate, Index_Gate_Midpoint, Index_Gate_Midpoint, Index_Gate_Scale, Index_Gate_Midpoint, Index_Gate_Scale); rate_code += tmps;
+									sprintf(tmps, "local_constants[%zd] * ( ( Vcomp == local_constants[%zd]) ? 1 : ( ( (Vcomp - local_constants[%zd] ) / local_constants[%zd] )  / (1 - expf( - (Vcomp - local_constants[%zd] ) / local_constants[%zd] ) ) ) );\n", Index_Gate_BaseRate, Index_Gate_Midpoint, Index_Gate_Midpoint, Index_Gate_Scale, Index_Gate_Midpoint, Index_Gate_Scale); rate_code += tmps;
 								}
 								else if(rate.type == IonChannel::Rate::SIGMOID){
-									sprintf(tmps, "local_constants[%zd] / (1 + exp( (local_constants[%zd] - Vcomp ) / local_constants[%zd] ) );\n", Index_Gate_BaseRate, Index_Gate_Midpoint, Index_Gate_Scale); rate_code += tmps;
+									sprintf(tmps, "local_constants[%zd] / (1 + expf( (local_constants[%zd] - Vcomp ) / local_constants[%zd] ) );\n", Index_Gate_BaseRate, Index_Gate_Midpoint, Index_Gate_Scale); rate_code += tmps;
 								}
 							}
 							else if( rate.type == IonChannel::Rate::FIXED ){
@@ -3819,7 +4838,18 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							sprintf(tmps, "	local_stateNext[%ld] = inf;\n", Index_Q); tauinf_code += tab+tmps;
 							tauinf_code +=   tab+"}else{\n";
 							//sprintf(tmps, "	local_stateNext[%zd] = %s + dt * ( alpha * ( 1 - %s ) - beta * (%s) ) * q10 %s;\n", Index_Q, fana, fana, fana, Rate_suffix.c_str() ); ccde += tab+tmps;
-							sprintf(tmps, "	local_stateNext[%ld] = local_state[%ld] + dt * ( ( inf - local_state[%ld] ) / tau ) * q10 %s;\n", Index_Q, Index_Q, Index_Q, TauInf_suffix.c_str() ); tauinf_code += tab+tmps;
+							// sprintf(tmps, "	local_stateNext[%ld] = local_state[%ld] + dt * ( ( inf - local_state[%ld] ) / tau ) * q10 %s;\n", Index_Q, Index_Q, Index_Q, TauInf_suffix.c_str() ); tauinf_code += tab+tmps;
+							
+							// how many tau's does the timestep advance by?
+							sprintf(tmps, "	float tau_factor = (( dt * q10)/ tau) %s;\n", TauInf_suffix.c_str() ); tauinf_code += tab+tmps;
+							// blend current and inf values, bu a factor decaying from 1(now) to 0 (steady state)
+							// tauinf_code +="	float blend_factor = 1/( 1 + tau_factor );\n"; // Bwd Euler (assuming dynamics to be fixed during dt)
+							tauinf_code +="	float blend_factor = expf( -tau_factor );\n"; // Exp Euler (assuming dynamics to be fixed during dt). A.k.a. "cnexp"
+							sprintf(tmps, "	local_stateNext[%ld] = (blend_factor) * local_state[%ld] + (1-blend_factor) * inf;\n", Index_Q, Index_Q ); tauinf_code += tab+tmps;
+							// TODO in the case of nan's, prefer clipping to 0 or to 1 ?
+							sprintf(tmps, "	if(!( local_stateNext[%ld] > (float)(1e-6) )) local_stateNext[%ld] = 1e-6;\n", Index_Q, Index_Q ); tauinf_code += tab+tmps;
+							sprintf(tmps, "	if(!( local_stateNext[%ld] < (float)(1-1e-6) )) local_stateNext[%ld] = 1-1e-6;\n", Index_Q, Index_Q ); tauinf_code += tab+tmps;
+							
 							tauinf_code +=   "		}\n";
 							
 							return tauinf_code;
@@ -4287,9 +5317,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					
 					sprintf(tmps, "		ChannelOpenFraction = conductance_scaling %s;\n", factor_string.c_str()); ccde += tmps;
 				}
+				// NB: Assume that ∂/∂V ChannelOpenFraction = 0 and take the associated risk of instability. Improve LATER when the need arises, because re-evaluating the whole ion channel for a delta is too much effort atm.
 				
 				// now determine channel distribution current (also the point to add LEMS channel distributions LATER)
 				ccde   += "	float I_chan = NAN;\n";
+				ccde   += "	float channel_conductance = NAN;\n";
 				// a second pass through channel distributions, to determine what will be done with channel fopen exposure (GHK1 does something... different that could be seen as variable Gbase)
 				if( provides_current ){
 					if( is_population ){
@@ -4300,6 +5332,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							Scales<Conductance>::native
 							.to(Scales<Conductance>::native)
 						);
+						// FIXME ChannelConductance is only set if the ion channel is a omponent ... make sure that's right !
 						sprintf(tmps, "		float gTotal = (Population_Count * ChannelConductance * ChannelOpenFraction)%s; //total conductance\n", gPop_suffix.c_str()); ccde += tmps;
 						
 						const std::string Ichan_suffix = Convert::Suffix(
@@ -4307,6 +5340,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							.to(Scales<Current>::native)
 						);
 						sprintf(tmps, "		I_chan = ( gTotal * (Erev - Vcomp) )%s; //total current\n", Ichan_suffix.c_str()); ccde += tmps;
+						ccde +=  "	`channel_conductance = gTotal;\n";
 					}
 					else{
 						printf("internal error: uses what sort of current?\n");
@@ -4316,6 +5350,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				else if( provides_density ){
 					
 					ccde   += "	float iDensity = NAN;\n";
+					ccde   += "	float gDensity = NAN;\n";
 					
 					if( inst.type == ChannelDistribution::GHK ){
 						double R = 8.3144621; // ( J / ( K * mol ) )
@@ -4325,7 +5360,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						std::size_t Index_Channel_Permeability = AppendConstant( inst.permeability,  for_what + " Permeability " );
 						sprintf(tmps, "	float permeability = local_constants[%zd];\n", Index_Channel_Permeability); ccde += tmps;
 						
-						auto SI_To_InvVolt_suffix = Convert::Suffix( Scales<Dimensionless>::native.to( (Scales<Voltage>::native)^(-1) ) ); // SI units to Erev
+						auto SI_To_InvVolt_suffix = Convert::Suffix( Scales<Dimensionless>::native.to( (Scales<Voltage>::native)^(-1) ) ); // dimensionless Volt units to Erev
 					
 						sprintf(tmps, "	float K = ( ( %.17g * %.17g) / (%.17g * temperature) )%s;\n", zCa, F, R, SI_To_InvVolt_suffix.c_str()); ccde += tmps;
 						
@@ -4335,10 +5370,33 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							( Scales<Permeability>::native * Scales<Concentration>::native ) 
 							.to( Scales<Current>::native / (microns^2) )
 						);
+						const std::string gDensity_suffix = Convert::Suffix(
+							( (Scales<Current>::native / (microns^2)) / Scales<Voltage>::native ) 
+							.to( Scales<Conductance>::native / (microns^2) )
+						);// through explicit differentiation
+						auto EvalJ = [&tmps, &iDensity_suffix, zCa, F ]( std::string &ccde ){
+							sprintf(tmps, "		iDensity = (-1 * permeability * ChannelOpenFraction * %.17g * %.17g * K * Vcomp * ( Ca_concentration - (Ca_concentration_extra * expKv) ) / (1 - expKv))%s;\n", zCa, F, iDensity_suffix.c_str()); ccde += tmps;
+						};
+						
 						ccde   += "	if( Ca_concentration_extra > 0 ){\n";
-						sprintf(tmps, "		iDensity = (-1 * permeability * ChannelOpenFraction * %.17g * %.17g * K * Vcomp * ( Ca_concentration - (Ca_concentration_extra * expKv) ) / (1 - expKv))%s;\n", zCa, F, iDensity_suffix.c_str()); ccde += tmps;
+						
+						// TODO make the delta V some sort of named constant
+						ccde += "	const float delta_volt = ((float)(1e-6 "+Convert::Suffix(Scales<Dimensionless>::native.to( Scales<Voltage>::native ))+"));\n"; 
+						ccde += "	float iDensity_at_plus_1uv = NAN;\n";
+						ccde += "	{\n";
+						ccde += "	float V_tmp = Vcomp; float Vcomp = V_tmp + delta_volt;\n";
+						EvalJ( ccde );
+						ccde += "	iDensity_at_plus_1uv = iDensity;\n";
+						ccde += "	}\n";
+						EvalJ( ccde );
+						ccde += "	\n";
+						
+						// differentiate iDensity by sampling a microvolt apart, differentiate properly LATER if the need arises
+						ccde   += "		gDensity = ( ( iDensity_at_plus_1uv - iDensity ) / (delta_volt) )"+gDensity_suffix+";\n"; // conductivity * ( volts / volts ) to ( current / sq.um )
+						
 						ccde   += "	}else{\n";
 						ccde   += "		iDensity = 0;\n";
+						ccde   += "		gDensity = 0;\n";
 						ccde   += "	}\n";
 					}
 					else if( uses_conductivity ){
@@ -4346,6 +5404,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						const std::string iDensity_suffix = Convert::Suffix(
 							( Scales<Voltage>::native * Scales<Conductivity>::native ) 
 							.to( Scales<Current>::native / (microns^2) )
+						);
+						const std::string gDensity_suffix = Convert::Suffix(
+							( Scales<Conductivity>::native ) 
+							.to( Scales<Conductance>::native / (microns^2) )
 						);
 						
 						if( 
@@ -4363,6 +5425,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						sprintf(tmps, "		float Gscaled  = Gbase * ChannelOpenFraction;\n"); ccde += tmps;
 						
 						// does it modify Gbase somehow?
+						// NB: in the case of GHK2, popen is voltage actually
 						if( inst.type == ChannelDistribution::GHK2 ){
 							const std::string UnitToVolt_suffix = Convert::Suffix(
 								Scales<Dimensionless>::native 
@@ -4370,24 +5433,41 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							);
 								// modify Gbase
 							ccde   += " float tmp = ( 25 * temperature ) / ( 293.15 * 2 ); // unitless kelvins\n";
-							sprintf(tmps, "	float V = Vcomp * ( 1000 / (1%s) ); // unitless millivolts\n", UnitToVolt_suffix.c_str() ); ccde += tmps;
 							
-							ccde   += " float pOpen = NAN;\n";
-							ccde   += "	if( Vcomp == 0 ){\n";
-							ccde   += "		pOpen = tmp * ( 1 - ( Ca_concentration / Ca_concentration_extra ) ) * (1e-3 "+UnitToVolt_suffix+");\n";
-							ccde   += "	}else{\n";
-							ccde   += "		pOpen = tmp * ( 1 - ( ( Ca_concentration / Ca_concentration_extra ) * expf( V / tmp ) ) ) * ( ( V / tmp ) / ( exp( V / tmp ) - 1) ) * (1e-3"+UnitToVolt_suffix+");\n";
-							ccde   += "	}\n";
+							auto EvalPopen = [&tmps, &UnitToVolt_suffix ]( std::string &ccde ){
+								sprintf(tmps, "	float V = Vcomp * ( 1000 / (1%s) ); // unitless millivolts\n", UnitToVolt_suffix.c_str() ); ccde += tmps;
+								ccde   += " float pOpen = NAN;\n";
+								ccde   += "	if( Vcomp == 0 ){\n"; // TODO perhaps add tolerance around some epsilon
+								ccde   += "		pOpen = tmp * ( 1 - ( Ca_concentration / Ca_concentration_extra ) ) * (1e-3 "+UnitToVolt_suffix+");\n";
+								ccde   += "	}else{\n";
+								ccde   += "		pOpen = tmp * ( 1 - ( ( Ca_concentration / Ca_concentration_extra ) * expf( V / tmp ) ) ) * ( ( V / tmp ) / ( expf( V / tmp ) - 1) ) * (1e-3"+UnitToVolt_suffix+");\n";
+								ccde   += "	}\n";
+								
+								ccde   += "	if( Ca_concentration_extra == 0 ){\n";
+								ccde   += "		pOpen = 0;\n";
+								ccde   += "	}\n";
+							};
 							
-							ccde   += "	if( Ca_concentration_extra == 0 ){\n";
-							ccde   += "		pOpen = 0;\n";
-							ccde   += "	}\n";
+							// TODO make the delta V some sort of named constant
+							ccde += "	const float delta_volt = ((float)(1e-6 "+Convert::Suffix(Scales<Dimensionless>::native.to( Scales<Voltage>::native ))+"));\n"; 
+							ccde += "	float pOpen_at_plus_1uv = NAN;\n";
+							ccde += "	{\n";
+							ccde += "	float V_tmp = Vcomp; float Vcomp = V_tmp + delta_volt;\n";
+							EvalPopen( ccde );
+							ccde += "	pOpen_at_plus_1uv = pOpen;\n";
+							ccde += "	}\n";
+							EvalPopen( ccde );
+							ccde += "	\n";
 							
+							// differentiate pOpen by sampling a microvolt apart, differentiate properly LATER if the need arises
 							ccde   += "	iDensity = (Gscaled  * pOpen)"+iDensity_suffix+";\n";
+							ccde   += "	gDensity = Gscaled * ( ( pOpen_at_plus_1uv - pOpen ) / (delta_volt) )"+gDensity_suffix+";\n"; // conductivity * ( volts / volts ) to ( current / sq.um )
 							// ccde   += "	printf(\"popen %f\\n\", pOpen);\n";
+							// assuming Gscaled is constant wrt Vcomp
 						}
 						else{
-							sprintf(tmps, "		iDensity = Gscaled * (Erev - Vcomp)%s;\n", iDensity_suffix.c_str()); ccde += tmps;
+							sprintf(tmps, "	iDensity = Gscaled * (Erev - Vcomp)%s;\n", iDensity_suffix.c_str()); ccde += tmps;
+							ccde   += "	gDensity = (Gscaled)"+gDensity_suffix+";\n";
 						}
 						
 					}
@@ -4404,7 +5484,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						)
 						.to( Scales<Current>::native )
 					);
-					sprintf(tmps, "	I_chan = iDensity * Acomp%s;\n", Ichan_suffix.c_str()); ccde += tmps;
+					const std::string Gchan_suffix = Convert::Suffix(
+						(	
+							( Scales<Conductance>::native / (microns^2) ) 
+							* (microns^2)
+						)
+						.to( Scales<Conductance>::native )
+					);
+					sprintf(tmps, "	I_chan = (iDensity * Acomp)%s;\n", Ichan_suffix.c_str()); ccde += tmps;
+					sprintf(tmps, "	channel_conductance = (gDensity * Acomp)%s;\n", Gchan_suffix.c_str()); ccde += tmps;
 				}
 				else{
 					// component populations MUCH LATER ?
@@ -4415,11 +5503,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// contribute to compartment current influx
 				sprintf(tmps, "		I_channels_total += I_chan;\n"); ccde += tmps;
 				
+				// sprintf(tmps, "		assert(isfinite(channel_conductance));\n"); ccde += tmps; should be done some time...
+				sprintf(tmps, "		G_channels_total += channel_conductance;\n"); ccde += tmps;
+				
 				// also contribute to ion channels
 				Int species = chan.species; 
 				if( comp_def.ions.count(species) > 0 ){
 					sprintf(tmps, "		I_ion_%ld += I_chan;\n", species); ccde += tmps;
 				}
+				// TODO g_ion as well, to improve integration stability
 				
 				ccde   += "\n";
 				
@@ -4432,6 +5524,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// add synapses
 			ccde += "	// Current from synapses\n";
 			sprintf(tmps, "	float I_synapses_total = 0;\n"); ccde += tmps;
+			sprintf(tmps, "	float G_synapses_total = 0;\n"); ccde += tmps; // FIXME
 			
 			for(Int id_id : comp_def.synaptic_component_types.toArray()){
 				if( !ImplementSynapseType( AppendSingle, AppendMulti, DescribeLemsInline, random_call_counter, for_what + " Synapse type "+std::to_string(id_id), tab, id_id, comp_impl.synapse, ccde ) ) return false;
@@ -4440,6 +5533,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// add inputs
 			ccde += "	// Current from inputs\n";
 			sprintf(tmps, "	float I_input_total = 0;\n"); ccde += tmps;
+			sprintf(tmps, "	float G_input_total = 0;\n"); ccde += tmps;
+			
 				
 			// generate tables and code for each input type
 			for(Int id_id : comp_def.input_types.toArray()){
@@ -4505,9 +5600,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						
 						sprintf(tmps, "float shellThickness = local_constants[%zd];\n", distimpl.Index_Shellthickness_Or_RhoFactor); ionpool_code += tab+tmps;
 						// TODO check dimensions & units here !
-						sprintf(tmps, "float effectiveRadius = sqrt(Acomp / (4 * M_PI));\n" ); ionpool_code += tab+tmps;
+						sprintf(tmps, "float effectiveRadius = sqrt(Acomp / (float)(4 * M_PI));\n" ); ionpool_code += tab+tmps;
 						sprintf(tmps, "float innerRadius = effectiveRadius - shellThickness;\n" ); ionpool_code += tab+tmps;
-						sprintf(tmps, "float shellVolume = (4 * (effectiveRadius * effectiveRadius * effectiveRadius) * M_PI / 3) - (4 * (innerRadius * innerRadius * innerRadius) * M_PI / 3);\n"); ionpool_code += tab+tmps;
+						sprintf(tmps, "float shellVolume = ((effectiveRadius * effectiveRadius * effectiveRadius) * (float)(4 * M_PI / 3)) - ((innerRadius * innerRadius * innerRadius) * (float)(4 * M_PI / 3));\n"); ionpool_code += tab+tmps;
 						sprintf(tmps, "influx_rate = ( iCa / (ion_charge * Faraday * shellVolume) )%s;\n", CurrentToConcRate_suffix.c_str()); ionpool_code += tab+tmps;
 						// if( config.debug ){
 						// 	ionpool_code += "		printf(\"effectiveRadius %e \\ninnerRadius %e\\nshellVolume %e\\n\", effectiveRadius, innerRadius, shellVolume);\n";
@@ -4555,21 +5650,34 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 			
 			// finally, integrate currents into voltage
+			// TODO the cable equation handling should be broken off since it involves other compartments, therefore it is not really internal (important for compartment as work itam)
 			sprintf(tmps, "	I_internal = I_channels_total + I_input_total + I_synapses_total;\n"); ccde += tmps;
+			sprintf(tmps, "	G_internal = G_channels_total + G_input_total + G_synapses_total;\n"); ccde += tmps;
+			
+			// TODO compute axial conductance regardless of cable solver
+			
+			// store diagonal of cable equation matrix
+			std::string InvRC_suffix = Convert::Suffix( ( (Scales<Conductance>::native / Scales<Capacitance>::native) ).to( Scales<Frequency>::native ) );
+			if( cell_cable_solver == SimulatorConfig::CABLE_BWD_EULER ){
+				sprintf(tmps, "		PerComp_InvRC_Diagonal[comp] = 1*(G_internal / C[comp] )%s + PerComp_InvRC_Axial[comp];\n", InvRC_suffix.c_str()); ccde += tmps;
+			}
+			ccde += "\n";
+			
 			
 			ccde += "	if(initial_state){\n";
 			ccde += "		// initialize\n";
 			sprintf(tmps, "		V_next[comp] = V[comp];\n"); ccde += tmps;
 			ccde += "	}else{\n";
-			// if(config.debug){
-			// ccde += "		printf(\"axial\\tchannel\\tinput\\tsyn\\n\");\n";
-			// if( uses_Iaxial ){
-			// 	sprintf(tmps, "		printf(\"iax %%g\\t%%g\\t%%g\\t%%g\\n\", I_axial, I_channels_total, I_input_total, I_synapses_total);\n"); ccde += tmps;
-			// }
-			// else{
-			// 	sprintf(tmps, "		printf(\"noiax %%g\\t%%g\\t%%g\\n\", I_channels_total, I_input_total, I_synapses_total);\n"); ccde += tmps;
-			// }
-			// }
+			if(config.debug){
+			ccde += "		printf(\"axial\\tchannel\\tinput\\tsyn\\n\");\n";
+			if( uses_Iaxial ){
+				sprintf(tmps, "		printf(\"iax %%g\\t%%g\\t%%g\\t%%g\\n\", I_axial, I_channels_total, I_input_total, I_synapses_total);\n"); ccde += tmps;
+			}
+			else{
+				sprintf(tmps, "		printf(\"noiax %%g\\t%%g\\t%%g\\n\", I_channels_total, I_input_total, I_synapses_total);\n"); ccde += tmps;
+				sprintf(tmps, "		printf(\"nogax %%g -- %%g\\t%%g\\t%%g\\n\", PerComp_InvRC_Diagonal[comp], G_channels_total, G_input_total, G_synapses_total);\n"); ccde += tmps;
+			}
+			}
 			const std::string Vnext_suffix = Convert::Suffix(
 				(Scales<Time>::native * Scales<Current>::native / Scales<Capacitance>::native)
 				.to(Scales<Voltage>::native)
@@ -4580,14 +5688,18 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				sprintf(tmps, "		V_next[comp] = V[comp] + ( dt * ( I_internal + I_axial ) / C[comp] )%s;\n", Vnext_suffix.c_str()); ccde += tmps;
 			}
 			else{
-				sprintf(tmps, "		V_next[comp] = V[comp] + ( dt * ( I_internal ) / C[comp] )%s;\n", Vnext_suffix.c_str()); ccde += tmps;
-				// LATER less crude approaches to handling internal current, for now just be thankful it's stable at all
+				// sprintf(tmps, "	V_next[comp] = V[comp] + ( dt * ( I_internal ) / C[comp] )%s;\n", Vnext_suffix.c_str()); ccde += tmps;
+				// TODO explain the correction by showing how linearisation works
+				const std::string CorrectI_suffix = Convert::Suffix(
+					(Scales<Voltage>::native * Scales<Conductance>::native)
+					.to(Scales<Current>::native)
+				);
+				sprintf(tmps, "		V_next[comp] = V[comp] + ( dt * ( I_internal + ( (V[comp] * G_internal)%s ) ) / C[comp] )%s;\n", CorrectI_suffix.c_str(), Vnext_suffix.c_str()); ccde += tmps;
 				// TODO: NEURON runs all currents twice to approximate dI/dV;
 				// perhaps do something like that and add the resulting diagonal to RC constant of compartments
 			}
 			
 			ccde += "	}";
-			ccde += "\n";
 			
 			// ccde += tab+"}\n";
 			
@@ -4608,19 +5720,16 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			if( cell_cable_solver == SimulatorConfig::CABLE_BWD_EULER ){
 				cabl_impl.Index_BwdEuler_OrderList   = AppendMulti.ConstI64("Bwd Euler Elimination Order");
 				cabl_impl.Index_BwdEuler_ParentList = AppendMulti.ConstI64("Bwd Euler Elimination Parent");
+				// work diagnonal and inv rc constant have already been ellocated and exposed
 				
-				cabl_impl.Index_BwdEuler_InvRCDiagonal = AppendMulti.Constant("Bwd Euler Diagonal 1/RC Constant");
-				cabl_impl.Index_BwdEuler_WorkDiagonal = AppendMulti.StateVariable("Bwd Euler Diagonal Scratchpad");
-				
-				code += tab+"{\n";			
+				// NB: if initial_state, then Vcomp_next := Vcomp through compartment's internal dynamics
+				code += tab+"if(!initial_state){\n";
 				// code += tab+"	printf(\"diagonal!! \\n\");\n";
 				
 				sprintf(tmps, "	const long long Compartments = cell_state_table_f32_sizes[%zd]; //same for all parallel arrays\n", cabl_impl.Index_BwdEuler_WorkDiagonal ); code += tmps;
 				sprintf(tmps, "	const Table_I64 Order  = cell_const_table_i64_arrays[%zd];\n", cabl_impl.Index_BwdEuler_OrderList); code += tmps;
 				sprintf(tmps, "	const Table_I64 Parent = cell_const_table_i64_arrays[%zd];\n", cabl_impl.Index_BwdEuler_ParentList); code += tmps;
-				sprintf(tmps, "	const Table_F32 DperT  = cell_const_table_f32_arrays[%zd];\n", cabl_impl.Index_BwdEuler_InvRCDiagonal); code += tmps;
-				sprintf(tmps, "	Table_F32 D = cell_state_table_f32_arrays[%zd];\n", cabl_impl.Index_BwdEuler_WorkDiagonal); code += tmps;
-				
+				code += "	Table_F32 D = PerComp_InvRC_Diagonal;";
 				// code += tab+"	printf(\"diagonal!!! \\n\");\n";	
 				
 				// diagonal = [ 1 - (1./ Capacitances[i]) * Y[i][i] * dt for i in range(Cells) ]
@@ -4632,7 +5741,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					( Scales<Time>::native / ( Scales<Resistance>::native * Scales<Capacitance>::native ) ) // to unitless
 				);
 				code += tab+"for(long long comp_seq = 0; comp_seq < Compartments; comp_seq++){\n";
-				sprintf(tmps, "		D[comp_seq] = 1 + DperT[comp_seq] * dt %s;\n", Rate_suffix.c_str() ); code += tmps;
+				// sprintf(tmps, "		D[comp_seq] = 1 + DperT[comp_seq] * dt %s;\n", Rate_suffix.c_str() ); code += tmps;
+				// sprintf(tmps, "		D[comp_seq] = 1 + PerComp_InvRC_Axial[comp_seq] * dt %s;\n", Rate_suffix.c_str() ); code += tmps;
+				
+				// convert the collected diagonal 1/RC to the unitless diagonal of the timestep matrix 
+				sprintf(tmps, "		D[comp_seq] = 1 + D[comp_seq] * dt %s;\n", Rate_suffix.c_str() ); code += tmps;
 				code += tab+"}\n";
 				
 				// lo_diagonal = [ -(1./ Capacitances[j]) * Y[i][j] * dt  for i in range(Cells) for j in (lastbranch[i],) ]
@@ -4708,7 +5821,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// lastly, add post-integration event handlers
 		auto AllocateCreatePostIntegrationCode = [ &config, &ImplementSpikeSender, &cell_seq ](
 			const SignatureAppender_Table &AppendMulti,
-			size_t seg_seq,
+			size_t comp_seq,
 			const std::string &for_what,
 			const CellInternalSignature::PhysicalCell::CompartmentDefinition &comp_def,
 			CellInternalSignature::PhysicalCell::CompartmentImplementation &comp_impl,
@@ -4720,9 +5833,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				// check for Vth here too
 				if( !std::isfinite(comp_def.Vt) ){
-					// TODO more descriptive, with names, proper ids etc.
-					printf("error: Cell type %zd segment %zd has undefined Vthreshold, cannot use as spike source!\n", cell_seq, seg_seq);
-					// TODO put check higher up
+					// TODO more descriptive, with names, proper ids etc. mapping to segment especially
+					printf("error: Cell type %zd compartment %zd has undefined Vthreshold, cannot use as spike source!\n", cell_seq, comp_seq);
+					// TODO put check higher up, in NeuroML parsing (but will it hurt parsing efficiency? probably not?)
 					return false;
 				}
 				
@@ -4734,7 +5847,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				) ) return false;
 			}
 			
-			
 			// done
 			return true;
 		};
@@ -4742,22 +5854,21 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		auto &compartment_grouping = pig.compartment_grouping = CellInternalSignature::CompartmentGrouping::AUTO;
 		if( compartment_grouping == CellInternalSignature::CompartmentGrouping::AUTO ){
 			// TODO more sophisticated analysis, cmd line/config options, etc etc.
-			if( segment_compartments.size() <= 10 ) compartment_grouping = CellInternalSignature::CompartmentGrouping::FLAT;
+			if( number_of_compartments <= 10 ) compartment_grouping = CellInternalSignature::CompartmentGrouping::FLAT;
 			else compartment_grouping = CellInternalSignature::CompartmentGrouping::GROUPED;
 		}
 		
 		// when compartments are fully flattened
 		if( compartment_grouping == CellInternalSignature::CompartmentGrouping::FLAT ){
-			
 			sig.code += ExposeSubitemContext("local", "global", "\t");
 		
 			// add integration of dynamics
-			for( size_t seg_seq = 0; seg_seq < segment_compartments.size(); seg_seq++ ){
-				sprintf(tmps, "	// Internal Code for segment %zd\n", seg_seq); sig.code += tmps;
+			for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+				sprintf(tmps, "	// Internal Code for compartment %d\n", (int)comp_seq); sig.code += tmps;
 				
-				sprintf(tmps, "	{ int comp = %zd;\n", seg_seq); sig.code += tmps;
+				sprintf(tmps, "	{ int comp = %d;\n", (int)comp_seq); sig.code += tmps;
 				
-				std::string for_what = "Seg "+ itos(seg_seq);		
+				std::string for_what = "Comp "+ itos(comp_seq);
 				
 				std::string intracomp_code;
 				if( !ImplementInternalCompartmentIntegration(
@@ -4765,13 +5876,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					for_what, tab,
 					true,
 					cell_cable_solver, bioph,
-					seg_definitions[seg_seq], pig.seg_implementations[seg_seq], sig.cell_wig.random_call_counter,
+					comp_definitions[comp_seq], pig.comp_implementations[comp_seq], sig.cell_wig.random_call_counter,
 					intracomp_code
 				) ) return false;
 				sig.code += intracomp_code;
 				sig.code += "}";
 				
-				sprintf(tmps, "	// Internal Code for segment %zd end\n", seg_seq); sig.code += tmps;
+				sprintf(tmps, "	// Internal Code for compartment %d end\n", (int)comp_seq); sig.code += tmps;
 			}
 			
 			std::string cable_solver_code;
@@ -4781,17 +5892,17 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			) ) return false;
 			sig.code += cable_solver_code;
 			
-			for( size_t seg_seq = 0; seg_seq < segment_compartments.size(); seg_seq++ ){
-				sprintf(tmps, "	// PostUpdate Code for segment %zd\n", seg_seq); sig.code += tmps;
-				sprintf(tmps, "	{ int comp = %zd;\n", seg_seq); sig.code += tmps;
+			for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+				sprintf(tmps, "	// PostUpdate Code for compartment %d\n", (int)comp_seq); sig.code += tmps;
+				sprintf(tmps, "	{ int comp = %d;\n", (int)comp_seq); sig.code += tmps;
 				
-				std::string for_what = "Seg "+ itos(seg_seq);
+				std::string for_what = "Comp "+ itos(comp_seq);
 				
 				std::string post_code;
-				if( !AllocateCreatePostIntegrationCode( AppendMulti_CellScope, seg_seq, for_what, seg_definitions[seg_seq], pig.seg_implementations[seg_seq], post_code ) ) return false;
+				if( !AllocateCreatePostIntegrationCode( AppendMulti_CellScope, comp_seq, for_what, comp_definitions[comp_seq], pig.comp_implementations[comp_seq], post_code ) ) return false;
 				sig.code += post_code;
 				
-				sprintf(tmps, "\t}\n\t// PostUpdate Code for segment %zd end\n", seg_seq); sig.code += tmps;
+				sprintf(tmps, "\t}\n\t// PostUpdate Code for compartment %d end\n", (int)comp_seq); sig.code += tmps;
 			}
 			
 		}
@@ -4814,7 +5925,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// 	due to the pitfalls described above
 			
 			// isolate/generate the per-compartment code block, to group identical ones
-			auto AllocateCreateFullSegmentCode = [
+			auto AllocateCreateFullCompartmentCode = [
 				&ImplementInternalCompartmentIntegration, &AllocateCreatePostIntegrationCode,
 				&model, &cell_cable_solver, &bioph
 			](
@@ -4849,19 +5960,18 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			gp.distinct_compartment_types.clear();
 			
 			std::unordered_map< std::string, Int > compartment_code_hash_table;
-			for( size_t seg_seq = 0; seg_seq < segment_compartments.size(); seg_seq++ ){
-				
-				// printf("seg %zd\n", seg_seq);
+			for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+				// printf("comp %zd\n", comp_seq);
 				// useful dummies
 				CellInternalSignature::WorkItemDataSignature wig;
 				CellInternalSignature::CompartmentImplementation comp_impl;
 				// only this part matters
 				std::string intracomp_code, post_code;
 				
-				if(!( AllocateCreateFullSegmentCode(
-					seg_seq,
+				if(!( AllocateCreateFullCompartmentCode(
+					comp_seq,
 					"", tab,
-					seg_definitions[seg_seq],
+					comp_definitions[comp_seq],
 					comp_impl,
 					wig,
 					intracomp_code, post_code
@@ -4870,21 +5980,23 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				auto key = intracomp_code + post_code;
 				
 				if( compartment_code_hash_table.count(key) > 0 ){
-					gp.distinct_compartment_types.at( compartment_code_hash_table.at(key) ).Addd(seg_seq);
+					gp.distinct_compartment_types.at( compartment_code_hash_table.at(key) ).Addd(comp_seq);
 				}
 				else{
 					Int new_idx = (Int) gp.distinct_compartment_types.size();
 					IdListRle l;
-					l.Addd(seg_seq);
+					l.Addd(comp_seq);
 					gp.distinct_compartment_types.push_back(l);
 					compartment_code_hash_table[key] = new_idx;
 				}
-				// printf("seg %zd end\n", seg_seq);
+				// printf("comp %zd end\n", comp_seq);
 			}
 			
+			if(config.verbose){
 			printf("Compartment types:\n");
 			for( auto complist : gp.distinct_compartment_types ){
 				printf( "\t%s\n", complist.Stringify().c_str() );
+			}
 			}
 
 			// allocate the tables
@@ -4957,8 +6069,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			
 			// keep tne necessary offsets for deduplication (localization) of each compartment's internals
-			
-			int nComps = (int)pig.seg_implementations.size();
+			// NB: nComps == number_of_compartments here, but it could break off in case only a part of the cell is being handled this way...
+			int nComps = (int)pig.comp_implementations.size();
 			gp.r_off   .resize( nComps );
 			gp.c_off   .resize( nComps );
 			gp.s_off   .resize( nComps );
@@ -4972,14 +6084,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				gp.Index_CompList[ comptype_seq ] = AppendMulti_CellScope.ConstI64("List of Type "+itos(comptype_seq)+" Compartments");
 				
 				bool first_compartment = true;
-				for( size_t seg_seq : gp.distinct_compartment_types[comptype_seq].toArray() ){
-					
+				for( int comp_seq : gp.distinct_compartment_types[comptype_seq].toArray() ){
 					// first allocate the wigs and full codes for every compartment
 					// superfluous codes may be dropped for similar compartments
 					
-					// auto &wig = compartment_wigs[seg_seq];
-					
-					std::string for_what = "Seg "+ itos(seg_seq);
+					std::string for_what = "Comp "+ itos(comp_seq);
 					
 					std::string intracomp_code, post_code;
 					
@@ -4999,12 +6108,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						// could also overwrite, beware of operations lacking overwrite semantics like map::insert !
 						CellInternalSignature::PhysicalCell::CompartmentImplementation faux_comp_impl;
 						
-						if(!( AllocateCreateFullSegmentCode(
-							seg_seq,
+						std::string for_what = "Comp Type "+ itos(comptype_seq); // this is the code that will be used within the per compartment type loop
+						
+						if(!( AllocateCreateFullCompartmentCode(
+							comp_seq,
 							for_what, tab,
-							seg_definitions[seg_seq],
-							// pig.seg_implementations[seg_seq],
-							faux_comp_impl,
+							comp_definitions[comp_seq],
+							faux_comp_impl, // pig.comp_implementations[comp_seq],
 							faux_wig,
 							intracomp_code, post_code
 						) )) return false;
@@ -5018,27 +6128,25 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					
 					auto &cell_wig = sig.cell_wig;
 					
-					gp.r_off   [seg_seq] = ( cell_wig.random_call_counter   );
-					gp.c_off   [seg_seq] = ( cell_wig.constants       .size() );
-					gp.s_off   [seg_seq] = ( cell_wig.state           .size() );
-					gp.cf32_off[seg_seq] = ( cell_wig.tables_const_f32.size() );
-					gp.sf32_off[seg_seq] = ( cell_wig.tables_state_f32.size() );
-					gp.ci64_off[seg_seq] = ( cell_wig.tables_const_i64.size() );
-					gp.si64_off[seg_seq] = ( cell_wig.tables_state_i64.size() );
+					gp.r_off   [comp_seq] = ( cell_wig.random_call_counter   );
+					gp.c_off   [comp_seq] = ( cell_wig.constants       .size() );
+					gp.s_off   [comp_seq] = ( cell_wig.state           .size() );
+					gp.cf32_off[comp_seq] = ( cell_wig.tables_const_f32.size() );
+					gp.sf32_off[comp_seq] = ( cell_wig.tables_state_f32.size() );
+					gp.ci64_off[comp_seq] = ( cell_wig.tables_const_i64.size() );
+					gp.si64_off[comp_seq] = ( cell_wig.tables_state_i64.size() );
 					
 					// could decouple code generation from data signature allocation, for efficiency LATER
 					// In theory, a clever enough compiler could flatten the unnecessary code generation out of existence,
 					// since it has no effect (other than allocating memory)
-					if(!( AllocateCreateFullSegmentCode(
-						seg_seq,
+					if(!( AllocateCreateFullCompartmentCode(
+						comp_seq,
 						for_what, tab,
-						seg_definitions[seg_seq],
-						pig.seg_implementations[seg_seq],
+						comp_definitions[comp_seq],
+						pig.comp_implementations[comp_seq],
 						cell_wig,
 						intracomp_code, post_code
 					) )) return false;
-					
-					// cell_wig.Append( compartment_wigs[seg_seq] );
 					
 					first_compartment = false;
 				}
@@ -5278,7 +6386,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// add synapses
 				ccde += "	// Current from synapses\n";
 				ccde += "	float I_synapses_total = 0;\n";
-				for( const auto &keyval : synaptic_component_types_per_cell[cell_seq] ){
+				ccde += "	float G_synapses_total = 0;\n";
+				for( const auto &keyval : synaptic_component_types_per_cell_per_compartment[cell_seq] ){
 					for( const auto &id_id : keyval.second.toArray() ){
 						if( !ImplementSynapseType( AppendSingle, AppendMulti, DescribeLemsInline, cell_wig.random_call_counter, for_what + " Synapse type "+std::to_string(id_id), tab, id_id, aig.synapse, ccde ) ) return false;
 					}
@@ -5287,15 +6396,17 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// add inputs
 				ccde += "	// Current from inputs\n";
 				ccde += "	float I_input_total = 0;\n";
+				ccde += "	float G_input_total = 0;\n";
 					
 				// generate tables and code for each input type
-				for( const auto &keyval : input_types_per_cell[cell_seq] ){
+				for( const auto &keyval : input_types_per_cell_per_compartment[cell_seq] ){
 					for( const auto &id_id : keyval.second.toArray() ){			
 						if( !ImplementInputSource( AppendSingle, AppendMulti, DescribeLemsInline, cell_wig.random_call_counter, for_what + " Input type "+std::to_string(id_id), tab, id_id, aig.input, ccde ) ) return false;
 					}
 				}
 				
 				ccde += "	float external_current = I_synapses_total + I_input_total;\n";
+				// unfortunately G_input_total can't be used to improve the integrator since arbitrary I dynamics are at play. (Unless the LEMS component exposes the interation of I into V rule to be accessible somehow...)
 				
 				// internal dynamics
 				
@@ -5334,7 +6445,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			}
 			// send (exposure)
-			if( spiking_outputs_per_cell.at( cell_seq ).size() > 0 ){
+			if( spiking_outputs_per_cell_per_compartment.at( cell_seq ).size() > 0 ){
 				// could be added regardless, but add it only when needed for now
 				if( !ImplementSpikeSender(
 					"!!spike_out_flag",
@@ -5439,7 +6550,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		// don't bother with optimization if code is massive
 		if( sig.code.size() > 1024 * 1024LL ){
-			printf("Choosing fast build due to code size..\n");
+			if(config.verbose){
+				printf("Choosing fast build due to code size..\n");
+			}
 			code_quality_flags = fastbuild_flags;
 		}
 		
@@ -5509,7 +6622,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// NOTE -lm must be put last, after other obj files (like source code) have stated their dependencies on libm
 		// further reading: https://eli.thegreenplace.net/2013/07/09/library-order-in-static-linking
 		std::string cmdline =     compiler_name + " " + basic_flags + dll_flags + code_quality_flags + " -o " + dll_filename + " " + code_filename + lm_flags;
-		printf("%s\n", cmdline.c_str());
+		if(config.verbose) printf("%s\n", cmdline.c_str());
 		std::string cmdline_asm = compiler_name + " " + basic_flags + dll_flags + code_quality_flags + asm_flags + " " + code_filename + lm_flags;
 		if(config.output_assembly){
 			if( system(cmdline_asm.c_str()) != 0 ){
@@ -5567,18 +6680,16 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// LATER keep a set of dynamic libraries loaded, to cleanup
 		// though it's pointless in this sort of application
 		gettimeofday(&compile_end, NULL);
-		printf("Compiled and loaded %s in %.2lf seconds\n", code_id.c_str(), TimevalDeltaSec(compile_start, compile_end));
+		if(config.verbose) printf("Compiled and loaded %s in %.2lf seconds\n", code_id.c_str(), TimevalDeltaSec(compile_start, compile_end));
 		
 		
-		cell_sigs.push_back(sig);
+		// done with cell type's signature
 	}
 	// LATER further specialize cell types with synapse and input components INSIDE the per-cell code block, for better legibility, but how?
-	
 	
 	// now realize the model
 	
 	//------------------> Generate the data structures
-	
 	
 	// Instantiate cells, with internal working sets onto global tables and extension tables onto inner table space
 	// Simplest layout : Array of Structures, lay out states and constants for every single cell, side by side
@@ -5589,7 +6700,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	typedef ptrdiff_t work_t;
 	
 	
-	// symbolic fererence to some point, on some neuron, under NeuroML
+	// symbolic reference to some point, on some neuron, under NeuroML
 	// perhaps move this to be more general, in header LATER
 	struct PointOnCellLocator{
 		Int population;
@@ -5738,7 +6849,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	};
 	
 	// like  workunit_per_cell_per_population, but explicitly referring to local node's fragment of the model
-	std::vector< std::map<Int, work_t> >  local_workunit_per_cell_per_population( net.populations.contents.size() ); // will extend to include segments, somehow LATER
+	std::vector< std::map<Int, work_t> >  local_workunit_per_cell_per_population( net.populations.contents.size() ); // will extend to include compartments, somehow LATER
 	
 	
 	// Since the model is presented in its entirety, nodes need to perform domain decomposition themselves
@@ -5824,7 +6935,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	// 	(and thus thould have the same length as associated data tables!)
 	// so only a realized population -> work items mapping needs to be maintained
 	
-	std::vector< std::vector<size_t> >  workunit_per_cell_per_population( net.populations.contents.size() ); // will extend to include segments, somehow LATER
+	std::vector< std::vector<size_t> >  workunit_per_cell_per_population( net.populations.contents.size() ); // will extend to include compartments, somehow LATER
 	// GetLocalWorkItem_FromPopInst
 	
 	#endif
@@ -5907,11 +7018,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// tables for cell equation solver TODO revise when per-compartment analysis is done
 			
 			// adjacent compartment vectors for non-flattened, localized cable equation (like fwd or diagonal)
-			for( size_t seg_seq = 0; seg_seq < pig.seg_implementations.size(); seg_seq++ ){
-				auto &comp_impl = pig.seg_implementations[seg_seq];
+			for( size_t comp_seq = 0; comp_seq < pig.comp_implementations.size(); comp_seq++ ){
+				auto &comp_impl = pig.comp_implementations[comp_seq];
 				if( comp_impl.Index_AdjComp >= 0 ){
 					RawTables::Table_I64 &AdjCompList = tab_ci64[ off_ci64 + comp_impl.Index_AdjComp ];
-					AppendToVector( AdjCompList, pig.seg_definitions[seg_seq].adjacent_compartments );
+					AppendToVector( AdjCompList, pig.comp_definitions[comp_seq].adjacent_compartments );
 				}
 			}
 			
@@ -6182,8 +7293,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	auto GetCompartmentInputImplementations = [ &cell_types ]( const CellInternalSignature &sig, Int celltype_seq, Int seg_seq, Real fractionAlong ){
 		const CellType &cell_type = cell_types.get(celltype_seq);
 		if( cell_type.type == CellType::PHYSICAL ){
-			(void) fractionAlong; // LATER in segment subdivision
-			return sig.physical_cell.seg_implementations.at(seg_seq).input;
+			auto comp_seq = sig.physical_cell.compartment_discretization.GetCompartmentForSegmentLocation(seg_seq, fractionAlong);
+			return sig.physical_cell.comp_implementations.at(comp_seq).input;
 		}
 		else{
 			return sig.artificial_cell.input;
@@ -6200,8 +7311,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		const CellType &cell_type = cell_types.get(celltype_seq);
 		
 		if( cell_type.type == CellType::PHYSICAL ){
-			(void) loc.fractionAlong; // LATER in segment subdivision
-			return sig.physical_cell.seg_implementations.at(loc.segment).synapse;
+			auto comp_seq = sig.physical_cell.compartment_discretization.GetCompartmentForSegmentLocation(loc.segment, loc.fractionAlong);
+			return sig.physical_cell.comp_implementations.at(comp_seq).synapse;
 		}
 		else{
 			return sig.artificial_cell.synapse;
@@ -6209,11 +7320,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 	};
 	auto GetCompartmentSpikerImplementation = [ &cell_types ]( const CellInternalSignature &sig, Int celltype_seq, Int seg_seq, Real fractionAlong ){
-		
 		const CellType &cell_type = cell_types.get(celltype_seq);
 		if( cell_type.type == CellType::PHYSICAL ){
-			(void) fractionAlong; // LATER in segment subdivision
-			return sig.physical_cell.seg_implementations.at(seg_seq).spiker;
+			auto comp_seq = sig.physical_cell.compartment_discretization.GetCompartmentForSegmentLocation(seg_seq, fractionAlong);
+			return sig.physical_cell.comp_implementations.at(comp_seq).spiker;
 		}
 		else{
 			return sig.artificial_cell.spiker;
@@ -6224,10 +7334,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	auto GetCompartmentVoltageStatevarIndex = [ &cell_types ]( const CellInternalSignature &sig, Int celltype_seq, Int seg_seq, Real fractionAlong ){
 		const CellType &cell_type = cell_types.get(celltype_seq);
 		if( cell_type.type == CellType::PHYSICAL ){
-			return sig.physical_cell.GetVoltageStatevarIndex( seg_seq, fractionAlong );
+			auto comp_seq = sig.physical_cell.compartment_discretization.GetCompartmentForSegmentLocation(seg_seq, fractionAlong);
+			return (ptrdiff_t) sig.physical_cell.GetVoltageStatevarIndex( comp_seq );
 		}
 		else{
-			return (size_t)sig.artificial_cell.Index_Statevar_Voltage;
+			return sig.artificial_cell.Index_Statevar_Voltage;
 		}
 	};
 	
@@ -6484,7 +7595,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					#endif
 				](
 					const SynapticComponent &syn,
-					work_t work_unit, const CellInternalSignature::SynapticComponentImplementation &synimpl, //const CellInternalSignature &sig, Int seg_seq,
+					work_t work_unit, const CellInternalSignature::SynapticComponentImplementation &synimpl, //const CellInternalSignature &sig, Int comp_seq,
 					work_t peer_work_unit,const CellInternalSignature &peer_sig, Int peer_cell_type_seq,
 					const PointOnCellLocator &peer_loc,					
 					auto &tabs
@@ -6621,7 +7732,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					// Spike output is required to exist on pre compartment
 					const auto &preimp = GetCompartmentSpikerImplementation( pre_sig, pre_cell_type_seq, pre_loc.segment, pre_loc.fractionAlong );
 					if( preimp.Table_SpikeRecipients < 0 ){
-						printf("Internal error: No spike send for celltype %ld seg %ld %zd\n", prepop.component_cell, pre_loc.segment, preimp.Table_SpikeRecipients);
+						printf("Internal error: No spike send for celltype %ld seg %ld fractionAlong %g %zd\n", prepop.component_cell, pre_loc.segment, pre_loc.fractionAlong, preimp.Table_SpikeRecipients);
 						return false;
 					}
 					
@@ -6744,24 +7855,23 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	// TODO explicit capture
 	auto Implement_LoggerColumn = [ & ]( const Int daw_seq, const Int col_seq, const std::string &output_filepath,const auto &path, EngineConfig::TrajectoryLogger::LogColumn &column ){
 		
-		// TODO determine if segment-based, and expose compimpl, here
 		if( path.RefersToCell() ){
 			
 			const auto &pop = net.populations.get(path.population);
 			const auto &cell_type = cell_types.get(pop.component_cell);
 			
-			// get work item for this segment
+			// get work item for this neuron here, or perhaps further on when compartments are work items
 			
 			#ifdef USE_MPI
 			
-			work_t work_unit_seg = WorkUnitOrNode( path.population, path.cell_instance );
+			work_t work_unit = WorkUnitOrNode( path.population, path.cell_instance );
 			
-			if( work_unit_seg < 0 ){
+			if( work_unit < 0 ){
 				#ifdef MPI
 				assert( my_mpi.rank == 0 );
 				#endif
 				
-				int remote_node = ~(work_unit_seg);
+				int remote_node = ~(work_unit);
 				column.on_node = remote_node;
 				if( !AppendRemoteDependency_DataWriter( {daw_seq, col_seq}, remote_node ) ) return false;
 				
@@ -6770,12 +7880,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			#else
 			
-			work_t work_unit_seg = workunit_per_cell_per_population[path.population][path.cell_instance];
+			work_t work_unit = workunit_per_cell_per_population[path.population][path.cell_instance];
 			
 			#endif
 			
-			
-			
+			// get sig for said neuron, to properly manipulate the work item
 			const auto &sig = cell_sigs[pop.component_cell];
 			
 			// commonly used paths (evidence mounts to use parent class form commonish things like inputs and synapses)
@@ -6797,6 +7906,19 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				return true;
 			};
 			
+			// NB currently, all cell-facing references have a valid reference to segment. (That is 0 for artificial cells.)
+			// But this could not always hold LATER...
+			// This is moved in this scope tentatively, to avoid copy pasting deeper in
+			int32_t comp_seq = -1;
+			if( cell_type.type == CellType::PHYSICAL ){
+				if( path.segment_seq >= 0 ){
+					comp_seq = GetCompSeqForCell(cell_type, sig, path.segment_seq, 0.5); // NB: LEMS refs lack fractionAlong for now
+				}
+				else{
+					assert(false); // should not happen as of now, guard for when this case happens LATER
+				}
+			}
+			
 			switch(path.type){
 			case Simulation::LemsQuantityPath::Type::SEGMENT: {
 				
@@ -6808,16 +7930,18 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				auto &pig = sig.physical_cell;
 				
+				// NB: If the path refers to a segment, 
+				
 				switch(path.segment.type){
 					
 					case Simulation::LemsQuantityPath::SegmentPath::Type::VOLTAGE: {
-						// printf("daw volt cell %ld seq %ld\n", (Int)path.cell_instance, (Int)path.segment_seq );
+						// printf("daw volt cell %ld seg %ld comp %d\n", (Int)path.cell_instance, (Int)path.segment_seq, (int) comp_seq );
 						const ScaleEntry volts = {"V" ,  0, 1.0};
 						column.type = EngineConfig::TrajectoryLogger::LogColumn::Type::TOPLEVEL_STATE;
 						column.value_type = EngineConfig::TrajectoryLogger::LogColumn::ValueType::F32;
 						
 						// TODO multinode - global state is not global anymore, redirect to comm buffers !
-						size_t global_idx_V = tabs.global_state_f32_index[work_unit_seg] + pig.GetVoltageStatevarIndex(path.segment_seq, 0.5); //TODO change for split cell?
+						size_t global_idx_V = tabs.global_state_f32_index[work_unit] + pig.GetVoltageStatevarIndex( comp_seq ); // LATER change for split cell?
 						column.entry = global_idx_V;
 						column.scaleFactor = Scales<Voltage>::native.ConvertTo(1, volts);
 						// printf("\n\n\n record %zd \n\n\n", global_idx_V);
@@ -6826,12 +7950,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					case Simulation::LemsQuantityPath::SegmentPath::Type::CALCIUM_INTRA:
 					case Simulation::LemsQuantityPath::SegmentPath::Type::CALCIUM2_INTRA:
 					{
-						const ScaleEntry millimolar = {"mM" ,  0, 1.0};
+						const ScaleEntry millimolar = {"mM" ,  0, 1.0}; // the reported scale is in fundamental units: mol/m^3 that is mmol/L
 						column.type = EngineConfig::TrajectoryLogger::LogColumn::Type::TOPLEVEL_STATE;
 						column.value_type = EngineConfig::TrajectoryLogger::LogColumn::ValueType::F32;
 						
-						const auto &comp_impl = pig.seg_implementations.at(path.segment_seq);
-						const auto &comp_def = pig.seg_definitions.at(path.segment_seq);
+						const auto &comp_impl = pig.comp_implementations.at(comp_seq);
+						const auto &comp_def  = pig.comp_definitions.at(comp_seq);
 						
 						Int Ca_seq = bioph.Ca_species_seq;
 						const char *sCalcium = "calcium";
@@ -6890,7 +8014,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						}
 						
 						// TODO multinode - global state is not global naymore, redirect to comm buffers !
-						size_t global_idx_CaconcIn = tabs.global_state_f32_index[work_unit_seg] + Index_CaConcIn; //TODO change for split cell?
+						size_t global_idx_CaconcIn = tabs.global_state_f32_index[work_unit] + Index_CaConcIn; //TODO change for split cell?
 						column.entry = global_idx_CaconcIn;
 						column.scaleFactor = Scales<Concentration>::native.ConvertTo(1, millimolar);
 						// printf("\n\n\n record %zd \n\n\n", global_idx_V);
@@ -6918,8 +8042,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						column.value_type = EngineConfig::TrajectoryLogger::LogColumn::ValueType::F32;
 						
 						// get states for the specific ion channel distribution
-						auto seg_seq = path.segment_seq;
-						const auto &comp_impl = pig.seg_implementations[seg_seq];
+						const auto &comp_impl = pig.comp_implementations[comp_seq];
 						size_t sig_Q_offset = comp_impl.channel[path.channel.distribution_seq].per_gate[path.channel.gate_seq].Index_Q;
 						if(sig_Q_offset < 0){
 							// TODO check for complex gates
@@ -6927,7 +8050,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							return false;
 						}
 						
-						column.entry = tabs.global_state_f32_index[work_unit_seg] + sig_Q_offset; //TODO change for split cell?
+						column.entry = tabs.global_state_f32_index[work_unit] + sig_Q_offset; //TODO change for split cell?
 						column.scaleFactor = 1;
 						// printf("\n\n\n record %zd \n\n\n", global_idx_V);
 						break;
@@ -6978,16 +8101,16 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				column.value_type = EngineConfig::TrajectoryLogger::LogColumn::ValueType::F32;
 				
 				// TODO multinode - global state is not global anymore, redirect to comm buffers !
-				size_t global_idx = tabs.global_state_f32_index[work_unit_seg] + Index_Statevar;
+				size_t global_idx = tabs.global_state_f32_index[work_unit] + Index_Statevar;
 				column.entry = global_idx;
 				
 				Dimension dim = comp_type.getNamespaceEntryDimension(namespace_thing_seq);
 				// TODO scales should be strictly defined for lems quantities !					
 				const LemsUnit native = dimensions.GetNative(dim);
 				// const LemsUnit desired = native;					
-				// use SI units for now
-				const ScaleEntry si = {"SI units" ,  0, 1.0}; 
-				const LemsUnit desired = si;
+				// use fundamental units for now
+				const ScaleEntry fundamental_units = {"fundamental units" ,  0, 1.0}; 
+				const LemsUnit desired = fundamental_units;
 				
 				column.scaleFactor = native.ConvertTo(1, desired);
 				// printf("\n\n\n record %zd \n\n\n", global_idx_V);
@@ -7378,7 +8501,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					Say("Received confirmation from node %d, is %d", other_rank, recv_msg );
 					
 					assert( recv_msg == SEND_CODE_SUCCESS );
-					assert( other_rank == should_be_other_rank );
+					assert( other_rank == should_be_other_rank ); (void)should_be_other_rank;
 					
 					HandleRecvlistComplete(i_recv);
 				}
@@ -7777,7 +8900,7 @@ int main(int argc, char **argv){
 			
 			timeval nml_start, nml_end;
 			gettimeofday(&nml_start, NULL);
-			if(!( ReadNeuroML(argv[i+1], model, true) )){
+			if(!( ReadNeuroML( argv[i+1], model, true, config.verbose) )){
 				printf("cmdline: could not make sense of NeuroML file\n");
 				exit(1);
 			}
@@ -8086,6 +9209,15 @@ int main(int argc, char **argv){
 	#endif
 	
 	printf("Starting simulation loop...\n");
+	
+	// NB this is a simple tweak to avoid spawning more threads than work items.
+	// TODO allow for diagnostic override, and amore flexibility since multithreading can slao be used for logging etc.
+	// (how much time does it take to change the number of threads?)
+	// NB: omp_get_max_threads actually refers to the very real nthreads-var that is also picked through the OMP_NUM_THREADS envvar.
+	// That avriable is actually set through omp_set_num_threads
+	if( engine_config.work_items < omp_get_max_threads() ){
+		omp_set_num_threads( (int)engine_config.work_items );
+	}
 	
 	// perform the crunching
 	timeval run_start, run_end;

@@ -212,7 +212,9 @@ def RunTest(
 			testcase_type = 'vs. NEURON'
 			print('Validating %s %s...' % ( test_filename, testcase_type ) )
 			results_Neuron = runNeuron( test_filename, verbose=verbose )
-			results_Eden   = runEden  ( test_filename, verbose=verbose, extra_cmdline_args=extra_cmdline_args )
+			
+			eden_extra_kwargs = test.get('eden_extra_kwargs', {})
+			results_Eden   = runEden  ( test_filename, verbose=verbose, extra_cmdline_args=extra_cmdline_args, **eden_extra_kwargs )
 			
 		elif typ == 'eden_vs_eden':
 			testcase_type = 'vs. EDEN'

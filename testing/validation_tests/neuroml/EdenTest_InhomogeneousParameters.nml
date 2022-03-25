@@ -1,0 +1,332 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<neuroml xmlns="http://www.neuroml.org/schema/neuroml2"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://www.neuroml.org/schema/neuroml2 ../Schemas/NeuroML2/NeuroML_v2beta4.xsd"
+         id=" NML_EdenTestNetwork1">
+
+    <!-- Example of an isolated, passive compartment; minimal sanity check --> 
+
+	<ionChannelHH id="passiveChan" conductance="10pS">
+		<notes>Leak conductance</notes>
+	</ionChannelHH>
+    
+    <ionChannelHH id="naChan" conductance="10pS" species="na">
+		<gateHHrates id="m" instances="3">
+			<forwardRate type="HHExpLinearRate" rate="1per_ms" midpoint="-40mV" scale="10mV"/>
+			<reverseRate type="HHExpRate" rate="4per_ms" midpoint="-65mV" scale="-18mV"/>
+		</gateHHrates>
+
+		<gateHHrates id="h" instances="1">
+			<forwardRate type="HHExpRate" rate="0.07per_ms" midpoint="-65mV" scale="-20mV"/>
+			<reverseRate type="HHSigmoidRate" rate="1per_ms" midpoint="-35mV" scale="10mV"/>
+		</gateHHrates>
+
+	</ionChannelHH>
+    <ionChannelHH id="kChan" conductance="10pS" species="k">
+		<gateHHrates id="n" instances="4">
+			<forwardRate type="HHExpLinearRate" rate="0.1per_ms" midpoint="-55mV" scale="10mV"/>
+			<reverseRate type="HHExpRate" rate="0.125per_ms" midpoint="-65mV" scale="-80mV"/>
+		</gateHHrates>
+			
+	</ionChannelHH>
+    
+    <!-- Note: The morphology must consist of cables for jNML/NEURON to apply biophyisocs in parts of the cell properly. 
+    The fault is that the list of segments is passed as "segments" on the the cell JSON when the HOC template expects the "sections" property. 
+    TODO remove the cable directives when this is fixed in jNML. -->
+    
+    <!-- This is a cell with an ordinary uniform distribution of the Na ion chennel.  -->
+    <cell id="SimpleCell_Flat">
+
+        <morphology id="SimpleCell_Morphology">
+            <segment id ="0" name="Soma">    <!-- name is optional-->
+                <!-- no parent => root segment -->
+                <proximal x="0" y="0" z="0" diameter="10"/>
+                <distal x="10" y="0" z="0" diameter="10"/>
+            </segment>
+
+            <segment id ="1" name="MainDendrite1" >
+                <parent segment="0"/>
+                <!-- Same proximal 3D point as parent but different diameter -->
+                <proximal x="10" y="0" z="0" diameter="3"/> 
+                <distal x="20" y="0" z="0" diameter="3"/>
+            </segment>
+
+            <segment id ="2" name="MainDendrite2">
+                <parent segment="1"/>
+                <!-- no proximal => use distal (including diameter) of parent -->
+                <distal x="30" y="0" z="0" diameter="1"/>
+            </segment>
+            
+            <segmentGroup id="comp0" neuroLexId="sao864921383"> <member segment="0"/> </segmentGroup> 
+            <segmentGroup id="comp1" neuroLexId="sao864921383"> <member segment="1"/> </segmentGroup> 
+            <segmentGroup id="comp2" neuroLexId="sao864921383"> <member segment="2"/> </segmentGroup> 
+            
+            <segmentGroup id="soma_group"> 
+                <include segmentGroup="comp0"/>
+            </segmentGroup>
+
+            <segmentGroup id="dendrite_group" neuroLexId="sao1211023249">
+                <include segmentGroup="comp1"/>
+                <include segmentGroup="comp2"/>
+            </segmentGroup>
+        </morphology>
+        
+        <biophysicalProperties id="biophys">
+            <membraneProperties>
+                <!-- <channelDensity id="leak" ionChannel="passiveChan" condDensity="3.0 S_per_m2" erev="-0mV" ion="non_specific"/>  -->
+                <channelDensity id="naChans" segmentGroup="dendrite_group" ionChannel="naChan" condDensity="120.0 mS_per_cm2" erev="50.0 mV" ion="na"/>
+                <channelDensity id="kChans"  segmentGroup="dendrite_group" ionChannel="kChan" condDensity="360 S_per_m2" erev="-77mV" ion="k"/>
+                
+                <!-- <channelDensity id="uniform_na_chans" ionChannel="NaConductance" condDensity="5.0 S_per_m2" erev="50mV" ion="na"/>  -->
+                <specificCapacitance value="1.0 uF_per_cm2"/>
+                <initMembPotential value="-65mV" />
+            </membraneProperties>
+
+            <intracellularProperties>
+                <resistivity value="100.1 kohm_cm"/>  <!-- Use extreme Ra to highlight the per compartment variation. -->
+            </intracellularProperties>
+        </biophysicalProperties>
+
+    </cell>
+    
+    <!-- This is a cell with an ordinary uniform distribution of the Na ion chennel,
+    but it uses the channelDensityNonUniform specification. Used to cross check with SimpleCell_Flat.  -->
+    <cell id="SimpleCell_InhF">
+
+        <morphology id="SimpleCell_Morphology">
+            <segment id ="0" name="Soma">    <!-- name is optional-->
+                <!-- no parent => root segment -->
+                <proximal x="0" y="0" z="0" diameter="10"/>
+                <distal x="10" y="0" z="0" diameter="10"/>
+            </segment>
+
+            <segment id ="1" name="MainDendrite1" >
+                <parent segment="0"/>
+                <!-- Same proximal 3D point as parent but different diameter -->
+                <proximal x="10" y="0" z="0" diameter="3"/> 
+                <distal x="20" y="0" z="0" diameter="3"/>
+            </segment>
+
+            <segment id ="2" name="MainDendrite2">
+                <parent segment="1"/>
+                <!-- no proximal => use distal (including diameter) of parent -->
+                <distal x="30" y="0" z="0" diameter="1"/>
+            </segment>
+            
+            <segmentGroup id="comp0" neuroLexId="sao864921383"> <member segment="0"/> </segmentGroup> 
+            <segmentGroup id="comp1" neuroLexId="sao864921383"> <member segment="1"/> </segmentGroup> 
+            <segmentGroup id="comp2" neuroLexId="sao864921383"> <member segment="2"/> </segmentGroup> 
+            
+            <segmentGroup id="soma_group"> 
+                <include segmentGroup="comp0"/>
+            </segmentGroup>
+
+            <segmentGroup id="dendrite_group" neuroLexId="sao1211023249">
+                <include segmentGroup="comp1"/>
+                <include segmentGroup="comp2"/>
+                
+                <inhomogeneousParameter id="dendrite_group_x1" variable="p" metric="Path Length from root"/>
+                <inhomogeneousParameter id="dendrite_group_x2" variable="r" metric="Path Length from root">
+                        <proximal translationStart="0"/>
+                        <distal normalizationEnd="1"/>
+                </inhomogeneousParameter>
+            </segmentGroup>
+        </morphology>
+        
+        <biophysicalProperties id="biophys">
+            <membraneProperties>
+                <channelDensityNonUniform id="nonuniform_na_chans" ionChannel="naChan" erev="50mV" ion="na">
+                    <variableParameter parameter="condDensity" segmentGroup="dendrite_group">
+                        <inhomogeneousValue inhomogeneousParameter="dendrite_group_x1" value="1200"/>
+                    </variableParameter>
+                </channelDensityNonUniform>
+                <channelDensity id="kChans"  segmentGroup="dendrite_group" ionChannel="kChan" condDensity="360 S_per_m2" erev="-77mV" ion="k"/>
+                
+                <specificCapacitance value="1.0 uF_per_cm2"/>
+                <initMembPotential value="-65mV" />
+            </membraneProperties>
+
+            <intracellularProperties>
+                <resistivity value="100.1 kohm_cm"/> <!-- Use extreme Ra to highlight the per compartment variation. -->
+            </intracellularProperties>
+        </biophysicalProperties>
+
+    </cell>
+    
+    <!-- This is a cell with a non uniform distribution, as the one found in examples/NML2_InhomogeneousParams.nml . -->
+    <cell id="SimpleCell_Inho">
+
+        <morphology id="SimpleCell_Morphology">
+            <segment id ="0" name="Soma">    <!-- name is optional-->
+                <!-- no parent => root segment -->
+                <proximal x="0" y="0" z="0" diameter="10"/>
+                <distal x="10" y="0" z="0" diameter="10"/>
+            </segment>
+
+            <segment id ="1" name="MainDendrite1" >
+                <parent segment="0"/>
+                <!-- Same proximal 3D point as parent but different diameter -->
+                <proximal x="10" y="0" z="0" diameter="3"/> 
+                <distal x="20" y="0" z="0" diameter="3"/>
+            </segment>
+
+            <segment id ="2" name="MainDendrite2">
+                <parent segment="1"/>
+                <!-- no proximal => use distal (including diameter) of parent -->
+                <distal x="30" y="0" z="0" diameter="1"/>
+            </segment>
+            
+            <segmentGroup id="comp0" neuroLexId="sao864921383"> <member segment="0"/> </segmentGroup> 
+            <segmentGroup id="comp1" neuroLexId="sao864921383"> <member segment="1"/> </segmentGroup> 
+            <segmentGroup id="comp2" neuroLexId="sao864921383"> <member segment="2"/> </segmentGroup> 
+            
+            
+            <segmentGroup id="soma_group"> 
+                <include segmentGroup="comp0"/>
+            </segmentGroup>
+
+            <segmentGroup id="dendrite_group" neuroLexId="sao1211023249">
+                <include segmentGroup="comp1"/>
+                <include segmentGroup="comp2"/>
+                
+                <inhomogeneousParameter id="dendrite_group_x1" variable="p" metric="Path Length from root"/>
+                <inhomogeneousParameter id="dendrite_group_x2" variable="r" metric="Path Length from root">
+                        <proximal translationStart="0"/>
+                        <distal normalizationEnd="1"/>
+                </inhomogeneousParameter>
+            </segmentGroup>
+        </morphology>
+        
+        <biophysicalProperties id="biophys">
+            <membraneProperties>
+                <channelDensityNonUniform id="nonuniform_na_chans" ionChannel="naChan" erev="50mV" ion="na">
+                    <variableParameter parameter="condDensity" segmentGroup="dendrite_group">
+                        <inhomogeneousValue inhomogeneousParameter="dendrite_group_x1" value="500 * exp(-p/20)"/> 
+                        <!-- returned value is in SI units-->
+                    </variableParameter>
+                </channelDensityNonUniform>
+                <channelDensity id="kChans"  segmentGroup="dendrite_group" ionChannel="kChan" condDensity="360 S_per_m2" erev="-77mV" ion="k"/>
+                
+                <specificCapacitance value="1.0 uF_per_cm2"/>
+                <initMembPotential value="-65mV" />
+            </membraneProperties>
+
+            <intracellularProperties>
+                <resistivity value="100.1 kohm_cm"/>  <!-- Use extreme Ra to highlight the per compartment variation. -->
+            </intracellularProperties>
+        </biophysicalProperties>
+
+    </cell>
+    
+     <!-- This is a cell with a non uniform distribution, and whose distribution is relative rather than absolute distance (normalised by: x' = (x - x_min)/(x_max - x_min)  ) -->
+    <cell id="SimpleCell_InhN">
+
+        <morphology id="SimpleCell_Morphology">
+            <segment id ="0" name="Soma">    <!-- name is optional-->
+                <!-- no parent => root segment -->
+                <proximal x="0" y="0" z="0" diameter="10"/>
+                <distal x="10" y="0" z="0" diameter="10"/>
+            </segment>
+
+            <segment id ="1" name="MainDendrite1" >
+                <parent segment="0"/>
+                <!-- Same proximal 3D point as parent but different diameter -->
+                <proximal x="10" y="0" z="0" diameter="3"/> 
+                <distal x="20" y="0" z="0" diameter="3"/>
+            </segment>
+
+            <segment id ="2" name="MainDendrite2">
+                <parent segment="1"/>
+                <!-- no proximal => use distal (including diameter) of parent -->
+                <distal x="30" y="0" z="0" diameter="1"/>
+            </segment>
+            
+            <segmentGroup id="comp0" neuroLexId="sao864921383"> <member segment="0"/> </segmentGroup> 
+            <segmentGroup id="comp1" neuroLexId="sao864921383"> <member segment="1"/> </segmentGroup> 
+            <segmentGroup id="comp2" neuroLexId="sao864921383"> <member segment="2"/> </segmentGroup> 
+            
+            
+            <segmentGroup id="soma_group"> 
+                <include segmentGroup="comp0"/>
+            </segmentGroup>
+
+            <segmentGroup id="dendrite_group" neuroLexId="sao1211023249">
+                <include segmentGroup="comp1"/>
+                <include segmentGroup="comp2"/>
+                
+                <inhomogeneousParameter id="dendrite_group_x1" variable="p" metric="Path Length from root"/>
+                <inhomogeneousParameter id="dendrite_group_x2" variable="r" metric="Path Length from root">
+                        <proximal translationStart="0"/>
+                        <distal normalizationEnd="1"/>
+                </inhomogeneousParameter>
+            </segmentGroup>
+        </morphology>
+        
+        <biophysicalProperties id="biophys">
+            <membraneProperties>
+                <channelDensityNonUniform id="nonuniform_na_chans" ionChannel="naChan" erev="50mV" ion="na">
+                    <variableParameter parameter="condDensity" segmentGroup="dendrite_group">
+                        <inhomogeneousValue inhomogeneousParameter="dendrite_group_x2" value="500 * exp(-r/20)"/> 
+                        <!-- returned value is in SI units-->
+                    </variableParameter>
+                </channelDensityNonUniform>
+                <channelDensity id="kChans"  segmentGroup="dendrite_group" ionChannel="kChan" condDensity="360 S_per_m2" erev="-77mV" ion="k"/>
+                
+                <specificCapacitance value="1.0 uF_per_cm2"/>
+                <initMembPotential value="-65mV" />
+            </membraneProperties>
+
+            <intracellularProperties>
+                <resistivity value="100.1 kohm_cm"/>  <!-- Use extreme Ra to highlight the per compartment variation. -->
+            </intracellularProperties>
+        </biophysicalProperties>
+
+    </cell>
+    
+    <!-- Note: The cable could also be subdivided implicitly, but then this test would depend on auto subdivision functionality.
+        On the other hand, it would be good to cross-check the interplay of these two features TODO -->
+    
+    <!-- TODO show the difference between adjusting and not adjusting the varparm with translationStart and normalizationEnd  -->
+    
+    <!-- TODO better highlight the difference between adjacent compartments in the inhomogeneous distribution -->
+    
+    <pulseGenerator id="pulseGen1" delay="10ms" duration="8ms" amplitude="0.2nA"/>
+    <pulseGenerator id="pulseGen2" delay="60ms" duration="8ms" amplitude="0.2nA"/>
+    
+    <network id="EdenTest_InhomogeneousParameters">
+
+        <population id="Pop_Flat" component="SimpleCell_Flat" size="1" />
+        <population id="Pop_InhF" component="SimpleCell_InhF" size="1" />
+        <population id="Pop_Inho" component="SimpleCell_Inho" size="1" />
+        <population id="Pop_InhN" component="SimpleCell_InhN" size="1" />
+        
+        <inputList id="stimInput_Flat_1" component="pulseGen1" population="Pop_Flat">
+            <input id="0" target="../Pop_Flat/0/SimpleCell_Flat" segmentId="0" fractionAlong="0.5" destination="synapses"/>
+        </inputList>
+        <inputList id="stimInput_Flat_2" component="pulseGen2" population="Pop_Flat">
+            <input id="0" target="../Pop_Flat/0/SimpleCell_Flat" segmentId="2" fractionAlong="0.5" destination="synapses"/>
+        </inputList>
+        
+        <inputList id="stimInput_InhF_1" component="pulseGen1" population="Pop_InhF">
+            <input id="0" target="../Pop_InhF/0/SimpleCell_InhF" segmentId="0" fractionAlong="0.5" destination="synapses"/>
+        </inputList>
+        <inputList id="stimInput_InhF_2" component="pulseGen2" population="Pop_InhF">
+            <input id="0" target="../Pop_InhF/0/SimpleCell_InhF" segmentId="2" fractionAlong="0.5" destination="synapses"/>
+        </inputList>
+        
+        <inputList id="stimInput_Inho_1" component="pulseGen1" population="Pop_Inho">
+            <input id="0" target="../Pop_Inho/0/SimpleCell_Inho" segmentId="0" fractionAlong="0.5" destination="synapses"/>
+        </inputList>
+        <inputList id="stimInput_Inho_2" component="pulseGen2" population="Pop_Inho">
+            <input id="0" target="../Pop_Inho/0/SimpleCell_Inho" segmentId="2" fractionAlong="0.5" destination="synapses"/>
+        </inputList>
+        <inputList id="stimInput_InhN_1" component="pulseGen1" population="Pop_InhN">
+            <input id="0" target="../Pop_InhN/0/SimpleCell_InhN" segmentId="0" fractionAlong="0.5" destination="synapses"/>
+        </inputList>
+        <inputList id="stimInput_InhN_2" component="pulseGen2" population="Pop_InhN">
+            <input id="0" target="../Pop_InhN/0/SimpleCell_InhN" segmentId="2" fractionAlong="0.5" destination="synapses"/>
+        </inputList>
+        
+    </network>
+</neuroml>

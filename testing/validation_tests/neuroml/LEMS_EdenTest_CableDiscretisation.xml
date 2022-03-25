@@ -1,0 +1,53 @@
+
+<Lems>
+
+<!-- Specify which component to run -->
+    <Target component="sim1"/>
+
+<!-- Include core NeuroML2 ComponentType definitions -->
+    <Include file="Cells.xml"/>
+    <Include file="Networks.xml"/>
+    <Include file="Simulation.xml"/>
+
+    <!-- Main NeuroML2 content. -->
+
+    <!-- Including file with a <neuroml> root, a "real" NeuroML 2 file -->
+    <Include file="EdenTest_CableDiscretisation.nml"/>
+
+    <!-- End of NeuroML2 content -->
+
+
+    <Simulation id="sim1" length="100.30ms" step="0.025ms" target="EdenTest_CableDiscretisation">
+		
+		<!-- add logging for headless sims --> 
+		
+		<OutputFile id="first" fileName="results.gen.txt">
+            
+            <!-- The voltage trajectories along the implicitly merged segment (through sao864921383 nseg = 1 or missing) should not vary along fractionAlong, or be sensitive to fractionAlong of point processes -->
+			<OutputColumn id="v_Uni_0" quantity="Pop_Unified/0/Cable_Unified/0/v"/>
+            <OutputColumn id="v_Uni_1" quantity="Pop_Unified/0/Cable_Unified/1/v"/>
+			<OutputColumn id="v_Uni_2" quantity="Pop_Unified/0/Cable_Unified/2/v"/>
+            
+            <!-- The voltage trajectories along the implicitly subdivided segment (through sao864921383 nseg) should vary along fractionAlong, and be sensitive to fractionAlong of point processes -->
+            <!-- unfortunately fractionAlong can't be encoded in paths atm, thus all LEMS paths implicitly point to frctionAlong = 0.5 -->
+			<OutputColumn id="v_Sub_0" quantity="Pop_Subdivided/0/Cable_Subdivided/0/v"/>
+            
+            <!-- The voltage trajectories of the explicitly subdivided cell should be the same vs. NEURON whether sao864921383 is supported or not -->
+            <OutputColumn id="v_SubExp_0" quantity="Pop_Subdivided_Explicitly/0/Cable_Subdivided_Explicitly/0/v"/>
+            <OutputColumn id="v_SubExp_1" quantity="Pop_Subdivided_Explicitly/0/Cable_Subdivided_Explicitly/1/v"/>
+            <OutputColumn id="v_SubExp_2" quantity="Pop_Subdivided_Explicitly/0/Cable_Subdivided_Explicitly/2/v"/>
+            <OutputColumn id="v_SubExp_3" quantity="Pop_Subdivided_Explicitly/0/Cable_Subdivided_Explicitly/3/v"/>
+            <OutputColumn id="v_SubExp_4" quantity="Pop_Subdivided_Explicitly/0/Cable_Subdivided_Explicitly/4/v"/>
+            
+            <!-- The voltage trajectories of the effectively (equivalently) subdivided cell should be the same vs. NEURON as in the implicitly and explicitly subficided versions, whether sao864921383 is supported or not -->
+            <OutputColumn id="v_SubEff_0" quantity="Pop_Subdivided_Effectively/0/Cable_Subdivided_Effectively/0/v"/>
+            <OutputColumn id="v_SubEff_1" quantity="Pop_Subdivided_Effectively/0/Cable_Subdivided_Effectively/1/v"/>
+            <OutputColumn id="v_SubEff_2" quantity="Pop_Subdivided_Effectively/0/Cable_Subdivided_Effectively/2/v"/>
+            <OutputColumn id="v_SubEff_3" quantity="Pop_Subdivided_Effectively/0/Cable_Subdivided_Effectively/3/v"/>
+            <OutputColumn id="v_SubEff_4" quantity="Pop_Subdivided_Effectively/0/Cable_Subdivided_Effectively/4/v"/>
+            
+		</OutputFile>
+    
+    </Simulation>
+
+</Lems>

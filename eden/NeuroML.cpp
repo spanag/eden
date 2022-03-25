@@ -645,12 +645,13 @@ const NameMap< Int ComponentType::CommonExposures::* > ComponentType::CommonExpo
 	{"V"				, &ComponentType::CommonExposures::membrane_voltage }, // typically dimensionless
 	{"i"				, &ComponentType::CommonExposures::current }, // typically physical
 	{"I"				, &ComponentType::CommonExposures::current }, // typically dimensionless
+	{"g"				, &ComponentType::CommonExposures::conductance }, // typically dimensionless
 	{"r"				, &ComponentType::CommonExposures::rate }, 
 	{"t"				, &ComponentType::CommonExposures::time }, 
 	{"x"				, &ComponentType::CommonExposures::variable }, 
 	{"q"				, &ComponentType::CommonExposures::gate_variable }, 
-	{"fcond"			, &ComponentType::CommonExposures::conductivity_fraction },
-	{"fopen"			, &ComponentType::CommonExposures::conductivity_fraction },	
+	{"fcond"			, &ComponentType::CommonExposures::conductivity_fraction }, // when it's an ion channel gate
+	{"fopen"			, &ComponentType::CommonExposures::conductivity_fraction },	// when it's the whole ion channel
 	{"concentration"    , &ComponentType::CommonExposures::concentration_intra },
 	{"extConcentration"	, &ComponentType::CommonExposures::concentration_extra },
 	{"factor"			, &ComponentType::CommonExposures::scaling_factor },
@@ -811,7 +812,10 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 	
 	//contains segments and segment groups
 	
-	//Note that strict segment id ordering and parent < child ensure loops cqannot be formed
+	// keep references to tags of segments, for error reporting
+	// CollectionWithIds<const pugi::xml_node *> tags_per_segment;
+	
+	//Note that strict segment id ordering and parent < child ensure loops cannot be formed
 	for (auto eMorphEl: eMorph.children()){
 		// printf("elm  %s...\n", eMorphEl.name());
 		// perhaps annotation stuff?
@@ -875,19 +879,6 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 						log.error(eSegParent, "segment %ld has an invalid fractionAlong %s", nml_seg_id, eSegParent.attribute("fractionAlong").value());
 						return false;
 					}
-					
-					// Since nseg is not specified in NeuroML v2, its segments are assumed to be individual compartments.
-					// Then fractionAlong variable is only relevant for precise length of child segments,
-					// until LATER when Morphology is updated to specify this, or an actual case occurs in the wild.
-					// A <property tag="numberInternalDivisions" value="12"/> has been seen in the wild, but it's not so standard
-					// (not that a standard exists in this stage)
-					// However, since only the NEURON backend is fully functional,
-					// other multicompartmental simulators should handle it TODO
-					// to ensure correct results
-					if(!( 0 <= seg.fractionAlong && seg.fractionAlong <= 1.0 )){
-						log.error(eSeg, "preFractionAlong not between 0 and 1");
-						return false;
-					}
 				}
 			}
 			// printf("distal  %ld...\n", nml_seg_id);
@@ -904,6 +895,7 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 				&& StrToF(eSegDistal.attribute("y").value(), seg.distal.y)
 				&& StrToF(eSegDistal.attribute("z").value(), seg.distal.z)
 				&& StrToF(eSegDistal.attribute("diameter").value(), seg.distal.d)
+				&& seg.distal.d >= 0
 			)){
 				log.error(eSegDistal,
 					"segment %ld has an invalid distal point (%s, %s, %s), %s (x,y,z),diameter combination", nml_seg_id,
@@ -914,12 +906,8 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 				);
 				return false;
 			}
-			if(! (seg.distal.d > 0) ){
-				// FIXME the distal edge of dendrites should be allowed to be zero, check after structure is known
-				log.error(eSegDistal,
-					"segment %ld has an non-positive distal point diameter ", nml_seg_id);
-				return false;
-			}
+			// distal diameter might be allowed to be zero, this is checked along with proximal diameter
+			
 			// printf("proximal  %ld...\n", nml_seg_id);
 			//get proximal part of segment, or interpolate from parent
 			auto eSegProximal = eSeg.child("proximal");
@@ -945,6 +933,7 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 					&& StrToF(eSegProximal.attribute("y").value(), seg.proximal.y)
 					&& StrToF(eSegProximal.attribute("z").value(), seg.proximal.z)
 					&& StrToF(eSegProximal.attribute("diameter").value(), seg.proximal.d)
+					&& seg.proximal.d >= 0
 				)){
 					log.error(eSegProximal,
 						"segment %ld has an invalid proximal point (%s, %s, %s), %s (x,y,z),diameter combination", nml_seg_id,
@@ -955,25 +944,35 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 					);
 					return false;
 				}
-				if(! (seg.proximal.d > 0) ){
-					log.error(eSegProximal, "segment %ld has an non-positive proximal point diameter ", nml_seg_id);
-					return false;
-				}
+				// proximal diameter might be allowed to be zero, this is checked along with distal diameter and parent relationship
 			}
 			
-			// FIXME also keep a reference to this element for further validation
-			// (like being allowed to taper to zero if it's an edge dendrite)
+			// check that no intermediate segment is connected at/with a point of zero diameter
+			if( seg.proximal.d <= 0 && seg.distal.d <= 0 ){
+				log.error(eSeg, "segment %ld cannot have proximal and distal edge diameters both zero", nml_seg_id);
+				return false;
+			}
+			// if the segment is attached to a parent, proximal.d must be non-zero
+			if( seg.parent != 1){
+				// proximal.d = 0 could be caused either explicitly, or by conneting to a parent that tapers to zero on its fractionAlong = 1
+				if( seg.proximal.d <= 0 ){
+					log.error(eSeg, "segment %ld cannot have a zero-diameter contact point with parent", nml_seg_id);
+				}
+			}
+			// whether distal.d = 0 is allowed will be checked when a child connects to it. FIXME make sure Eden avoids integrating the taper to zero if fractionAlong != 1
+			
+			// also keep a reference to this element for further validation, if needed
+			// tags_per_segment.add(&eSeg, nml_seg_id);
 			
 			//add new segment to Morphology array, yay!
 			morph.addSegment(seg, nml_seg_id);
-			
 		}
 		else if(strcmp(eMorphEl.name(), "segmentGroup") == 0){
 			const auto &eGroup = eMorphEl;
+			
 			Morphology::SegmentGroup group;
+			
 			//could also dump all segments and stabilize in the end, for more efficiency
-			
-			
 			
 			//must have a string ID, so it can be referred to
 			const char * group_name = eGroup.attribute("id").value();
@@ -986,6 +985,21 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 				log.error(eGroup, "group %s already defined", group_name);
 				return false;
 			}
+			
+			const char * sNeuroLexId = eGroup.attribute("neuroLexId").value();
+			if(strcmp(sNeuroLexId, "sao864921383") == 0){
+				// This mystery tag affects how a section of neurite is discretised !
+				// The segments in the group must form a continuous non-branching section.
+				// The segments are merged in one simulated compartment by default.
+				// If the <property tag="numberInternalDivisions" value="(number here)"/> tag is present in the group,
+				// the section is discretised along equal central path lengths, as NEURON does for pt3d based descriptions of sections.
+				// (Refer to the NEURON book chapter 5  for more details, and figure 5.6. for an example.)
+				// Note that this could be a suboptimal discretisation method if the neurite diameter, or parameters of active mechanisms, vary wildly. Take care when building models!
+				group.is_cable = true;
+				
+				// validate its being a cable after all child elements are parsed
+			}
+			// there are more commonly named neuroLexId's like "soma" "axon" "dendrites" but they don't affect the model
 			
 			for (auto eGroupEl: eGroup.children()){
 				if(strcmp(eGroupEl.name(), "member") == 0){
@@ -1047,10 +1061,18 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 						log.error(eInhoParm, "id attribute missing");
 						return false;
 					}
-					if( morph.inhomogeneous_parameters.has(name) ){
-						log.error(eInhoParm, "id %s already defined in Morphology", name);
+					if( group.inhomogeneous_parameters.has(name) ){
+						log.error(eInhoParm, "id %s already defined in segment group", name);
 						return false;
 					}
+					
+					auto variable = eInhoParm.attribute("variable").value();
+					if( !*variable ){
+						log.error(eInhoParm, "variable attribute missing");
+						return false;
+					}
+					// could also verify that it doesn't have the same 'variable name' as another variable, that is best handled in the specific case that might bring two variables together in the future
+					inhoparm.variable = variable;
 					
 					auto metric = eInhoParm.attribute("metric").value();
 					if( !*metric ){
@@ -1063,8 +1085,47 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 					}
 					inhoparm.metric = Morphology::InhomogeneousParameter::PATH_LENGTH_FROM_ROOT;
 					
-					// add inhomogeneous parameter to entire Morphology, yay!
-					morph.inhomogeneous_parameters.add(inhoparm, name);
+					// note: pugixml returns "" if the child, attr etc. does not exist (thus a null handle is used)
+					// Break the access down for alterantive parsers later
+					auto eProximal = eInhoParm.child("proximal");
+					auto translationStart = eProximal.attribute("translationStart").value();
+					
+					if(!*translationStart){
+						inhoparm.subtract_the_minimum = false;
+					}
+					else{
+						Real val;
+						if(!(
+							StrToF(translationStart, val)
+							&& val == 0
+						)){
+							log.error(eProximal, "invalid %s value \"%s\"", "translationStart", translationStart);
+							return false;
+						}
+						
+						inhoparm.subtract_the_minimum = true;
+					}
+					auto eDistal = eInhoParm.child("distal");
+					auto normalizationEnd = eDistal.attribute("normalizationEnd").value();
+					
+					if(!*normalizationEnd){
+						inhoparm.divide_by_maximum = false;
+					}
+					else{
+						Real val;
+						if(!(
+							StrToF(normalizationEnd, val)
+							&& val == 1
+						)){
+							log.error(eProximal, "invalid %s value \"%s\"", "normalizationEnd", normalizationEnd);
+							return false;
+						}
+						
+						inhoparm.divide_by_maximum = true;
+					}
+					
+					// add inhomogeneous parameter to segment group, yay!
+					group.inhomogeneous_parameters.add(inhoparm, name);
 				}
 				else if(strcmp(eGroupEl.name(), "property") == 0){
 					auto sTag = eGroupEl.attribute("tag").value();
@@ -1072,14 +1133,21 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 					
 					// NeuroML v2 would prefer each segment to map to a single abstraction entity,
 					// but v1 and NEURON models had to be imported too, so that's a compatibility/reproducibility feature
+					// but yet there is a real need to represent a section with many 3d points and few compartments
 					if( strcmp(sTag, "numberInternalDivisions") == 0 ){
+						if( !group.is_cable ){
+							log.error(eGroupEl, "group %s has attribute %s but is not a cable (add neuroLexId=\"sao864921383\" attribute to <segmentGroup> to make the group a cable)", group_name, sTag);
+							return false;
+						}
+						
 						if(!(
-							StrToL(sValue, group.nseg)
-							&& group.nseg > 0
+							StrToL(sValue, group.cable_nseg)
+							&& group.cable_nseg > 0
 						)){
 							log.error(eGroupEl, "group %s has an invalid %s parameter : %s", group_name, sTag, sValue);
 							return false;
 						}
+						// cable_nseg has a positive integer value, that is enough validation
 					}
 					else{
 						log.error(eGroupEl, "unknown property %s", sTag);
@@ -1093,6 +1161,29 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 			
 			//compact the group after all these unions
 			group.list.Compact();
+			if(group.is_cable){
+				// validate its being a cable on the spot
+				// due to the order of appearance of segment, the ultimate descendant must be the last one
+				// and its sequence of ancestors must be the group id's in reverse order
+				std::vector<Int> segs = group.list.toArray();
+				for(int i = segs.size() - 1; i > 0; i--){
+					const auto &seg = morph.segments.atSeq(segs[i]);
+					// check that the parent is correct
+					if(seg.parent != segs[i-1]){
+						log.error(eGroup, "group is not a proper unbranched cable: segment %ld 's parent is %ld when it should be %ld",
+							morph.segments.getId(segs[i]), morph.segments.getId(seg.parent), morph.segments.getId(segs[i-1]));
+						return false;
+					}
+					// check that fractionAlong = 1 (attached to end of parent) for a properly unbranched cable
+					if(seg.parent >= 0 && seg.fractionAlong != 1){
+						log.error(eGroup, "group is not a proper unbranched cable: segment %ld is not attached to end of parent but on fractionAlong = %.17g instead",
+							morph.segments.getId(segs[i]), seg.fractionAlong);
+						return false;
+					}
+				}
+				
+				// validate its being non-overlapping after all groups are parsed
+			}
 			
 			//add group to Morphology, yay!
 			morph.add(group, group_name);
@@ -1116,12 +1207,67 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 		log.error(eMorph, "there should be at least one segment");
 		return false;
 	}
+	// verify that the cables do not overlap
+	bool morph_uses_cables = false;
+	std::vector<Int> cable_per_segment(morph.segments.size(), -1); //group_seq of cable for each segment
 	
-	morph.debug_print();
+	for( Int group_seq = 0; group_seq < (Int) morph.segment_groups.size(); group_seq++){
+		const auto &group = morph.segment_groups[group_seq];
+		
+		if( !group.is_cable ) continue;
+		morph_uses_cables = true;
+		
+		std::vector<Int> segs = group.list.toArray();
+		for( Int seg_seq : segs ){
+			
+			// perhaps the semgnet is already included in another group?
+			Int previous_group_seq = cable_per_segment[seg_seq];
+			if(!(previous_group_seq < 0)){
+				// cables should not overlap!!
+				
+				// FIXME HERE
+				// log.error(eMorph, "segment groups %s and %s should be non-overlapping, yet they overlap on segment %ld", , , morph.lookupNmlId(seg_seq));
+				log.error(eMorph, "segment groups %ld and %ld should be non-overlapping, yet they overlap on segment %ld", group_seq, previous_group_seq, morph.lookupNmlId(seg_seq));
+				// maybe show offending group tags LATER?
+				return false;
+			}
+			cable_per_segment[seg_seq] = group_seq;
+		}
+		
+	}
+	
+	// if cables exist and yet they do not form the whole cell, warn
+	if(morph_uses_cables){
+		IdListRle segs_not_covered_by_cables;
+		for( Int seg_seq = 0; seg_seq < (Int) cable_per_segment.size(); seg_seq++ ){
+			if(cable_per_segment[seg_seq] < 0) segs_not_covered_by_cables.Addd(seg_seq);
+		}
+		segs_not_covered_by_cables.Compact();
+		if( segs_not_covered_by_cables.Count() > 0 ){
+			log.warning(eMorph, "the morphology's non-overlapping cables do not form the whole morphology. Segments not included in cables: ", morph.Stringify_SegSeq_List(segs_not_covered_by_cables).c_str());
+		}
+	}
+	
+	if(log.debug_printing) morph.debug_print();
 	
 	return true;
 }
 
+bool ParseAcrossSegGroup( const ImportLogger &log, const char *sGroupName, const pugi::xml_node &eAppliedOn, const Morphology &morph, AcrossSegOrSegGroup &applied_on ){
+	if(!sGroupName || !*sGroupName){
+		//check for "all" segmentGroup
+		//could possibly also create an actual "all" group, but who knows how "all" is actually used
+		sGroupName = "all";
+	}
+	//check if it exists in morphology
+	if(!morph.segment_groups_by_name.count(sGroupName)){
+		log.error(eAppliedOn, "group %s does not exist in associated Morphology", sGroupName);
+		return false;
+	}
+	
+	applied_on.Group(morph.segment_groups_by_name.at(sGroupName));
+	return true;
+}
 bool ParseAcrossSegOrSegGroup(const ImportLogger &log, const pugi::xml_node &eAppliedOn, const Morphology &morph, AcrossSegOrSegGroup &applied_on){
 	//Each definition can apply to a part of the cell, or the entire cell, beware!
 	//This means Properties depend on morphology of the parent cell.
@@ -1151,21 +1297,7 @@ bool ParseAcrossSegOrSegGroup(const ImportLogger &log, const pugi::xml_node &eAp
 		return true;
 	}
 	else{
-		
-		const char *group_name = aGroup.value();
-		if(!*group_name){
-			//check for "all" segmentGroup
-			//could possibly also create an actual "all" group, but who knows how "all" is actually used
-			group_name = "all";
-		}
-		//check if it exists in morphology
-		if(!morph.segment_groups_by_name.count(group_name)){
-			log.error(eAppliedOn, "group %s does not exist in associated Morphology", group_name);
-			return false;
-		}
-		
-		applied_on.Group(morph.segment_groups_by_name.at(group_name));
-		return true;
+		return ParseAcrossSegGroup(log, aGroup.value(), eAppliedOn, morph, applied_on);
 	}
 }
 
@@ -1188,7 +1320,7 @@ bool ParseQuantity(const ImportLogger &log, const pugi::xml_node &eLocation, con
 		return false;
 	}
 	
-	//then get the scaling factor that applies, compared to SI units, for that unit name
+	//then get the scaling factor that applies, compared to native units, for that unit name
 	auto native = Scales<UnitType>::native;
 	for( auto scale : Scales<UnitType>::scales ){
 		if(strcmp(unit_name, scale.name) == 0){
@@ -1251,13 +1383,11 @@ bool ParseLemsQuantity(const ImportLogger &log, const pugi::xml_node &eLocation,
 		log.error(eLocation, "%s attribute not containing a number and unit", attr_name);
 		return false;
 	}
-	//then get the scaling factor that applies, compared to SI units, for that unit name
+	//then get the scaling factor that applies, compared to native units, for that unit name
 	if(!dimensions.Has(dimension)){
 		log.error(eLocation, "unknown %s attribute units for %s", attr_name, dimensions.Stringify(dimension).c_str() );
 		return false;
 	}
-	
-	//then get the scaling factor that applies, compared to SI units, for that unit name
 	for( auto scale : dimensions.GetUnits(dimension) ){
 		if(strcmp(unit_name, scale.name.c_str()) == 0){
 			
@@ -1354,7 +1484,7 @@ bool ParseBiophysicalProperties(
 		bool non_uniform;
 		bool uses_conductivity;
 	};
-	//the // marked types arre supposed to have varparm elements, in practice only condDensity has ever been used
+	//the // marked types are supposed to have varparm elements, in practice only condDensity has ever been used
 	const static NameMap<ChannelDistributionSubType> distribution_types = {
 		{"channelPopulation"				, {ChannelDistribution::POPULATION	,false, false} }, //
 		{"channelDensity"					, {ChannelDistribution::FIXED 		,false, true } }, //
@@ -1490,30 +1620,49 @@ bool ParseBiophysicalProperties(
 						const auto &eVarParm = eDistrEl;
 						
 						// <xs:attribute name="segmentGroup" type="xs:string" use="required"/>
-						if( !*eVarParm.attribute("segmentGroup") ){
+						auto sGroupName = eVarParm.attribute("segmentGroup").value();
+						if( !*sGroupName ){
 							log.error(eVarParm, "segmentGroup attribute not specified");
 							return false;
 						}
-						if( !ParseAcrossSegOrSegGroup(log, eVarParm, morph, distribution) ) return false;
+						if( !ParseAcrossSegGroup(log, sGroupName, eVarParm, morph, distribution) ) return false;
+						
+						assert( ((const AcrossSegOrSegGroup &) distribution).type == AcrossSegOrSegGroup::Type::GROUP );
+						const auto &seg_group = morph.segment_groups[distribution.seqid];
 						
 						const auto &eInhoVal = eVarParm.child("inhomogeneousValue");
 						
-						auto inhoparm_name = eInhoVal.attribute("inhomogeneousParameter").value();
-						auto inhoparm_formula = eInhoVal.attribute("value").value();
-						
 						ChannelDistribution::InhomogeneousValue inho;
 						
-						inho.parm = morph.inhomogeneous_parameters.get_id(inhoparm_name);
+						auto inhoparm_name = eInhoVal.attribute("inhomogeneousParameter").value();
+						inho.parm = seg_group.inhomogeneous_parameters.get_id(inhoparm_name);
 						if(inho.parm < 0){
-							log.error(eInhoVal, "inhomogeneous parameter %s not found in associated Morphology", inhoparm_name);
+							log.error(eInhoVal, "inhomogeneous parameter %s not found in associated segment group", inhoparm_name);
 							return false;
 						}
+						const auto &inhoparm = seg_group.inhomogeneous_parameters.get(inho.parm);
+						
+						auto inhoparm_formula = eInhoVal.attribute("value").value();
+						
+						// now validate the formula. Perhaps this will get differentiated according to parameter type LATER
 						if(!*inhoparm_formula){
 							log.error(eInhoVal, "value not specified");
 							return false;
 						}
-						inho.formula = inhoparm_formula;
-						//perhaps the value foumula should be parsed here for consistency?
+						if( !ParseLemsExpression( inhoparm_formula, inho.value ) ){
+							log.error(eInhoVal, "could not parse %s expression", "value");
+							return false;
+						}
+						// Check that the only symbol is the varparm in use
+						for( const auto &symname : inho.value.symbol_refs ){
+							if( symname != inhoparm.variable ){
+								
+								log.error(eInhoVal, "unknown expression term %s (the only known one is the variable parameter %s)", 
+									symname.c_str(), inhoparm.variable.c_str());
+								return false;
+							}
+						}
+						assert( inho.value.symbol_refs.size() <= 1 );
 						
 						const char *parm = eVarParm.attribute("parameter").value();
 						if(!*parm){
@@ -1533,7 +1682,7 @@ bool ParseBiophysicalProperties(
 							
 							distribution.conductivity.type = ChannelDistribution::Conductivity::NON_UNIFORM;
 							distribution.conductivity.inho = inho;
-							// perhaps the value foumula should be parsed here too for consistency?
+							// perhaps the value foumula should be parsed here too for consistency LATER?
 							// TODO check whether these sub-distributions overlap, and whine!
 							// clone this distribution, replacing just the variable fields
 							bioph.membraneProperties.channel_specs.push_back(distribution); //ya
@@ -1669,7 +1818,7 @@ bool ParseBiophysicalProperties(
 	
 	// TODO verify calcium dependencies of ion channels are met, XXX assume zero concentration of missing for now
 	
-	bioph.debug_print(morph, ion_species);
+	if(log.debug_printing) bioph.debug_print(morph, ion_species);
 	return true;
 }
 
@@ -2628,7 +2777,7 @@ bool ParseIonChannel(const ImportLogger &log, const pugi::xml_node &eChannel, co
 				
 				for(size_t i = 0; i < forward_transitions.size(); i++){
 					const ForRevTransitionRef &f = forward_transitions[i], &r = reverse_transitions[i];
-					printf(" %s->%s vs %s<-%s\n", f.from, f.to, r.from, r.to);
+					// printf(" %s->%s vs %s<-%s\n", f.from, f.to, r.from, r.to);
 					
 					if(!( f == r )){
 						if(f < r){
@@ -2795,6 +2944,9 @@ bool parseCompartmentTarget(const ImportLogger &log, const pugi::xml_node &eTarg
 			return false;
 		}
 	}
+	// TODO: validate the name of the population in any case, because if there is a discrepancy
+	// jNML will prefer the population name on the XML path and thus give a different result !!
+	// DataWritper paths are already checked for this iirc
 	
 	const Network::Population &incident_population = populations.get(population_seq);
 	
@@ -2829,7 +2981,7 @@ bool parseCompartmentTarget(const ImportLogger &log, const pugi::xml_node &eTarg
 		return false;
 	}
 	if(segment_seq < 0){
-		log.error(eTarget, "%ssegment id %ld not present in target cell %ld", (*sIncident)?"implied ":"", segId, input_cell_instance_id);
+		log.error(eTarget, "%s segment id %ld not present in target cell %ld", (*sIncident)?"implied ":"", segId, input_cell_instance_id);
 		return false;
 	}
 	
@@ -3826,7 +3978,7 @@ struct ImportState{
 		
 		auto name = RequiredNmlId(log, eCell);
 		if(!name) return false;
-		printf("Parsing %s...\n", name);
+		// printf("Parsing physical cell %s...\n", name);
 		//parse cell properties
 		//Required: id, also morph and bioph, internally or externally defined
 		
@@ -4402,7 +4554,7 @@ struct ImportState{
 		}
 		
 		for (auto eNetEl: eNet.children()){
-			//printf("%s\n", eNetEl.name());
+			// printf("%s\n", eNetEl.name());
 			// perhaps annotation stuff?
 			// NOTE wherever there is Standalone, notes, annotation and property tage may exist. Handle properties as they appear, for they must be documented to be used.
 			if(
@@ -4433,7 +4585,8 @@ struct ImportState{
 				auto pop_name = RequiredNmlId(log, eUniPop);
 				if(!pop_name) return false;
 				
-				auto celltype_name = eUniPop.attribute("component").value();
+				auto celltype_name = RequiredAttribute(log, eUniPop, "component");
+				if(!celltype_name) return false;
 				pop.component_cell = cell_types.get_id(celltype_name);
 				if(pop.component_cell < 0){
 					
@@ -4453,8 +4606,12 @@ struct ImportState{
 					}
 					else{
 						//try realizing it as a component
+						
 						Int compinst_seq = component_instances.get_id(celltype_name);
-						if( compinst_seq < 0 ) return false;
+						if( compinst_seq < 0 ){
+							log.error( eUniPop, "unknown cell type %s", celltype_name );
+							return false;
+						}
 						
 						const auto &compinst = component_instances.get(compinst_seq);
 						
@@ -4665,7 +4822,7 @@ struct ImportState{
 						// For example, a STDP synaptic component could be implemented with just a spiking projection, with one post-synaptic component:
 						//   then, post-synaptic component should present Voltage and have explicit spike threshold parameter, or should receive spike from its own component as well (allowing event driven simulation)
 						
-						// NB assume a physical cell has SI dimensionality all over its extent, and presents voltage and receives current
+						// NB assume a physical cell has physical dimensionality all over its extent, and presents voltage and receives current
 						// 	also assume spike threshold exists (otherwise no triggering is possible), TODO check Vt existence and complain
 						// (if it was a cyborg cell it would have been modelled as something coupled with artificial cells in between, probably)
 						
@@ -4852,6 +5009,7 @@ struct ImportState{
 			else{
 				// unknown, ignore
 			}
+			// printf("done %s\n", eNetEl.name());
 		}
 		
 		networks.add(net, name);
@@ -6580,8 +6738,9 @@ struct ImportState{
 			Int derived_seq = new_type.derived_variables.get_id( name );
 			assert(derived_seq >= 0);
 			
-			Int derived_anotherseq = derived_nodes.add( eDerived, name ); 
+			Int derived_anotherseq = derived_nodes.add( eDerived, name );
 			assert( derived_seq == derived_anotherseq );
+			(void)  derived_anotherseq; // used only for assert, for now
 			
 			if( !TryAddExposure( log, eDerived, new_type.exposures, ComponentType::Exposure::DERIVED, derived_seq ) ) return false; // also check exposure
 			
@@ -7031,7 +7190,8 @@ struct ImportState{
 };
 
 //Top-level NeuroML import routine
-bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simulation, FILE *info_log, FILE *error_log){
+// TODO add debug mode
+bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simulation, bool verbose, FILE *info_log, FILE *error_log){
 	
 	bool ok = false;
 	fprintf(info_log, "Starting import from NeuroML file %s\n", top_level_filename);
@@ -7059,7 +7219,7 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 		"rampGenerator",
 		"rampGeneratorDL",
 		
-		// "compoundInput", LATER hierarchical cells
+		// "compoundInput", TODO
 		"voltageClamp",
 		"voltageClampTriple",
 
@@ -7082,7 +7242,7 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 		"expOneSynapse",
 		"expTwoSynapse",
 		"expThreeSynapse",
-		// "doubleSynapse",
+		// "doubleSynapse", TODO
 		"blockingPlasticSynapse",
 		
 		"gapJunction",
@@ -7166,7 +7326,7 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 	
 	// The set of files currently opened
 	NmlImportContext import_context;
-	ImportLogger log(import_context, error_log, true);
+	ImportLogger log(import_context, error_log, verbose); // TODO customise
 	
 	// The set of files to be read
 	// ( since things may refer to other things referred to further along in the same or another file,
@@ -7485,13 +7645,17 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 	// LEMS component types
 	for(const pugi::xml_node &eElm : top_level_nodes_by_name.getOrNew("ComponentType") ){
 		// temp trick to skip logging for internal core components
+		// and also force, TODO something more elegant...
 		bool old_debug = log.debug_printing;
 		bool is_internal_element = ( strcmp( log.GetFilenameFromElement(eElm), LEMS_CoreComponents_filename ) == 0 );
 		if( is_internal_element ) log.debug_printing = false;
+		//TODO be more selective on what to be verbose on, eg components only...
+		
 		
 		if( !import_state.ParseLemsComponentType(log, eElm) ) goto CLEANUP;
 		
 		if( is_internal_element ) log.debug_printing = old_debug;
+		
 	}
 	
 	printf("Parsed all component types\n");
@@ -7589,12 +7753,14 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 	}
 	
 	// networks
+	printf("Parsing networks...\n");
 	for(const pugi::xml_node &eElm : top_level_nodes_by_name.getOrNew("network") ){
 		if( !import_state.ParseNetwork(log, eElm) ) goto CLEANUP; }
 	for(const pugi::xml_node &eElm : top_level_nodes_by_name.getOrNew("networkWithTemperature") ){
 		if( !import_state.ParseNetwork(log, eElm) ) goto CLEANUP; }
 	
 	// parse simulations
+	printf("Parsing <Simulation>...\n");
 	for(const pugi::xml_node &eElm : top_level_nodes_by_name.getOrNew("Simulation") ){
 		if( !import_state.ParseSimulation(log, eElm) ) goto CLEANUP; }
 		
