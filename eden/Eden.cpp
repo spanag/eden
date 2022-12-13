@@ -568,7 +568,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	
 	
 	// the basic RNG seed.
-	// Modify using mose sim properties, LATER
+	// Modify using more sim properties, LATER
 	long long simulation_random_seed;
 	if( config.override_random_seed ){
 		simulation_random_seed = config.override_random_seed_value;
@@ -586,7 +586,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	}
 	
 	
-	const Network &net = networks.get(target_simulation);
+	const Network &net = networks.get(sim.target_network);
 	
 	struct CellInternalSignature{
 		// LATER perhaps optimize for tiny table sizes; for larger tables, the extra pointer, memory fragmentation, etc. are amortized costs
@@ -779,6 +779,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				int32_t number_of_compartments;
 				
 				// for each segment(seg_seq), keep a list of the compartments it spans, and up to which fractionAlong it spans them.
+				// (Implicitly, the first compartment in the list contains the start of the segment ie where fractionAlong = 0.)
 				// NB: Each segment overlapping a cable is fully contained by it, thus it 
 				std::vector< std::vector<int32_t> >segment_to_compartment_seq; 
 				std::vector< std::vector<Real> >segment_to_compartment_fractionAlong;
@@ -796,7 +797,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				
 				
-				// Get the comp_seq which contains the fractionAlong across seg_seq (for this abstract mapping; lauout in memory could be different)
+				// Get the comp_seq which contains the fractionAlong across seg_seq (for this abstract mapping; layout in memory could be different)
 				int32_t GetCompartmentForSegmentLocation(Int seg_seq, Real fractionAlong) const {
 					// printf("Compartment for seg_seq %d fractionAlong %g \n", (int)seg_seq, fractionAlong );
 					// There is a possibillity for fractionAlong to deviate due to roundoff, perhaps the value could be clipped instead
@@ -918,7 +919,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// so they can be simulated with the exact same code
 			struct CompartmentDefinition{
 				// could convert into proxy object, to allow Struct-of-Arrays transformation, for both memory and time efficiency, LATER
-				Real V0, Vt, AxialResistance, Capacitance;
+				Real V0, Vt, AxialResistance, Capacitance; // Don't remove these, keep to maintain a versatile api.
 				
 				
 				std::vector<IonChannelDistributionInstance> ionchans;
@@ -2253,7 +2254,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		};
 		static CellInternalSignature::ComponentValueInstance GetValues(const ComponentType &type, const ComponentInstance &instance){
 			CellInternalSignature::ComponentValueInstance ret;
-			
+			// TODO simplify constants out of this!
 			std::vector<Real> customized_constants(type.properties.contents.size());
 			// try overriding the properties with some parms for this component instance
 			for(size_t seq = 0; seq < type.properties.contents.size(); seq++ ){
@@ -4313,7 +4314,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		size_t Index_VoltageThreshold = AppendSingle_CellScope.Constant( compartment_Vt, "Spike Threshold ("+std::string(Scales<Voltage>::native.name)+")" );
 		size_t Index_MembraneArea = AppendSingle_CellScope.Constant( compartment_areas, "Membrane Surface Area (microns^2)" );
 		size_t Index_Temperature = AppendSingle_CellScope.Constant( net.temperature, "Temperature (K)" ); // TODO move to global
-		
+		// TODO add a static_assert that engine unit for temperature is always kelvins, to omit dancing around the fact
 		// and states
 		pig.Index_Voltages = AppendSingle_CellScope.StateVariable( compartment_V0, "Voltage ("+std::string(Scales<Voltage>::native.name)+")"  );
 		
@@ -4824,7 +4825,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						const auto &gate = chan.gates.contents[gate_seq];
 						auto &pergate = distimpl.per_gate[gate_seq];
 						const auto &for_that = for_what;
-						std::string for_what = for_that+" channel "+itos(inst_seq);
+						std::string for_what = for_that+" channel "+itos(inst_seq); // FIXME maybe 'gate' here?
 						
 						const std::string TauInf_suffix = Convert::Suffix(
 							(( Scales<Time>::native ^ -1 ) * Scales<Time>::native ) // to unitless
@@ -4907,7 +4908,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							
 							float initial = NAN; // actually will be re-initialized at run time, to support LEMS components too
 							
-							if( has_tau ){
+							if( has_inf ){
 								initial       = DescribeRateThing::Value(comp_def.V0, gaga.steadyState);
 							}
 							else{
