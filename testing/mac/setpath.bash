@@ -21,3 +21,5 @@ ln -fs "$HOMEBREW_PATH/opt/bison/bin/bison" "$TEMP_LINK_DIR/bison"
 ln -fs "$HOMEBREW_PATH/opt/flex/bin/flex"   "$TEMP_LINK_DIR/flex"
 
 PATH="$TEMP_LINK_DIR:$PATH"
+
+source $TEMP_LINK_DIR/venv/bin/activate

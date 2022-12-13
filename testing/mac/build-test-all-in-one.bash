@@ -18,11 +18,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/build-wheel.bash"
 WHEEL_TO_TEST="$REPO_DIR/testing/sandbox/python_package/dist/eden_simulator-$VERSION_PY-py3-none-$WHEEL_PLAT_NAME_FILENAME.whl"
 
 "$(dirname "${BASH_SOURCE[0]}")/run-tests-on-wheel.bash" "$WHEEL_TO_TEST"
-
+echo "Tests passed"
 cp -f "$WHEEL_TO_TEST" "$ARTIFACTS_DIR"
-
-# Prepare for a new build, reset PATH
-set PATH=%PREVPATH%
-
+echo "Artifact ready on $ARTIFACTS_DIR"
 
 # done !
