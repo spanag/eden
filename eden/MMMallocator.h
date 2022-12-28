@@ -13,11 +13,15 @@
 #include <new>       // Required for placement new and std::bad_alloc
 #include <stdexcept> // Required for std::length_error
 
-#if defined(__INTEL_COMPILER)
+#if defined(_MSC_VER)
 #include <malloc.h>
+void *MMMalloc( size_t alignment, size_t size ){ return _aligned_malloc(size, alignment); }
+void MMFree( void *buf ){ return _aligned_free(buf); }
 #else
-#include <mm_malloc.h>
-#endif // defined(__GNUC__)
+#include <stdlib.h>
+void * MMMalloc( size_t alignment, size_t size ){ return aligned_alloc(alignment, size); }
+void MMFree( void *buf ){ return free(buf); }
+#endif // not defined(_MSC_VER)
 
 // The following headers contain stuff that _mm_Mallocator uses.
 
@@ -108,7 +112,11 @@ public:
 		}
 
 		// _mm_Mallocator wraps _mm_malloc().
-		void * const pv = _mm_malloc(n * sizeof(T), Alignment);
+		// fix for aligned_alloc refusing to service unaligned buf sizes ...
+		size_t buf_size = n * sizeof(T); // overflow is guarded against above
+		size_t padded_buf_size = (((buf_size-1)/Alignment)+1) * Alignment; // some bit ops for 1<<N alignment
+		void * const pv = MMMalloc(Alignment, padded_buf_size);
+		// More info about the new aligned new(Align) T[N] and, worse, delete[](Align) T on https://www.cppstories.com/2019/08/newnew-align/
 
 		// Allocators should throw std::bad_alloc in the case of memory allocation failure.
 		if (pv == NULL){
@@ -120,7 +128,7 @@ public:
 
 	void deallocate(T * const p, const std::size_t n) const{
 		 // _mm_Mallocator wraps _mm_free().
-		_mm_free(p);
+		MMFree(p);
 	}
 
 	// The following will be the same for all allocators that ignore hints.

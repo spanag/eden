@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Get brew path from here
+source "$(dirname "${BASH_SOURCE[0]}")/setup-options.bash"
+PATH="$HOMEBREW_BIN:$PATH"
+
 # Create a temporary folder, relative to cwd, to store links to the binaries to be used
 # something more reasonable LATER
 
@@ -21,3 +25,11 @@ ln -fs "$HOMEBREW_PATH/opt/bison/bin/bison" "$TEMP_LINK_DIR/bison"
 ln -fs "$HOMEBREW_PATH/opt/flex/bin/flex"   "$TEMP_LINK_DIR/flex"
 
 PATH="$TEMP_LINK_DIR:$PATH"
+
+source $TEMP_LINK_DIR/venv/bin/activate
+
+# may also need HDF5 install present on M1 Mac's
+# set it here because HOMEBREW_PATH is used
+if  [ "$BUILD_TARGET_ARCH" = "arm64" ]; then
+    export HDF5_DIR=$HOMEBREW_PATH
+fi

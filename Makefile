@@ -228,15 +228,17 @@ ${OBJ_DIR}/LEMS_Expr_Test${DOT_O}: ${SRC_EDEN}/neuroml/LEMS_Expr_Test.cpp ${SRC_
 EXTRA_WHEEL_PACKAGE_TAGS ?=
 # Python wheel with embedded executable of EDEN
 # building a wheel out of tree simply doesn't work, without warning. Copy the package tree in a temporary location and build there (cwd must also be on location of setup.py or the files won't be added) 
+WHEEL_FILE ?= $(TESTING_DIR)/sandbox/python_package/dist/eden_simulator-${WHEEL_VERSION}-py3-none-${WHEEL_PLAT_NAME_FILENAME}.whl
 wheel: eden
 	rm -rf $(TESTING_DIR)/sandbox/python_package/
 	cp -r $(TESTING_DIR)/python_package $(TESTING_DIR)/sandbox/
 	"mkdir" -p $(TESTING_DIR)/sandbox/python_package/bin/
 	mv $(TESTING_DIR)/sandbox/python_package/eden_tools $(TESTING_DIR)/sandbox/python_package/eden_simulator
-	cp ${BIN_DIR}/eden${DOT_X} $(TESTING_DIR)/sandbox/python_package/bin/eden$(EXE_EXTENSION_DIST)
-	$(MAYBE_NOT_TARGET_MAC) || bash $(TESTING_DIR)/mac/bundle-dylibs.bash $(TESTING_DIR)/sandbox/python_package/bin/eden$(EXE_EXTENSION_DIST) "$(TOOLCHAIN_LIBS_PATH)"
+	python3 -c "import sys; a=sys.argv[1]; print('__version__=\"%s\"\n__version_info__=%s\n' % (a, str(tuple(a.split('.')))))" "${WHEEL_VERSION}" > $(TESTING_DIR)/sandbox/python_package/eden_simulator/version.py
+	mkdir -p $(TESTING_DIR)/sandbox/python_package/eden_simulator/data/bin && cp ${BIN_DIR}/eden${DOT_X} $(TESTING_DIR)/sandbox/python_package/eden_simulator/data/bin/eden$(EXE_EXTENSION_DIST)
 	cd $(TESTING_DIR)/sandbox/python_package && python3 setup_wheel.py --package-version ${WHEEL_VERSION}  bdist_wheel  $(EXTRA_WHEEL_PACKAGE_TAGS)
-	$(MAYBE_NOT_TARGET_LINUX) || python3 -m auditwheel repair --plat ${WHEEL_TARGET_PLAT} --only-plat --wheel-dir $(TESTING_DIR)/sandbox/python_package/dist/ $(TESTING_DIR)/sandbox/python_package/dist/eden_simulator-${WHEEL_VERSION}-py3-none-${WHEEL_PLAT}.whl
+	$(MAYBE_NOT_TARGET_MAC) || delocate-wheel -k --wheel-dir $(TESTING_DIR)/sandbox/python_package/dist/ $(WHEEL_FILE) && delocate-listdeps $(WHEEL_FILE)
+	$(MAYBE_NOT_TARGET_LINUX) || python3 -m auditwheel repair --plat ${WHEEL_TARGET_PLAT} --only-plat --wheel-dir $(TESTING_DIR)/sandbox/python_package/dist/ $(WHEEL_FILE)
 
 # external libraries
 cJSON: ${OBJ_DIR}/${CJSON_NAME}${DOT_O}

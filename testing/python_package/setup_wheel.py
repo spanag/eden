@@ -16,6 +16,10 @@ parser.add_argument(
 sys.argv = [sys.argv[0]] + argv  # Write the remaining arguments back to `sys.argv` for distutils to read
 assert (config_options.package_version)
 
+# TODO maybe write version.py file here...
+package_name = "eden_simulator"
+package_dir = package_name
+
 # Now, setuptools can be loaded safely
 import setuptools
 import sysconfig
@@ -29,7 +33,6 @@ with open("README_wheel.md", "r") as fh:
 # As seen on https://github.com/Yelp/dumb-init/blob/master/setup.py#L11-L27
 try:
     from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
-
     class my_bdist_wheel(_bdist_wheel):
 
         def finalize_options(self):
@@ -42,8 +45,8 @@ try:
         def get_tag(self):
             return ('py3', 'none',) + _bdist_wheel.get_tag(self)[2:]
         
-except ImportError:
-    my_bdist_wheel = None
+except None: # ImportError:
+     my_bdist_wheel = None # well the wheel package is really necessary...
 
 from setuptools.dist import Distribution
 class BinaryDistribution(Distribution):
@@ -128,28 +131,22 @@ def _get_scripts():
     if sys.platform == "darwin":
         return [] # TODO a python wrapper instead
         
-    scripts = ['bin/%s%s' % (script_name, extension)
+    scripts = ['data/bin/%s%s' % (script_name, extension)
         for script_name in script_names]
         
     return scripts
 
-package_data_locations = ['../bin/*']
+package_data_locations = ['data/bin/*']
 
-zip_safe = True
+zip_safe = False
 
 if sys.platform == "darwin":
-    package_data_locations += ['../bin/dylibs/*']
-    zip_safe = False
-    
-    # alternatively, for dylib hierarchy (TODO)
-    # or maybe graft bin/ instead?
-    # for root, _, filenames in os.walk('bin/dylibs'):
-    #         for fname in filenames:
-    #             fullname = join(root, fname)
-    #             scripts = scripts + [ for file_name in os.walk('bin/dylibs')]
+    # package_data_locations += ['../bin/dylibs/*'] # handled by delocate now
+    #zip_safe = False
+    pass
 
 setuptools.setup(
-    name="eden_simulator",
+    name=package_name,
     version=config_options.package_version,
     description="Standalone Python wheels for the EDEN neural simulator",
     long_description=long_description,
@@ -172,16 +169,24 @@ setuptools.setup(
     ],
     keywords=['simulator','simulation','HPC','neuroscience','NeuroML'],
     # project_urls
-    packages=['eden_simulator'],
-    package_data={'eden_simulator': package_data_locations},
-    # include_package_data=True,
+    packages=[package_name],
+    # for future reference: whether binaries are included or silently dropped is up to the python packaging system's whims, the whims of the day were last tracked here https://github.com/pypa/setuptools/issues/3340#issuecomment-1219383976
+    # packages=setuptools.find_namespace_packages(where=package_dir),
+    # packages=setuptools.find_namespace_packages(where="."),
+    # package_dir={"":package_dir},
+    # package_dir={"":'.'},
+    # package_dir={package_dir:package_dir},
+    package_data={package_name: package_data_locations},
+    include_package_data=False,
     # scripts 
     scripts=_get_scripts(),  
     # scripts=['eden'], 
     install_requires = [
         'pyneuroml',
+        'lxml',
     ] + (['h5py <= 2.10.*'] if (sysconfig.get_platform() == 'win32') else []) # h5py wheels are missing since, and pip doesn't know that h5py source is tough to build
     ,
+
     python_requires='>=3.2',
     platforms=['linux'],
     cmdclass={

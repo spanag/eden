@@ -89,7 +89,7 @@ def runEden( example_lems_file, threads=None, extra_cmdline_args=None, executabl
 	import pkg_resources
 	import platform
 	exe_extension = ".exe" if platform.system() == 'Windows' else ""
-	eden_bundled_exe = "../bin/eden"+exe_extension
+	eden_bundled_exe = "data/bin/eden"+exe_extension
 	
 	if pkg_resources.resource_exists(__name__, eden_bundled_exe):
 		eden_bundled_exe_filename = pkg_resources.resource_filename(__name__, eden_bundled_exe)

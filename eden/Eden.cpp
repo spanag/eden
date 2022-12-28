@@ -6523,12 +6523,51 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		timeval compile_start, compile_end;
 		gettimeofday(&compile_start, NULL);
 		
+		
 		std::string basic_flags =
 			" -std=c11 -Wall"
 			" -Wno-attributes"
 			" -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-function";
 		std::string dll_flags = " -shared -fpic"; //" -shared -fpic -nodefaultlibs";
-		std::string optimization_flags = " -Ofast -march=native -mtune=native";
+		std::string optimization_flags = " -Ofast";
+		// Optimization flags are quirky between CPU archs.
+		// When using GCC, refer to: https://gcc.gnu.org/onlinedocs/gcc/Submodel-Options.html#Submodel-Options
+		
+		// for arch detection, refer to:
+		// https://stackoverflow.com/questions/66249936/detecting-cpu-architecture-compile-time
+		// and https://sourceforge.net/p/predef/wiki/Architectures/
+		// also detecting arm on visual c++: https://stackoverflow.com/questions/37251625/detect-arm-64-in-preprocessor
+		// TODO move arch aliases to Common.h
+		
+		#if defined(__i386__) || defined(__i386) || defined(_M_IX86) || \
+			defined(__x86_64__) || defined(_M_X64)
+		// the old reliable setting for the typical PC user base, mcpu is deprecated alias for mtune here
+		optimization_flags += " -march=native -mtune=native";
+		#elif defined(__mips)
+		// also for mips for some reason? similarly old? -mcpu is not supported, so
+		optimization_flags += " -march=native -mtune=native";
+		#elif defined(__s390__) || defined(__s390x__)
+		// also for s390. funny enough
+		optimization_flags += " -march=native -mtune=native";
+		#elif defined(__arm__) || defined(_M_ARM) || \
+			defined(__aarch64__) || defined(_M_ARM64)
+		
+		// Now it gets interesting because of Apple Clang...
+		// for GCC, refer to https://community.arm.com/arm-community-blogs/b/tools-software-ides-blog/posts/compiler-flags-across-architectures-march-mtune-and-mcpu
+		// for Clang, refer to: can't see any answer here https://clang.llvm.org/docs/UsersManual.html
+		// also: https://maskray.me/blog/2022-08-28-march-mcpu-mtune
+		
+		// reportedly, -mcpu=native is supported on clang since 2018, so it should be available on all setups
+		// let's hope this works
+		optimization_flags += " -mcpu=native";
+		#else
+		// some other arch, this has a chance of working, but risks failing
+		// the true solution for compiler detection is some sort of autotools...
+		optimization_flags += " -mcpu=native";
+		// probably works for gcc on powerpc: https://gcc.gnu.org/onlinedocs/gcc/RS_002f6000-and-PowerPC-Options.html
+		
+		// will still fail on old versions/new platforms, oh well
+		#endif
 		std::string fastbuild_flags = " -O0";
 		std::string asm_flags = " -S -masm=intel -fverbose-asm";
 		std::string lm_flags = " -lm";
@@ -6594,7 +6633,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 
 				more_commentary += "\nUnpack the file anywhere, and add the unpacked <path ...>\\bin directory to EDEN's PATH.";
 				#elif defined __linux__
-				more_commentary = "GCC is usually already installed on Linux setups. It if is not installed, refer to your distribution's documentation on how to install the essentials for building from source.";
+				more_commentary = "GCC is usually already installed on Linux setups. If it is not installed, refer to your distribution's documentation on how to install the essentials for building from source.";
 				#elif defined(__APPLE__)
 				more_commentary = "A GCC-compatible compiler cn be installed with the Command Line Developer Tools for Mac. Run the following command on the Terminal to install:\n";
 				more_commentary += "xcode-select --install\n\n";
