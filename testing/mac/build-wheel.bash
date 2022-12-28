@@ -11,12 +11,10 @@ VERSION_PY=$VERSION
 
 cd $REPO_DIR
 
-TARGET_ARCH="$(uname -m)"
-
 WHEEL_MACOS_VER=
-if [ "$TARGET_ARCH" = "x86_64" ]; then
+if [ "$BUILD_TARGET_ARCH" = "x86_64" ]; then
 WHEEL_MACOS_VER="-10.6"
-elif  [ "$TARGET_ARCH" = "arm64" ]; then
+elif  [ "$BUILD_TARGET_ARCH" = "arm64" ]; then
 WHEEL_MACOS_VER="-11.0"
 fi
 
