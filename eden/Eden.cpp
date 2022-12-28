@@ -6541,6 +6541,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			lm_flags = " -lmvec -lm" ; // XXX must revert automatically, if compiler is old enough 
 		}
 		// TODO extra_flags, vec_report etc.
+		std::string workaround_flags;
+		#ifdef _WIN32
+		if( !config.use_icc ){
+			// Workaround for up to 2020ish releases of gcc on windows amd64 when native arch includes AVX512, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=65782#c6
+			workaround_flags += " -fno-asynchronous-unwind-tables";
+		}
+		#endif
 		
 		std::string compiler_name = "icc";
 		if(!config.use_icc){
@@ -6622,7 +6629,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		// NOTE -lm must be put last, after other obj files (like source code) have stated their dependencies on libm
 		// further reading: https://eli.thegreenplace.net/2013/07/09/library-order-in-static-linking
-		std::string cmdline =     compiler_name + " " + basic_flags + dll_flags + code_quality_flags + " -o " + dll_filename + " " + code_filename + lm_flags;
+		std::string cmdline =     compiler_name + " " + basic_flags + dll_flags + code_quality_flags + " -o " + dll_filename + " " + code_filename + lm_flags + workaround_flags;
 		if(config.verbose) printf("%s\n", cmdline.c_str());
 		std::string cmdline_asm = compiler_name + " " + basic_flags + dll_flags + code_quality_flags + asm_flags + " " + code_filename + lm_flags;
 		if(config.output_assembly){

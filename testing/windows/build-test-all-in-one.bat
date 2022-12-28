@@ -30,8 +30,11 @@ copy %WHEEL_TO_TEST% %ARTIFACTS_DIR% || goto :error
 
 
 :: done !
+set PATH=%PREVPATH%
+cd %PREVCWD%
 exit /b 0
 
 :error
 @echo ERROR : Last command failed with error code %errorlevel%. Exiting.
+set PATH=%PREVPATH%
 @exit /b %errorlevel%

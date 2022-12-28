@@ -3,7 +3,7 @@
 # Before loading setuptools, play with cmdline args here. Because setuptools will complain for the parameters it doesn't recognize
 import sys
 import argparse
-import os
+
 # Add custom parameters to setup.py
 parser = argparse.ArgumentParser( allow_abbrev=False )
 parser.add_argument(
@@ -18,6 +18,8 @@ assert (config_options.package_version)
 
 # Now, setuptools can be loaded safely
 import setuptools
+import sysconfig
+
 
 # load README
 with open("README_wheel.md", "r") as fh:
@@ -178,7 +180,8 @@ setuptools.setup(
     # scripts=['eden'], 
     install_requires = [
         'pyneuroml',
-    ],
+    ] + (['h5py <= 2.10.*'] if (sysconfig.get_platform() == 'win32') else []) # h5py wheels are missing since, and pip doesn't know that h5py source is tough to build
+    ,
     python_requires='>=3.2',
     platforms=['linux'],
     cmdclass={
