@@ -58,7 +58,7 @@ def runEden( example_lems_file, threads=None, extra_cmdline_args=None, executabl
 	if executable_path:
 		args[0] = executable_path
 		
-	else if pkg_resources.resource_exists(__name__, eden_bundled_exe):
+	elif pkg_resources.resource_exists(__name__, eden_bundled_exe):
 		eden_bundled_exe_filename = pkg_resources.resource_filename(__name__, eden_bundled_exe)
 		if verbose:
 			print("Using bundled executable: "+eden_bundled_exe+" on "+eden_bundled_exe_filename)
