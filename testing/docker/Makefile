@@ -33,7 +33,8 @@ build_eden_for_docker: ${DOCKER_TESTING_DIR}/eden_standalone.Dockerfile docker_b
 	${SUDO_DOCKER} build --file $< -t ${EDEN_DOCKER_IMAGE_FULLNAME} ${PROJ_BASE}
 
 # automatic, containerized testing
-test: docker_test_env
+# add all containers as dependencies to ensure that at least, they are built, LATER actually run the tests for all images
+test: docker_test_env build_eden_for_docker
 	rm -rf testing/sandbox/validation_tests
 	cp -rT ${PROJ_BASE}testing/validation_tests testing/sandbox/validation_tests
 	chmod -R 777 testing/sandbox/validation_tests

@@ -1,6 +1,7 @@
 import numpy as np
 
-from .run_sim import runNeuron, runEden
+from eden_simulator import runEden
+from .run_sim import runNeuron
 
 # TODO add docstrings
 def GetOverUnder_Box( results_Truth, time_Truth, dt_box, dv_box ):

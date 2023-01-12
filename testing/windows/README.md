@@ -32,7 +32,7 @@ The provided scripts `eden\testing\windows\build-eden-i686.bat` and `eden\testin
 ### Testing 
 
 To run the full battery of tests requires validating against a 'gold' reference of what the results of the simulations should be; that reference is provided by the NEURON simulator.
-Setting NEURON up automatically and without affecting the setup is a work in progress; for now the full tests are run on a Docker on Linux environment. A Docker environment for EDEN on Windows is also in development.
+Setting NEURON up automatically and without affecting the setup is a work in progress; for now the full tests are run on a Docker on Linux environment. A Docker environment for EDEN on Windows might also come up given sufficient demand.
 
 Instead, for the moment, a simple smoke test is run on Windows. Code paths are largely the same among platforms, the only practical difference is in generating code and invoking a compiler at runtime, which is what is being tested.
 

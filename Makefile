@@ -6,6 +6,9 @@ BUILD_STAMP ?= $(shell "date" +"%Y-%m-%d")
 BUILD ?= debug
 PLATFORM ?= cpu
 
+WHEEL_VERSION ?= $(shell cat VERSION)
+
+
 PROJ_BASE	?= .
 
 # where to generate build output, in general?
@@ -17,7 +20,8 @@ BIN_DIR ?= $(OUT_DIR)/bin
 # i.e. intermediate artifacts
 OBJ_DIR ?= $(OUT_DIR)/obj
 
-# TODO WHEEL_DIR
+# i.e. Python wheel artifacts
+WHEEL_DIR ?= $(BIN_DIR)
 
 # Main product's source code
 SRC_EDEN := $(PROJ_BASE)/eden
@@ -228,17 +232,45 @@ ${OBJ_DIR}/LEMS_Expr_Test${DOT_O}: ${SRC_EDEN}/neuroml/LEMS_Expr_Test.cpp ${SRC_
 EXTRA_WHEEL_PACKAGE_TAGS ?=
 # Python wheel with embedded executable of EDEN
 # building a wheel out of tree simply doesn't work, without warning. Copy the package tree in a temporary location and build there (cwd must also be on location of setup.py or the files won't be added) 
-WHEEL_FILE ?= $(TESTING_DIR)/sandbox/python_package/dist/eden_simulator-${WHEEL_VERSION}-py3-none-${WHEEL_PLAT_NAME_FILENAME}.whl
+WHEEL_PREFIX ?= $(TESTING_DIR)/sandbox
+# building tow wheels at once can't happen in the same folder. break them into separarte directories like in: https://stackoverflow.com/questions/51300874/how-do-i-build-multiple-wheel-files-from-a-single-setup-py
+
+# TODO improve verification for auditwheel and delocate, when the authors add such an option
+
+# haven't found out yet how to mix static patterns with per-target variables yet
+# https://stackoverflow.com/questions/23017477/post-build-step-for-multiple-targets
+
+wheel: WHEEL_BUILD_DIR=${WHEEL_PREFIX}/wheel
+wheel: WHEEL_FILE=$(WHEEL_BUILD_DIR)/dist/eden_simulator-${WHEEL_VERSION}-py3-none-${WHEEL_PLAT_NAME_FILENAME}.whl 
 wheel: eden
-	rm -rf $(TESTING_DIR)/sandbox/python_package/
-	cp -r $(TESTING_DIR)/python_package $(TESTING_DIR)/sandbox/
-	"mkdir" -p $(TESTING_DIR)/sandbox/python_package/bin/
-	mv $(TESTING_DIR)/sandbox/python_package/eden_tools $(TESTING_DIR)/sandbox/python_package/eden_simulator
-	python3 -c "import sys; a=sys.argv[1]; print('__version__=\"%s\"\n__version_info__=%s\n' % (a, str(tuple(a.split('.')))))" "${WHEEL_VERSION}" > $(TESTING_DIR)/sandbox/python_package/eden_simulator/version.py
-	mkdir -p $(TESTING_DIR)/sandbox/python_package/eden_simulator/data/bin && cp ${BIN_DIR}/eden${DOT_X} $(TESTING_DIR)/sandbox/python_package/eden_simulator/data/bin/eden$(EXE_EXTENSION_DIST)
-	cd $(TESTING_DIR)/sandbox/python_package && python3 setup_wheel.py --package-version ${WHEEL_VERSION}  bdist_wheel  $(EXTRA_WHEEL_PACKAGE_TAGS)
-	$(MAYBE_NOT_TARGET_MAC) || delocate-wheel -k --wheel-dir $(TESTING_DIR)/sandbox/python_package/dist/ $(WHEEL_FILE) && delocate-listdeps $(WHEEL_FILE)
-	$(MAYBE_NOT_TARGET_LINUX) || python3 -m auditwheel repair --plat ${WHEEL_TARGET_PLAT} --only-plat --wheel-dir $(TESTING_DIR)/sandbox/python_package/dist/ $(WHEEL_FILE)
+	rm -rf $(WHEEL_BUILD_DIR)
+	cp -r $(TESTING_DIR)/python_package $(WHEEL_BUILD_DIR)
+	python3 -c "import sys; a=sys.argv[1]; print('__version__=\"%s\"\n__version_info__=%s\n' % (a, str(tuple(a.split('.')))))" "${WHEEL_VERSION}" > $(WHEEL_BUILD_DIR)/eden_simulator/version.py
+	
+	"mkdir" -p $(WHEEL_BUILD_DIR)/eden_simulator/data/bin && cp ${BIN_DIR}/eden${DOT_X} $(WHEEL_BUILD_DIR)/eden_simulator/data/bin/eden$(EXE_EXTENSION_DIST)
+	
+	cd $(WHEEL_BUILD_DIR) && python3 setup_wheel.py --package-version ${WHEEL_VERSION} bdist_wheel  $(EXTRA_WHEEL_PACKAGE_TAGS)
+	
+	$(MAYBE_NOT_TARGET_MAC) || ( delocate-wheel -k --wheel-dir $(WHEEL_BUILD_DIR)/dist/ $(WHEEL_FILE) && delocate-listdeps $(WHEEL_FILE) )
+	$(MAYBE_NOT_TARGET_LINUX) || python3 -m auditwheel repair --plat ${WHEEL_TARGET_PLAT} --only-plat --wheel-dir $(WHEEL_BUILD_DIR)/dist/ $(WHEEL_FILE)
+	$(MAYBE_NOT_TARGET_LINUX) || rm -f $(WHEEL_FILE) # just to avoid confusion with non-manylinux wheel
+	
+	cp $(WHEEL_BUILD_DIR)/dist/*.whl ${WHEEL_DIR}
+
+hollow_wheel: WHEEL_BUILD_DIR=${WHEEL_PREFIX}/wheel_hollow
+hollow_wheel: WHEEL_FILE=$(WHEEL_BUILD_DIR)/dist/eden_simulator-${WHEEL_VERSION}-py3-none-any.whl 
+hollow_wheel:
+	rm -rf $(WHEEL_BUILD_DIR)
+	cp -r $(TESTING_DIR)/python_package $(WHEEL_BUILD_DIR)
+	python3 -c "import sys; a=sys.argv[1]; print('__version__=\"%s\"\n__version_info__=%s\n' % (a, str(tuple(a.split('.')))))" "${WHEEL_VERSION}" > $(WHEEL_BUILD_DIR)/eden_simulator/version.py
+	
+	cd $(WHEEL_BUILD_DIR) && python3 setup_wheel.py --package-version ${WHEEL_VERSION} --no-eden-exe  bdist_wheel  $(EXTRA_WHEEL_PACKAGE_TAGS)
+	
+	$(MAYBE_NOT_TARGET_LINUX) || ! python3 -m auditwheel show $(WHEEL_FILE)
+	
+	cp $(WHEEL_FILE) ${WHEEL_DIR}
+# add here any common post-processing steps for wheels
+
 
 # external libraries
 cJSON: ${OBJ_DIR}/${CJSON_NAME}${DOT_O}

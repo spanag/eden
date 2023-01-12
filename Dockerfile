@@ -26,7 +26,7 @@ RUN apt-get install -y wget bzip2 ca-certificates \
     default-jre default-jdk maven emacs \
     libxml2-dev libxslt-dev python-dev sudo
 
-RUN pip install --upgrade pip
+# RUN python3 -m pip install --upgrade pip venv
 
 # Upgrade to version 2.0
 # RUN conda update -n base conda anaconda=2019.10
@@ -40,6 +40,7 @@ RUN find -L /opt/conda -type l -delete
 # Make sure every Python file is writable
 RUN find /opt/conda ! -writable -print0 | xargs -0 -I {} chmod 744 {}
 
+# TODO disallow sudo!!
 RUN chown -R $NB_USER $HOME
 RUN rm -rf /var/lib/apt/lists/*
 RUN echo "${NB_USER} ALL=NOPASSWD: ALL" >> /etc/sudoers
@@ -127,12 +128,12 @@ RUN git clone https://github.com/NeuroML/pyNeuroML.git
 # Build from source code
 
 WORKDIR $HOME/libNeuroML
-# 2020-05 version
+# 2021-03 version
 RUN git checkout 632c1bce797d44308d5ec8246c0aac360c862f1a
 RUN pip3 install . -r requirements.txt
 
 WORKDIR $HOME/pyNeuroML
-# 2020-05 version
+# 2021-03 version
 RUN git checkout 9e070467498c57d4244d44f9996bb8e0eecc5dc3
 RUN python3 -m pip install .
 
@@ -143,7 +144,9 @@ WORKDIR $WORK_HOME
 RUN python3 -c "import neuroml"
 RUN python3 -c "import neuroml; from pyneuroml import pynml"
 
-# TODO some testing on NeuroML examples, to verify it's working properly (like with POisson sources and such)
+RUN ExampleDir=$(mktemp -d); cp -r ~/pyNeuroML/examples/ $ExampleDir; cd $ExampleDir/examples; python run_jneuroml_plot_matplotlib.py -nogui <&-
+
+# TODO some testing on NeuroML examples, to verify it's working properly (like with Poisson sources and such)
 
 #onward
 WORKDIR $WORK_HOME
@@ -152,7 +155,7 @@ WORKDIR $WORK_HOME
 
 USER $NB_USER
 # Get some auxiliar packages, for network generation on the test environment
-RUN pip install netpyne==0.9.6
+RUN python3 -m pip install netpyne==1.0.0.2
 
 
 # ------------> Install EDEN
@@ -191,17 +194,23 @@ COPY . ${EDEN_CODE_REPO}
 
 WORKDIR ${EDEN_CODE_REPO}
 
-# Add some basic Python integration
-RUN pip install testing/python_package
+ENV OUT_DIR ${EDEN_INSTALL_DIR}
+RUN TARGETS="eden hollow_wheel" bash ./testing/docker/build_on_docker.bash
 
-RUN \
-    mkdir -p ${EDEN_INSTALL_DIR}/bin && \
-    mkdir -p ${EDEN_INSTALL_DIR}/obj && \
-    CC=gcc OUT_DIR=${EDEN_INSTALL_DIR} BUILD=release make -j$(nproc) eden
+# one more time, for MPI
+ENV OUT_DIR ${EDEN_INSTALL_DIR}_MPI
+RUN USE_MPI=1 WHEEL_VERSION=$(cat VERSION) bash ./testing/docker/build_on_docker.bash
 
 RUN rm -r ${EDEN_CODE_REPO}
 
+USER $NB_USER
+# Install the Python package but use the installed binary
+RUN python3 -m pip install ${EDEN_INSTALL_DIR}/bin/*.whl
+
+USER root
+
 RUN ln -s ${EDEN_INSTALL_DIR}/bin/eden.release.gcc.cpu.x /usr/local/bin/eden
+RUN ln -s ${EDEN_INSTALL_DIR}_MPI/bin/eden.release.gcc.cpu.x /usr/local/bin/eden-mpi
 
 WORKDIR $HOME
 

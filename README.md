@@ -9,6 +9,15 @@ This software is released as open-source, under the GPL v3 licence. Refer to LIC
 
 
 ## Quickstart
+
+The easiest way to get started is to get the Python package: `pip install eden-simiulator`
+and then invoke EDEN from Python:
+```python
+from eden_simulator import runEden
+sim_results = runEden('<LEMS simulation file>.xml') # replace filename with your own
+```
+
+For a demo run of NeuroML networks and performance comparison with NEURON:
 A Jupyter environment with EDEN and associated tooling pre-installed is available at https://github.com/spanag/eden-sim-jupyter-demo . 
 Just click the Binder link on that page and you can use EDEN as shown on the bundled Python notebook.
 
@@ -37,33 +46,10 @@ On Linux setups, GCC is commonly installed; if it is not, refer to your distribu
 
 In all cases, make sure that the compiler targets the same architecture as the executable, see also [Usage](#usage) for more details.
 
-### Building from source
-The following software packages are required to build the source code:
-- `gcc` compiler, or alternatively the `icc` compiler. Specifically, a compiler version that supports C++14.
-- `flex` version 2.6 or later
-- `bison` version 3.0 or later
-
-On Linux, most other tools for building are pre-installed or they can be easily installed; consult your distribution's reference on installing essential build tools.  
-
-For building on Windows, batch scripts are available on the [testing/windows](testing/windows) directory for installing all the necessary build tools and libraries, setting the shell's PATH to use them and building the standalone executable or Python wheel, all without affecting the system or user setup.
-
-For building on macOS, shell scripts are available on the [testing/mac](testing/mac) directory for installing all the necessary build tools and libraries, setting the shell's PATH to use them and building the standalone executable or Python wheel.
-*Note* The `testing/mac/download-setup-requirements.bash` script installs Command Line Developer Tools for Mac, Homebrew and various Homebrew packages in the system, in the process installing the required tooling.
-
-Use environment variable `BUILD=release` or `BUILD=debug` to run a production or debugging build of the program executable, respectively. The executable will be available on `bin/eden.<build>.<compiler>.cpu.x` (`.exe` on Windows)
-
-If the NeuroML Python package `pyNeuroML` is installed, a Python wrapper for the local build of EDEN, `eden_tools`, can also be installed - run `pip` on directory `testing/python_package` . EDEN should then be on `PATH` to be invoked by the Python package.
-
-If MPI is also installed, a MPI-enabled version of EDEN (with hybrid MPI/OpenMP parallelization) can be built, by running `make` with the `USE_MPI` flag. This configuration has been tested with standard MPICH on Linux; consult your HPC cluster's documentation for specific details on the MPI build process.
-
-### Docker images
-Alternatively, Docker images with EDEN and an assortment of tools are available and can also be built, for containerized environments. The Dockerfiles are available on the `testing/docker` folder, and they can be built in the proper order through the Makefile in the folder.
-The Dockerfiles are at the moment available for Linux; support for other platforms is pending.
-
-If Docker is installed and accessible to the user, an automated testing suite can also be run to verify EDEN's results against the NEURON simulator's for deterministic models. Run `make test` to run the automated tests.
-
 
 ## Usage
+
+### From the command line
 EDEN directly runs NeuroML models of neural networks. (For more information about the NeuroML model format, refer to http://neuroml.org ) 
 It can be run from the command line, with the following command referencing the LEMS simulation file of the NeuroML model to be run:  
 ```
@@ -79,14 +65,20 @@ Some `.gen.c` and `.gen.so` temporary files may also be generated, these can be 
 
 Per-thread parallelism can be adjusted through the `OMP_NUM_THREADS` environment variable.
 
-Alternatively to the command line, the simulator can also be run within a Python program, if the standalone `eden_simulator` Python package (or the equivalent wrapper-only `eden_tools` package) is installed.
+### From Python
+Alternatively to the command line, the simulator can also be run within a Python program, if the `eden_simulator` Python package is installed.
 The Python lines to run EDEN are then:
 ```python
 import eden_simulator
-results = eden_simulator.runEden('<LEMS simulation file>.xml')
+results = eden_simulator.runEden('<LEMS simulation file>.xml') # replace filename with your own
 ```
 This interface returns the recorded trajectories specified in the simulation files in a Python dictionary, same as pyNeuroML does with other simulation backends.
+
 Thread-level parallelism can also be controlled with the `threads` optional argument.
+
+If other command-line arguments should be added, they can be specified as a list of strings in the optional parameter `extra_cmdline_args`.  
+In case a specific instance of the EDEN executable is preferred, it can be selected with the optional parameter `executable_path`.  
+Both options can be combined into a fully custom command to be run from Python: it can be passed as a list of strings in the optional parameter `full_cmdline`.
 
 ### Setting `PATH` to include a compiler
 
@@ -106,6 +98,44 @@ If using Python, `PATH` can be set as follows:
 os.environ["PATH"] = <path to compiler executable> + os.pathsep + os.environ["PATH"]
 runEden(...)
 ```
+
+
+## Building from source
+The following software packages are required to build the source code:
+- `gcc` compiler, or alternatively the `icc` compiler. Specifically, a compiler version that supports C++14.
+- `flex` version 2.6 or later
+- `bison` version 3.0 or later
+
+On Linux, most other tools for building are pre-installed or they can be easily installed; consult your distribution's reference on installing essential build tools.  
+
+For building on Windows, batch scripts are available on the [testing/windows](testing/windows) directory for installing all the necessary build tools and libraries, setting the shell's PATH to use them and building the standalone executable or Python wheel, all without affecting the system or user setup.
+
+For building on macOS, shell scripts are available on the [testing/mac](testing/mac) directory for installing all the necessary build tools and libraries, setting the shell's PATH to use them and building the standalone executable or Python wheel.
+*Note* The `testing/mac/download-setup-requirements.bash` script installs Command Line Developer Tools for Mac, Homebrew and various Homebrew packages in the system, in the process installing the required tooling.
+*Note 2* The Apple developer tools are not suitable to build EDEN, because they lack OpenMP support which is required by EDEN. Instead, we recommend the developer tools installed by `download-setup-requirements.bash`.
+
+Before attempting to build manually, source the `setpath` script for the platform you are building against so that the necessary tools are on PATH. (See platform-spacific instructions above.)
+
+Use environment variable `BUILD=release` or `BUILD=debug` to run a production or debugging build of the program executable, respectively. The executable will be available on `bin/eden.<build>.<compiler>.cpu.x` (`.exe` on Windows)
+
+### Building Python wheels
+Beside the program itself, EDEN can also be built as a Python package, which offers more integrated interface to the program. The python package is created in the installable `.whl` (wheel) format. 
+
+There are two options to build a Python wheel:
+- The first is as a standalone wheel containing the EDEN executable (hence the wheel is specific to one OS and processor type).  This is the type of wheels avcailable through `pip install`.
+- The second option is as a 'hollow' wheel which works everywhere, but relies on EDEN already being available on PATH through different means. This type is useful in classes where a special (e.g. custom-built) version of EDEN is preferred to the generic version of 'standalone' wheels.
+
+Both types of wheel can be built as the respective targets `wheel` and `hollow_wheel` of the Makefile. The resulting `.whl` files are located in the paths `testing/sandbox/{wheel, wheel_hollow}/dist`.
+
+### Building for MPI
+If MPI is also installed, a MPI-enabled version of EDEN (with hybrid MPI/OpenMP parallelization) can be built, by running `make` with the `USE_MPI` flag. This configuration has been tested with standard MPICH on Linux; consult your HPC cluster's documentation for specific details on the process for MPI-enabled builds.
+
+## Docker images
+Alternatively, Docker images with EDEN and an assortment of tools are available and can also be built, for containerized environments. The Dockerfiles are available on the `testing/docker` folder, and they can be built in the proper order through the Makefile in the folder.
+The Docker images are Linux-native but they can as well run on Windows and MacOS through [Docker Desktop]( https://www.docker.com/products/docker-desktop/ ).
+
+If Docker is installed and accessible to the user, an automated testing suite can also be run to verify EDEN's results against the NEURON simulator's for deterministic models. Run `make test` to run the automated tests.
+
 
 ## Dockerfile
 

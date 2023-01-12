@@ -26,5 +26,5 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY --from=0 /app/bin /app/bin
-
+# TODO add hollow wheel maybe?
 CMD ["bash"]

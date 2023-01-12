@@ -15,7 +15,8 @@ In order to build EDEN on a typical Mac setup, certain tools have to be in place
 The rest of the tools (namely: GNU Compiler Collection,  recent flex and bison, Python3) are installed as Homebrew packages.  
 
 A convenient script to set up all requirements is `eden/testing/mac/download-setup-requirements.bash`.
-This installs Homebrew on its default (system-wide) location if it is not already available, gets the command line developer tools also installed in the process, and gets the necessary Homebrew packages installed.
+This installs Homebrew on its default (system-wide) location if it is not already available, gets the command line developer tools also installed in the process, and gets the necessary Homebrew packages installed.  
+To keep a separate installation of Homebrew and improve isolation of the build environment, set `HOMEBREW_INSTALL_LOCAL_PREFIX` to the preferred Homebrew install prefix (e.g. above EDEN source tree).
 
 This script is provided as a convenience only; feel free to modify the script to your specific needs (such as when the necessary tooling is already installed, by a different system).
 
@@ -31,11 +32,13 @@ make eden <build options ...>
 
 The provided script `eden/testing/mac/build-wheel.bash` builds EDEN and packages the `eden-simulator` Python wheel for the machine's CPU architecture (or the simulated one, if it is run on Rosetta).
 
+*Note*: Apple's `clang` (aka `gcc` on PATH by default) is not suitable to build EDEN, because it lacks OpenMP support which is required by EDEN. Instead, we recommend the developer tools installed by `download-setup-requirements.bash`.
+
 
 ### Testing 
 
 To run the full battery of tests requires validating against a 'gold' reference of what the results of the simulations should be; that reference is provided by the NEURON simulator.
-Setting NEURON up automatically and without affecting the setup is a work in progress; for now the full tests are run on a Docker on Linux environment. A Docker environment for EDEN on macOS is also in development.
+Setting NEURON up automatically and without affecting the setup is a work in progress; for now the full tests are run on a Docker on Linux environment.
 
 Instead, for the moment, a simple smoke test is run on macOS. Code paths are largely the same among platforms, the only practical difference is in generating code and invoking a compiler at runtime, which is what is being tested.
 

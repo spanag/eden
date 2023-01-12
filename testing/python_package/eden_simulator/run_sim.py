@@ -2,7 +2,6 @@
 from collections import OrderedDict
 
 # System libraries
-import sys
 import subprocess
 import os
 import os.path
@@ -12,43 +11,6 @@ import time
 # PyNeuroML
 from pyneuroml import pynml
 
-
-def runNeuron( example_lems_file, verbose=False):
-	'''
-	Convert LEMS/NeuroML2 file to NEURON with jNeuroML & run
-	'''
-	# Beware: jNeuroML may output files along with .xml file, instead of cwd like EDEN does.
-	# reload_saved_data could get confused with the possible locations, pray it doesn't !
-	out_dir,rel_filename = os.path.split(example_lems_file)
-	
-	tic = time.time()
-	results_Neuron = pynml.run_lems_with_jneuroml_neuron(rel_filename, nogui=True, load_saved_data=True, exec_in_dir=out_dir)
-	if not results_Neuron:
-		raise RuntimeError('Could not run simulation')
-	toc = time.time()
-	if verbose:
-		print( "Ran jNeuroML_NEURON in %.2f seconds" % (toc - tic) )
-	
-	return OrderedDict(sorted(results_Neuron.items()))
-
-def runJLems( example_lems_file, verbose=False):
-	'''
-	Run LEMS/NeuroML2 file with jLEMS
-	'''
-	# Beware: jNeuroML may output files along with .xml file, instead of cwd like EDEN does.
-	# reload_saved_data could get confused with the possible locations, pray it doesn't !
-	out_dir,rel_filename = os.path.split(example_lems_file)
-	
-	tic = time.time()
-	results = pynml.run_lems_with_jneuroml(rel_filename, nogui=True, load_saved_data=True, exec_in_dir=out_dir)
-	if not results:
-		raise RuntimeError('Could not run simulation')
-	toc = time.time()
-	if verbose:
-		print( "Ran jNeuroML_LEMS in %.2f seconds" % (toc - tic) )
-	
-	return OrderedDict(sorted(results.items()))
-
 def runEden( example_lems_file, threads=None, extra_cmdline_args=None, executable_path=None, verbose = False, full_cmdline=None):
 	'''
 	Run LEMS/NeuroML2 file with EDEN
@@ -57,7 +19,7 @@ def runEden( example_lems_file, threads=None, extra_cmdline_args=None, executabl
 	#print(cwd)
 	
 	my_env = os.environ.copy()
-	# my_env["LD_LIBRARY_PATH"] = cwd
+	# my_env["LD_LIBRARY_PATH"] = cwd # LATER add this to the actual location of the executable, in case it is not delocated enough...
 	my_env["OMP_SCHEDULE"] = "static"
 	
 	if threads is None:
@@ -75,6 +37,7 @@ def runEden( example_lems_file, threads=None, extra_cmdline_args=None, executabl
 			# multiprocessing.cpu_count is missing, this is strange
 			# Select one thread, let user override
 			threads = 1
+		# more places to check: https://github.com/PyTables/PyTables/blob/v3.8.0/tables/utils.py#L402 
 		
 		if threads > 8:
 			# some setups, some times, have horrible slowdown when OMP_NUM_THREADS == logical cores, go figure
@@ -91,14 +54,16 @@ def runEden( example_lems_file, threads=None, extra_cmdline_args=None, executabl
 	exe_extension = ".exe" if platform.system() == 'Windows' else ""
 	eden_bundled_exe = "data/bin/eden"+exe_extension
 	
-	if pkg_resources.resource_exists(__name__, eden_bundled_exe):
+	# But in call cases, executable_path takes top priority
+	if executable_path:
+		args[0] = executable_path
+		
+	else if pkg_resources.resource_exists(__name__, eden_bundled_exe):
 		eden_bundled_exe_filename = pkg_resources.resource_filename(__name__, eden_bundled_exe)
 		if verbose:
 			print("Using bundled executable: "+eden_bundled_exe+" on "+eden_bundled_exe_filename)
 		args[0] = eden_bundled_exe_filename
 	
-	if executable_path:
-		args[0] = executable_path
 	
 	if extra_cmdline_args:
 		args += extra_cmdline_args

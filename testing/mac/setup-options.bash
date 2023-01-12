@@ -7,10 +7,9 @@ BUILD_TARGET_ARCH=$(uname -m)
 # LATER check if it's an identified arch. for now assume either x86_64 or arm64
 
 # Alternatively, install on any old path on, say, cwd (above eden repo). Though then, gcc will have to be built from source, which takes a while !
-# HOMEBREW_INSTALL_LOCAL=1
 # HOMEBREW_INSTALL_LOCAL_PREFIX=$(pwd)
 
-if [[ -z $HOMEBREW_INSTALL_LOCAL ]]; then
+if [[ -z $HOMEBREW_INSTALL_LOCAL_PREFIX ]]; then
     # First, try finding Homebrew just in case it is on PATH for whatever reason
     if [ "$(which brew)" != "" ]; then
         HOMEBREW_BIN=$(dirname $(which brew))

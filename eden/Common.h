@@ -37,7 +37,8 @@
 #define _USE_MATH_DEFINES // maybe more elegant LATER, but since it works ...
 #include <cmath> // apparently including <algorithm> undefines ::isfinite() function, on ICC
 
-//for model representation and more
+// for model representation and more
+// TODO keep only what is really necessary
 #include <vector>
 #include <functional>
 #include <algorithm>

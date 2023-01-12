@@ -1,8 +1,8 @@
-
+#!/bin/bash
 # Assume runnning from Parallel_HH/ directory, on Docker container
 
 # Default parameters
-
+# https://stackoverflow.com/questions/28085062/assigning-default-values-to-shell-variables-with-a-single-command-in-bash
 # Make Targets to build
 : "${TARGETS:=eden}"
 

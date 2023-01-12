@@ -695,7 +695,7 @@ struct DimensionSet{
 		if(!Has(dim)) return Nothing;
 		return info_by_dimension.at(dim).units;
 	}
-	// assume SI units for unknown dimensions
+	// assume fundamental units for unknown dimensions
 	const LemsUnit &GetNative( Dimension dim ) const {
 		if(!Has(dim)) return GetNative(Dimension::Unity());
 		return info_by_dimension.at(dim).native;
@@ -1686,7 +1686,7 @@ struct IonChannel{
 		Int instances; // positive integer gating power in the HH model
 	};
 	struct GateBaseDynamic : public GateBase{
-		Q10Settings q10;
+		Q10Settings q10; // since there is no "none" option this value must be set always, default value is fixed q10 = 1 
 	};
 	
 	struct GateHHRates : public GateBaseDynamic{
@@ -2003,7 +2003,7 @@ struct Network{
 			Real weight; // is NaN if missing
 			Real delay;  // is NaN if missing
 			union{
-				Int synapse; // synapstic component for one-way chemical or two-way electrical synapses
+				Int synapse; // synaptic component for one-way chemical or two-way electrical synapses
 				struct{
 					Int preComponent; // synaptic components
 					Int postComponent; // until LEMS components are supported
@@ -2039,7 +2039,7 @@ struct Network{
 	std::vector<Input> inputs;
 };
 
-// A NEuroML simulation, targeting a specific network
+// A NeuroML simulation, targeting a specific network
 struct Simulation{
 	
 	// network is assumed to be the only one used in the simulation
@@ -2273,8 +2273,8 @@ struct Simulation{
 		CollectionWithNames<EventSelection> outputs;
 	};
 	
-	Real length;
-	Real step;
+	Real length; // duration, that's how it's called in LEMS
+	Real step; // timestep, likewise
 	
 	Int target_network;
 	
