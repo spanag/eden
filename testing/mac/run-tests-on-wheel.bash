@@ -9,7 +9,7 @@ fi
 TEST_VENV_PATH=venv-eden-test
 
 # Use a clean venv
-# rm -rf "$TEST_VENV_PATH"
+rm -rf "$TEST_VENV_PATH"
 python3 -m venv "$TEST_VENV_PATH"
 source  "$TEST_VENV_PATH/bin/activate"
 
