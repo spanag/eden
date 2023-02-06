@@ -13,7 +13,7 @@
 #include <new>       // Required for placement new and std::bad_alloc
 #include <stdexcept> // Required for std::length_error
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) or __has_include(<malloc.h>)
 #include <malloc.h>
 void *MMMalloc( size_t alignment, size_t size ){ return _aligned_malloc(size, alignment); }
 void MMFree( void *buf ){ return _aligned_free(buf); }

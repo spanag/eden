@@ -11,7 +11,7 @@ md %ARTIFACTS_DIR%
 :: Build for 32bit, test, and get wheel
 call %~dp0\build-eden-i686.bat || goto :error
 :: REPO_DIR, VERSION, VERSION_PY are set by sourced build script
-set WHEEL_TO_TEST=%REPO_DIR%\testing\sandbox\python_package\dist\eden_simulator-%VERSION_PY%-py3-none-win32.whl
+set WHEEL_TO_TEST=%REPO_DIR%\bin\eden_simulator-%VERSION_PY%-py3-none-win32.whl
 call %~dp0\run-tests-on-wheel.bat %WHEEL_TO_TEST% || goto :error
 
 copy %WHEEL_TO_TEST% %ARTIFACTS_DIR% || goto :error
@@ -23,7 +23,7 @@ cd %PREVCWD%
 :: Build for 64bit, test,and get wheel
 call %~dp0\build-eden-amd64.bat || goto :error
 :: REPO_DIR, VERSION, VERSION_PY are set by sourced build script
-set WHEEL_TO_TEST=%REPO_DIR%\testing\sandbox\python_package\dist\eden_simulator-%VERSION_PY%-py3-none-win_amd64.whl
+set WHEEL_TO_TEST=%REPO_DIR%\bin\eden_simulator-%VERSION_PY%-py3-none-win_amd64.whl
 call %~dp0\run-tests-on-wheel.bat %WHEEL_TO_TEST% || goto :error
 
 copy %WHEEL_TO_TEST% %ARTIFACTS_DIR% || goto :error

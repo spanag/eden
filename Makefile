@@ -161,7 +161,7 @@ ifdef USE_MPI
 CFLAGS += -DUSE_MPI
 endif
 
-CXXFLAGS := ${CFLAGS} -std=c++14
+CXXFLAGS := ${CFLAGS} -std=c++17
 
 # Final targets
 TARGETS := eden

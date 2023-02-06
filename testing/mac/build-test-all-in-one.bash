@@ -15,7 +15,7 @@ mkdir -p "$ARTIFACTS_DIR"
 source "$(dirname "${BASH_SOURCE[0]}")/build-wheel.bash"
 # REPO_DIR, VERSION, VERSION_PY, WHEEL_PLAT_NAME_FILENAME are set by sourced build script
 # echo $REPO_DIR $VERSION_PY $WHEEL_PLAT_NAME $WHEEL_PLAT_NAME_FILENAME
-WHEEL_TO_TEST="$REPO_DIR/testing/sandbox/python_package/dist/eden_simulator-$VERSION_PY-py3-none-$WHEEL_PLAT_NAME_FILENAME.whl"
+WHEEL_TO_TEST="$REPO_DIR/bin/eden_simulator-$VERSION_PY-py3-none-$WHEEL_PLAT_NAME_FILENAME.whl"
 
 "$(dirname "${BASH_SOURCE[0]}")/run-tests-on-wheel.bash" "$WHEEL_TO_TEST"
 echo "Tests passed"
