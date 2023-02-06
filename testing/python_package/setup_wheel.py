@@ -255,7 +255,7 @@ setuptools.setup(
         'pyneuroml',
         # 'setuptools', # due to customised setup step ... but it should already be in place to install the wheel right?
         'lxml',
-    ] + (['h5py <= 2.10.*'] if (sysconfig.get_platform() == 'win32') else []) # h5py wheels are missing since, and pip doesn't know that h5py source is tough to build
+    ] + (['h5py <= 2.10'] if (sysconfig.get_platform() == 'win32') else []) # h5py wheels are missing since, and pip doesn't know that h5py source is tough to build
     ,
 
     python_requires='>=3.2',

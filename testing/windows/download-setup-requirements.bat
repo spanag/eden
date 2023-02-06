@@ -33,7 +33,8 @@ md %DOWN_REQS_DIR%
 set Download_Prefix=[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest
 
 md %WGET_DIR%
-powershell -command %Download_Prefix% https://eternallybored.org/misc/wget/1.21.1/32/wget.exe -ErrorAction Stop -OutFile "%WGET_DIR%/wget.exe" || goto :error
+call :psget_if_missing "%WGET_DIR%/wget.exe" https://eternallybored.org/misc/wget/1.21.1/32/wget.exe || goto :error
+REM powershell -command %Download_Prefix% https://eternallybored.org/misc/wget/1.21.1/32/wget.exe -ErrorAction Stop -OutFile "%WGET_DIR%/wget.exe" || goto :error
 
 :: download the rest of the files
 md %DOWNLOADS_DIR%
@@ -152,10 +153,20 @@ set retval=%~f1
 :wget_if_missing
 :: empty is also considered "missing" because wget likes to leave empty files on failure !
 :: also funny padding because the parser complains even if the subroutine should be left already e,g. via an if exist check
-:: %~z is an empty string for missing filename which upsets the parser in eg conditionals
+:: % ~z is an empty string for missing filename which upsets the parser in eg conditionals
 @if 0%~z1 gtr 00 exit /b 0
 ::echo %1
 %WGET% --tries=10 -O %1 %3 %2 || exit /b %errorlevel%
+@exit /b 0
+
+:: if wget is not available yet, download using powershell
+:: usage: call :psget_if_missing <destination file> <url> [<Invoke-WebRequest options>]
+:psget_if_missing
+:: tls 1.2 is not on by default: https://stackoverflow.com/questions/49800534/powershell-could-not-create-ssl-tsl-secure
+:: Also note that PowerShell may not be configured to run files (even though it always runs one-liners) and piping them instead breaks error handling (powershell thinks it's interactive output)
+@if 0%~z1 gtr 00 exit /b 0
+set Download_Prefix=[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest
+powershell -command %Download_Prefix% %2 -ErrorAction Stop %3 -OutFile %1 || exit /b %errorlevel%
 @exit /b 0
 
 :: on error

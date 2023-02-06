@@ -245,7 +245,7 @@ wheel: WHEEL_FILE=$(WHEEL_BUILD_DIR)/dist/eden_simulator-${WHEEL_VERSION}-py3-no
 wheel: eden
 	rm -rf $(WHEEL_BUILD_DIR)
 	cp -r $(TESTING_DIR)/python_package $(WHEEL_BUILD_DIR)
-	python3 -c "import sys; a=sys.argv[1]; print('__version__=\"%s\"\n__version_info__=%s\n' % (a, str(tuple(a.split('.')))))" "${WHEEL_VERSION}" > $(WHEEL_BUILD_DIR)/eden_simulator/version.py
+	python3 -c "import sys; a=sys.argv[1]; print('__version__=\"{}\"\n__version_info__={}\n'.format(a, str(tuple(a.split('.')))))" "${WHEEL_VERSION}" > $(WHEEL_BUILD_DIR)/eden_simulator/version.py
 	
 	"mkdir" -p $(WHEEL_BUILD_DIR)/eden_simulator/data/bin && cp ${BIN_DIR}/eden${DOT_X} $(WHEEL_BUILD_DIR)/eden_simulator/data/bin/eden$(EXE_EXTENSION_DIST)
 	
