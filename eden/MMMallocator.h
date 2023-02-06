@@ -13,14 +13,14 @@
 #include <new>       // Required for placement new and std::bad_alloc
 #include <stdexcept> // Required for std::length_error
 
-#if defined(_MSC_VER) or __has_include(<malloc.h>)
+#if defined(_MSC_VER)
 #include <malloc.h>
 void *MMMalloc( size_t alignment, size_t size ){ return _aligned_malloc(size, alignment); }
-void MMFree( void *buf ){ return _aligned_free(buf); }
+void MMFree( void *buf ){ _aligned_free(buf); }
 #else
 #include <stdlib.h>
 void * MMMalloc( size_t alignment, size_t size ){ return aligned_alloc(alignment, size); }
-void MMFree( void *buf ){ return free(buf); }
+void MMFree( void *buf ){ free(buf); }
 #endif // not defined(_MSC_VER)
 
 // The following headers contain stuff that _mm_Mallocator uses.
