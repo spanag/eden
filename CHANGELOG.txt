@@ -1,5 +1,16 @@
 Latest
 
+- Add support for new Apple Silicon Mac's
+- Fix important typos affecting less common model cases
+- Improve Windows compatibility + build environment
+- Improve OSX build environment
+- Add __version__ and __version_info__ to Python wheels
+- Fix linker issues on OSX wheels
+- Fix location of eden executable within the python wheel
+- Add support for 'hollow' eden_simulator wheels when EDEN is already installed by other means
+- Remove `eden-simulator` dependency on `pyneuroml`, not it only depends on `numpy` and `lxml`
+- Move auxiliary 'eden_tools' validation functions to validation scripts
+
 0.2 - 
 - Add support for non-uniform distributions of ion channels, as long as they are deterministic (i.e. random() is not used in the distribution formula)
 - Add support for the "sao864921383" 'cable' directive in Morphology, which decouples the 3D points of a morphology from the compartments used in simulation. Now the neuron models will automatically run with the same discretisation as with jNML/NEURON.
