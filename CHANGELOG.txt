@@ -1,5 +1,6 @@
 Latest
 
+- Add support to keep model files loaded after finishing loading the model. Now EDEN and extensions can access the names of objects, for diagnostics and more!
 - Add support for new Apple Silicon Mac's
 - Fix important typos affecting less common model cases
 - Improve Windows compatibility + build environment
@@ -11,7 +12,7 @@ Latest
 - Remove `eden-simulator` dependency on `pyneuroml`, not it only depends on `numpy` and `lxml`
 - Move auxiliary 'eden_tools' validation functions to validation scripts
 
-0.2 - 
+0.2 - 2022-03-25
 - Add support for non-uniform distributions of ion channels, as long as they are deterministic (i.e. random() is not used in the distribution formula)
 - Add support for the "sao864921383" 'cable' directive in Morphology, which decouples the 3D points of a morphology from the compartments used in simulation. Now the neuron models will automatically run with the same discretisation as with jNML/NEURON.
 - Refine the intra-neuron conductance matrix of compartments, by computing the volumetric integral between the midpoints of compartments. The algorithm is now similar to the one used in NEURON.
@@ -20,7 +21,7 @@ Latest
 - The number of threads used is now limited to the number of individual work items in the model, this may boost performance for models with less neurons than available threads.
 - Set NDEBUG for the 'release' build configuration, disabling most of assert(). 
 
-0.1 - 
+0.1 - 2021-09-29
 - Add support for Microsoft Windows and Apple macOS
 - Add support for absolute paths in NeuroML files. Keep in mind that models referring to absolute paths are not portable.
 - Add build target for Python wheels, they are now available on http://pypi.org/project/eden-simulator/
