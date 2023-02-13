@@ -2273,7 +2273,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			return ret;
 		}
-		static CellInternalSignature::ComponentSubSignature AllocateSignature(const ComponentType &type, const ComponentInstance &instance, const ISignatureAppender *Add, std::string for_what){
+		static CellInternalSignature::ComponentSubSignature AllocateSignature(const DimensionSet &dimensions, const ComponentType &type, const ComponentInstance &instance, const ISignatureAppender *Add, std::string for_what){
 			// TODO random variables should be examined here, for consideration MUCH LATER
 			CellInternalSignature::ComponentSubSignature ret;
 			// TODO rework to split values from allocation
@@ -2282,7 +2282,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			// the persistent numbers are parameters(of any type), and state variables
 			for(size_t seq = 0; seq < type.properties.contents.size(); seq++ ){
-				size_t Index = Add->Constant( vals.properties[seq], for_what + std::string(" Property ") + itos(seq) ); // TODO dimensions + " ("++")"
+				size_t Index = Add->Constant( vals.properties[seq], for_what + std::string(" Property ") + itos(seq) + " ("+dimensions.GetNative(type.properties.get(seq).dimension).name+")"); 
 				
 				ret.properties_to_constants.push_back(CellInternalSignature::ComponentSubSignature::Entry(Index, CellInternalSignature::ComponentSubSignature::Entry::ValueType::F32));
 			}
@@ -2366,6 +2366,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			
 			// TODO clarify better by keeping the actual names
+			ret += tab+"// aeternal constants "+for_what+"\n";
+			for(int i = 0; i < (int)type.constants.contents.size(); i++){
+				sprintf(tmps, "float Lems_constant_%d = %s; // %s", i, accurate_string(type.constants.get(i).value).c_str(), dimensions.GetNative(type.constants.get(i).dimension).name.c_str() );
+				ret += tab+tmps+"\n";
+			}
 			ret += tab+"// fixed properties "+for_what+"\n";
 			for(size_t i = 0; i < type.properties.contents.size(); i++){
 				sprintf(tmps, "float Lems_property_%zd = %s;", i, Add->ReferTo_Const(subsig.properties_to_constants.at(i).index).c_str() );
@@ -2386,10 +2391,14 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			ret += tab+"// common read-only namespace? "+for_what+"\n";
 			// TODO eliminate, for less confusion to readers and compilers
 			for(size_t i = 0; i < type.name_space.contents.size(); i++){
+				// TODO this should be mutable only for state and derived variables!
 				sprintf(tmps, "float *Lems_assigned_%zd = &Lems_", i); 
 				ret += tab+tmps;
 				auto namet = type.name_space.get(i).type;
-				if(namet == ComponentType::NamespaceThing::PROPERTY){
+				if(namet == ComponentType::NamespaceThing::CONSTANT){
+					ret += "constant";
+				}
+				else if(namet == ComponentType::NamespaceThing::PROPERTY){
 					ret += "property";
 				}
 				else if(namet == ComponentType::NamespaceThing::REQUIREMENT){
@@ -2499,14 +2508,17 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			char tmps[2000];
 			std::string ret;
 			
-			// TODO A sequence of AssignState commands may have state variables assigned with values of other, previously assigned state variables (possibly even modifying derived variables !!!)
+			// XXX A sequence of AssignState commands may have state variables assigned with values of other, previously assigned state variables (possibly even modifying derived variables !!!)
 			// So subsequent AssignState commands should keep track of which state variables were modified, and use the updated values.
 			// On the other hand, no other NeuroML implementation seems to correct derived variables for the updated value, so there's that.
 			std::vector< std::vector<int> > statevar_to_assigned( type.state_variables.contents.size() );
 			for(int i = 0; i < (int)type.name_space.contents.size(); i++){
 				auto namet = type.name_space.get(i).type;
 				auto ref_seq = type.name_space.get(i).seq;
-				if(namet == ComponentType::NamespaceThing::PROPERTY){
+				if(namet == ComponentType::NamespaceThing::CONSTANT){
+					// skip
+				}
+				else if(namet == ComponentType::NamespaceThing::PROPERTY){
 					// skip
 				}
 				else if(namet == ComponentType::NamespaceThing::REQUIREMENT){
@@ -2516,7 +2528,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					statevar_to_assigned[ref_seq].push_back(i);
 				}
 				else if(namet == ComponentType::NamespaceThing::DERIVED){
-					// TODO
+					// XXX fix me !
 				}
 				
 			}
@@ -2668,7 +2680,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			std::string code;
 			const auto &comptype = model.component_types.get(compinst.id_seq);
 			
-			component = DescribeLems::AllocateSignature(comptype, compinst, &AppendSingle, for_what + " LEMS");
+			component = DescribeLems::AllocateSignature(model.dimensions, comptype, compinst, &AppendSingle, for_what + " LEMS");
 			
 			
 			code += tab+"// LEMS component\n";
@@ -2752,6 +2764,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		}
 		
 		std::string TableFull(
+			const DimensionSet &dimensions,
 			const ComponentInstance &compinst,
 			const std::string &tab, const std::string &for_what,
 			CellInternalSignature::ComponentSubSignature &compsubsig,
@@ -2761,7 +2774,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// TODO validate id_seq, to de-duplicate checking code
 			const auto &comptype = model.component_types.get(compinst.id_seq);
 			
-			compsubsig = DescribeLems::AllocateSignature(comptype, compinst, &AppendMulti, for_what + " LEMS");
+			compsubsig = DescribeLems::AllocateSignature(dimensions, comptype, compinst, &AppendMulti, for_what + " LEMS");
 			
 			code += TableLoop( tab, for_what, compsubsig );
 			code += tab+"{\n";
@@ -3088,7 +3101,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					auto &blopla_subsig = synimpl.synapse_component;
 					
 					
-					blopla_subsig = DescribeLems::AllocateSignature(blopla_type, blopla_inst, &AppendMulti, for_what + " Component LEMS");
+					blopla_subsig = DescribeLems::AllocateSignature(model.dimensions, blopla_type, blopla_inst, &AppendMulti, for_what + " Component LEMS");
 					
 					
 					// fuse dynamics of three LEMS elements, as below:
@@ -3105,7 +3118,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							const auto &blo_inst = syncomp.blopla.block_mechanism.component;
 							const auto &blo_type = model.component_types.get(blo_inst.id_seq);
 							auto &blo_subsig = synimpl.block_component;
-							blo_subsig = DescribeLems::AllocateSignature(blo_type, blo_inst, &AppendMulti, for_what + " Block Component");
+							blo_subsig = DescribeLems::AllocateSignature(model.dimensions, blo_type, blo_inst, &AppendMulti, for_what + " Block Component");
 							code += tab+"{\n";
 							code += DescribeLemsInline.TableInner( tab, for_what + " Block Component", blo_type, blo_subsig, "", "block_factor = Lems_exposure_blockFactor;", config.debug );
 							code += tab+"}\n";
@@ -3115,7 +3128,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							const auto &pla_inst = syncomp.blopla.plasticity_mechanism.component;
 							const auto &pla_type = model.component_types.get(pla_inst.id_seq);
 							auto &pla_subsig = synimpl.plasticity_component;
-							pla_subsig = DescribeLems::AllocateSignature(pla_type, pla_inst, &AppendMulti, for_what + " Plasticity Component");
+							pla_subsig = DescribeLems::AllocateSignature(model.dimensions, pla_type, pla_inst, &AppendMulti, for_what + " Plasticity Component");
 							code += tab+"{\n";
 							code += DescribeLemsInline.TableInner( tab, for_what + " Plasticity Component", pla_type, pla_subsig, "", "plasticity_factor = Lems_exposure_plasticityFactor;", config.debug );
 							code += tab+"}\n";
@@ -3135,7 +3148,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					const auto &comptype = model.component_types.get(compinst.id_seq);
 					CellInternalSignature::ComponentSubSignature &compsubsig = synimpl.synapse_component;
 					
-					synimpl.synapse_component = DescribeLems::AllocateSignature(comptype, compinst, &AppendMulti, for_what);
+					synimpl.synapse_component = DescribeLems::AllocateSignature(model.dimensions, comptype, compinst, &AppendMulti, for_what);
 					code += DescribeLemsInline.TableInner( tab+"\t", for_what, comptype, compsubsig, require_line, ExposeFromLems(comptype)+expose_line, config.debug );
 				}
 				else{
@@ -3477,7 +3490,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						const auto &spik_inst = input_source.component;
 						const auto &spik_type = model.component_types.get(spik_inst.id_seq);
 						auto &spik_subsig = inpimpl.component;
-						spik_subsig = DescribeLems::AllocateSignature(spik_type, spik_inst, &AppendMulti, for_what + " Spiker");
+						spik_subsig = DescribeLems::AllocateSignature(model.dimensions, spik_type, spik_inst, &AppendMulti, for_what + " Spiker");
 						
 						ccde += DescribeLemsInline.TableLoop( tab, for_what, spik_subsig );
 						ccde += tab+"{\n";
@@ -3527,7 +3540,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					expose_line += "	I_input_total += Exposure_i * weight; G_input_total += Exposure_g * weight;\n";
 				
 					// TODO return bool for error handling
-					ccde += DescribeLemsInline.TableFull( input_source.component, "\t", for_what, inpimpl.component, require_line, expose_line, config.debug );
+					ccde += DescribeLemsInline.TableFull( model.dimensions, input_source.component, "\t", for_what, inpimpl.component, require_line, expose_line, config.debug );
 				}
 				else{
 					printf("internal error: input component %ld is neither special case nor lemsified \n", input_source_seq);
@@ -4480,7 +4493,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					ionpool_code += "// LEMS component\n";
 					const auto &comptype = model.component_types.get(conc_model.component.id_seq);
 					
-					distimpl.component = DescribeLems::AllocateSignature(comptype, conc_model.component, &AppendSingle, for_what + " LEMS");
+					distimpl.component = DescribeLems::AllocateSignature(dimensions, comptype, conc_model.component, &AppendSingle, for_what + " LEMS");
 					std::string lemscode = DescribeLems::Assigned(comptype, dimensions, distimpl.component, &AppendSingle, for_what, tab, random_call_counter);
 					ionpool_code += lemscode;
 					
@@ -6364,7 +6377,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					const auto &compinst = cell.component;
 					const auto &comptype = model.component_types.get(compinst.id_seq);
 					
-					aig.component = DescribeLems::AllocateSignature(comptype, compinst, &AppendSingle, for_what + " LEMS");
+					aig.component = DescribeLems::AllocateSignature(model.dimensions, comptype, compinst, &AppendSingle, for_what + " LEMS");
 					
 				}
 				else{

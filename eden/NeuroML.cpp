@@ -731,6 +731,14 @@ void BiophysicalProperties::debug_print(const Morphology &morph, const Collectio
 }
 
 void ComponentType::debug_print( const DimensionSet &dimensions ) const {
+	
+	for(auto keyval : constants.names){
+		const auto &thing = constants.get(keyval.second);
+		printf( "Constant %s: %s %f", keyval.first, dimensions.Stringify(thing.dimension).c_str(), thing.value );
+		if(thing.dimension != Dimension::Unity()) printf( " (%s)",  dimensions.GetNative(thing.dimension).name.c_str() );
+		printf("\n");
+	}
+	
 	for(auto keyval : properties.names){
 		const auto &thing = properties.get(keyval.second);
 		printf( "Parameter %s: %s %f", keyval.first, dimensions.Stringify(thing.dimension).c_str(), thing.value );
@@ -1902,7 +1910,6 @@ bool ParseComponentInstance(const ImportLogger &log, const pugi::xml_node &eInst
 			instance.parms.push_back( { keyval.second, override_value } );
 		}
 		
-		
 	}
 	
 	return true;
@@ -1996,16 +2003,16 @@ bool ValidateComponentInstanceCompleteness(const ImportLogger &log, const pugi::
 	
 	// check if all parameters are defined, regardless of whether they are ever actually used (they could be used when a conditional fires, but this is not a computable condition to investigate)
 	
-	std::vector<Real> overriden_parms(comp.properties.contents.size(), NAN);
+	std::vector<Real> overridden_parms(comp.properties.contents.size(), NAN);
 	for(auto override : instance.parms){
-		overriden_parms[override.seq] = override.value;
+		overridden_parms[override.seq] = override.value;
 	}
 	
 	for( Int seq = 0; seq < (Int)comp.properties.contents.size() ; seq++ ){
 		const char *propname = comp.properties.getName(seq);
 		const auto &prop = comp.properties.get(seq);
 		
-		if(!( std::isfinite(prop.value) || std::isfinite(overriden_parms[seq]) ) ){
+		if(!( std::isfinite(prop.value) || std::isfinite(overridden_parms[seq]) ) ){
 			log.error(eInstance, "parameter %s of component %s not specified", propname, type);
 			return false;
 		}
@@ -3329,6 +3336,8 @@ struct ImportState{
 	template <typename T>
 	struct is_iterable<T, void_t<decltype(std::begin(std::declval<T>()))> > : std::true_type {};
 	
+	// LEMSify means: to make a ComponentInstance using parameters for built-in objects, following an already loaded ComponentType.
+	// It is useful for giving the fully general LEMS treatment to instances of core NeuroML components, when there is no time to specialise each core NeuroML case (like all types of artifical cells)
 	bool TryLemsifyParameter (
 		const ImportLogger &log, const pugi::xml_node &eThing,
 		const ComponentType &comptype, const char *prop_name, Real prop_value, ComponentInstance &compinst
@@ -3342,7 +3351,7 @@ struct ImportState{
 		compinst.parms.push_back( { prop_seq, prop_value } );
 		return true;
 	};
-	template< typename Functor, typename std::enable_if< !is_iterable<Functor>::value, int >::type = 0 >
+	template< typename Functor, typename std::enable_if< !is_iterable<Functor>::value, int >::type = 7 >
 	bool TryLemsifyComponent (
 		const ImportLogger &log, const pugi::xml_node &eThing,
 		const char *type_name, Functor DoParameterCustomizations, ComponentInstance &compinst
@@ -3367,7 +3376,7 @@ struct ImportState{
 		Real value; // in engine units
 	};
 	
-	// lensify component using each parameter
+	// lemsify component using each parameter
 	template< typename Container >
 	bool TryLemsifyComponent_WithParmContainer( const ImportLogger &log, const pugi::xml_node &eThing, const char *type_name, const Container &parms, ComponentInstance &compinst ){
 		return TryLemsifyComponent(
@@ -3389,7 +3398,7 @@ struct ImportState{
 	}
 	
 	// for brace-initialized, implicitly formed arrays to pass	
-	template< typename Container, typename std::enable_if< is_iterable<Container>::value, int >::type = 0  >
+	template< typename Container, typename std::enable_if< is_iterable<Container>::value, int >::type = 7 >
 	bool TryLemsifyComponent ( const ImportLogger &log, const pugi::xml_node &eThing, const char *type_name, const Container &parms, ComponentInstance &compinst ){
 		return TryLemsifyComponent_WithParmContainer( log, eThing, type_name, parms, compinst );
 	}
@@ -6017,8 +6026,9 @@ struct ImportState{
 		// and i<ion name here> (must keep a "magic property names" container for this, with shared pointers to avoid losing the pointer !)
 		// and v for voltage dependent rates
 		// see more in generateModFile in NeuronWriter.java, in the NEURON Exporter
+		// until inheritance is implemented
 		
-		
+		// merge if needed LATER
 		auto AddMagicRequirement = []( ComponentType &new_type, const char *name, Dimension dimension, Int &store_at ){
 			
 			auto &into_namespace = new_type.name_space;
@@ -6037,6 +6047,26 @@ struct ImportState{
 			into_namespace.add( new_entry, name );
 			
 		};
+		auto AddMagicConstant = []( ComponentType &new_type, const char *name, Dimension dimension, Real default_value){
+			
+			auto &into_namespace = new_type.name_space;
+			auto &into_container = new_type.constants;
+			
+			ComponentType::Constant new_thing;
+			new_thing.dimension = dimension;
+			new_thing.value = default_value;
+			
+			Int elm_id = into_container.add(new_thing, name);
+			//store_at = elm_id;
+			
+			ComponentType::NamespaceThing new_entry;
+			new_entry.type = ComponentType::NamespaceThing::CONSTANT;
+			new_entry.seq = elm_id;
+			
+			into_namespace.add( new_entry, name );
+			
+		};
+		
 		auto AddMagicParameter = []( ComponentType &new_type, const char *name, Dimension dimension, Real default_value = NAN){
 			
 			auto &into_namespace = new_type.name_space;
@@ -6108,7 +6138,7 @@ struct ImportState{
 			AddTimeRequirement(new_type);			
 		};
 		
-		auto AddBasePyNNCell = [ &AddGenericCell, &AddMagicParameter, &AddPhysicalIsynRequirement ]( ComponentType &new_type ){
+		auto AddBasePyNNCell = [ &AddGenericCell, &AddMagicConstant, &AddMagicParameter, &AddPhysicalIsynRequirement ]( ComponentType &new_type ){
 			
 			AddGenericCell( new_type );
 			
@@ -6116,9 +6146,9 @@ struct ImportState{
 			AddMagicParameter( new_type, "i_offset"   , Dimension::Unity() );
 			AddMagicParameter( new_type, "v_init"   , Dimension::Unity() );
 			
-			AddMagicParameter( new_type, "MSEC"   , LEMS_Time, ( Scales<Dimensionless>::native ).ConvertTo( 0.001, Scales<Time>::native ) );
-			AddMagicParameter( new_type, "MVOLT"   , LEMS_Voltage, ( Scales<Dimensionless>::native ).ConvertTo( 0.001, Scales<Voltage>::native ) );
-			AddMagicParameter( new_type, "NFARAD"   , LEMS_Capacitance, ( Scales<Dimensionless>::native ).ConvertTo( 1e-9, Scales<Capacitance>::native ) );
+			AddMagicConstant ( new_type, "MSEC"   , LEMS_Time, ( Scales<Dimensionless>::native ).ConvertTo( 0.001, Scales<Time>::native ) );
+			AddMagicConstant ( new_type, "MVOLT"   , LEMS_Voltage, ( Scales<Dimensionless>::native ).ConvertTo( 0.001, Scales<Voltage>::native ) );
+			AddMagicConstant ( new_type, "NFARAD"   , LEMS_Capacitance, ( Scales<Dimensionless>::native ).ConvertTo( 1e-9, Scales<Capacitance>::native ) );
 			
 			AddMagicParameter( new_type, "tau_syn_E"   , Dimension::Unity() );
 			AddMagicParameter( new_type, "tau_syn_I"   , Dimension::Unity() );
@@ -6296,9 +6326,9 @@ struct ImportState{
 			AddVoltageRequirement( new_type );
 			AddSpikeIn( new_type );
 			
-			AddMagicParameter( new_type, "MSEC"   , LEMS_Time   , ( Scales<Dimensionless>::native ).ConvertTo( 0.001, Scales<Time>::native ) );
-			AddMagicParameter( new_type, "MVOLT"  , LEMS_Voltage, ( Scales<Dimensionless>::native ).ConvertTo( 0.001, Scales<Voltage>::native ) );
-			AddMagicParameter( new_type, "NAMP"   , LEMS_Current, ( Scales<Dimensionless>::native ).ConvertTo( 1.e-9, Scales<Current>::native ) );
+			AddMagicConstant ( new_type, "MSEC"   , LEMS_Time   , ( Scales<Dimensionless>::native ).ConvertTo( 0.001, Scales<Time>::native ) );
+			AddMagicConstant ( new_type, "MVOLT"  , LEMS_Voltage, ( Scales<Dimensionless>::native ).ConvertTo( 0.001, Scales<Voltage>::native ) );
+			AddMagicConstant ( new_type, "NAMP"   , LEMS_Current, ( Scales<Dimensionless>::native ).ConvertTo( 1.e-9, Scales<Current>::native ) );
 			
 			AddMagicParameter( new_type, "tau_syn", Dimension::Unity() );
 		}
@@ -6494,23 +6524,24 @@ struct ImportState{
 		
 		auto ParseProperty = [ &ParseBaseNamedProperty, &ParseUniqueThing, &dimensions = dimensions ](const ImportLogger &log, const pugi::xml_node &eProp, auto &into_container, auto &into_namespace, auto into_namespace_type, bool must_provide_value){
 			
-			return ParseUniqueThing(log, eProp, into_container, into_namespace, into_namespace_type, "property", [&](const ImportLogger &log, const pugi::xml_node &eProp, ComponentType::Property &new_prop){
+			return ParseUniqueThing(log, eProp, into_container, into_namespace, into_namespace_type, "property", [&](const ImportLogger &log, const pugi::xml_node &eProp, auto &new_prop){
 				if( !ParseBaseNamedProperty(log, eProp, new_prop) ) return false;
 				
 				new_prop.value = NAN;
-				auto value = eProp.attribute("value").value();
-				if(*value){
-					if( !ParseLemsQuantity(log, eProp, "value", dimensions, new_prop.dimension, new_prop.value ) ) return false;
-				}
 				
 				auto defaultValue = eProp.attribute("defaultValue").value();
 				if(*defaultValue){
 					if( !ParseLemsQuantity(log, eProp, "defaultValue", dimensions, new_prop.dimension, new_prop.value ) ) return false;
 				}
 				
+				auto value = eProp.attribute("value").value();
+				if(*value){
+					if( !ParseLemsQuantity(log, eProp, "value", dimensions, new_prop.dimension, new_prop.value ) ) return false;
+				}
+				
 				if(must_provide_value){
 					if( std::isnan(new_prop.value) ){
-						log.error(eProp, "constant should have a value attribute");
+						log.error(eProp, "%s must have a value or defaultValue attribute", eProp.name());
 						return false;
 					}
 				}
@@ -6520,7 +6551,7 @@ struct ImportState{
 			
 		};
 		
-		auto ParseExposureOrRequirement = [ &ParseBaseNamedProperty, &ParseUniqueThing ](const ImportLogger &log, const pugi::xml_node &eProp, auto &into_container, auto &into_namespace, auto into_namespace_type, const char *thing_name){
+		auto ParseStatevarOrRequirement = [ &ParseBaseNamedProperty, &ParseUniqueThing ](const ImportLogger &log, const pugi::xml_node &eProp, auto &into_container, auto &into_namespace, auto into_namespace_type, const char *thing_name){
 			return ParseUniqueThing(log, eProp, into_container, into_namespace, into_namespace_type, thing_name, [&](const ImportLogger &log, const pugi::xml_node &eProp, auto &prop_record){
 				
 				if( !ParseBaseNamedProperty(log, eProp, prop_record) ) return false;
@@ -6535,10 +6566,10 @@ struct ImportState{
 		for(const pugi::xml_node &eProp : kids.by_name.getOrNew("Parameter") ){
 			if( !ParseProperty(log, eProp, new_type.properties, new_type.name_space, ComponentType::NamespaceThing::PROPERTY, false) ) return false; }
 		for(const pugi::xml_node &eProp : kids.by_name.getOrNew("Constant") ){
-			if( !ParseProperty(log, eProp, new_type.properties, new_type.name_space, ComponentType::NamespaceThing::PROPERTY, true ) ) return false; }
+			if( !ParseProperty(log, eProp, new_type.constants, new_type.name_space, ComponentType::NamespaceThing::CONSTANT, true ) ) return false; }
 		
 		for(const pugi::xml_node &eProp : kids.by_name.getOrNew("Requirement") ){
-			if( !ParseExposureOrRequirement(log, eProp, new_type.requirements, new_type.name_space, ComponentType::NamespaceThing::REQUIREMENT, "requirement" ) ) return false; }
+			if( !ParseStatevarOrRequirement(log, eProp, new_type.requirements, new_type.name_space, ComponentType::NamespaceThing::REQUIREMENT, "requirement" ) ) return false; }
 		
 		for(const pugi::xml_node &ePort : kids.by_name.getOrNew("EventPort") ){
 			
@@ -6621,7 +6652,7 @@ struct ImportState{
 		};
 		
 		for(const pugi::xml_node &eState : dynel.by_name.getOrNew("StateVariable") ){
-			if( !ParseExposureOrRequirement(log, eState, new_type.state_variables, new_type.name_space, ComponentType::NamespaceThing::STATE, "state variable") ) return false;
+			if( !ParseStatevarOrRequirement(log, eState, new_type.state_variables, new_type.name_space, ComponentType::NamespaceThing::STATE, "state variable") ) return false;
 		}
 		
 		// check exposures of state variables, after inserting

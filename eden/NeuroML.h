@@ -757,10 +757,14 @@ struct ComponentType{
 		Real value; // to engine units, what does this mean though?
 	};
 	
-	// includes Parameter and Constant as sub-cases:
-	// Parameter requires value to be specified at instantiation,
-	// while Constant requires  value to be specified inline
-	// Property can be specified both ways
+	
+	// Parameter requires the value to be specified at instantiation,
+	// while Constant requires the value to be specified inline in the component definition.
+	// Property can be specified both ways, instantiation value takes priority over the one specified inline.
+	struct Constant : public BaseNamedProperty, public BaseValue{
+		// value must be set (ie not NaN) at all times
+	};
+	// includes Parameter sub-case
 	struct Property : public BaseNamedProperty, public BaseValue{
 		// value is NaN if missing, and has to be specified at instantiation time
 	};
@@ -877,6 +881,7 @@ struct ComponentType{
 			NONE,
 			
 			// LEMS defined types of stuff
+			CONSTANT,
 			PROPERTY,
 			REQUIREMENT,
 			// EXPOSURE, do not belong to namespace
@@ -884,7 +889,6 @@ struct ComponentType{
 			DERIVED,
 			
 			// magical requirements are in CommonRequirements
-			
 			
 		}type;
 		Int seq; // in respective container
@@ -1053,7 +1057,9 @@ struct ComponentType{
 	static std::list<std::string> eternal_strings; // not necessary thanks to persistent import context, use that or make a NameTable struct LATER
 	
 	
-	// Constants, may be defined for each component instance separately.
+	// Constants may not be defined for each instance separately.
+	CollectionWithNames<Constant> constants;
+	// Parameters, including <Property>s, may be defined for each component instance separately.
 	CollectionWithNames<Property> properties;
 	
 	// Internal dynamics and "assigned variables" (in NEURON MOD file terminology)
@@ -1102,7 +1108,10 @@ struct ComponentType{
 		// perhaps invalidtype LATER?
 		if( !name_space.has(seq) ) return Dimension();
 		auto exp = name_space.get(seq);
-		if(exp.type == NamespaceThing::STATE){
+		if(exp.type == NamespaceThing::CONSTANT){
+			return constants.get(exp.seq).dimension;
+		}
+		else if(exp.type == NamespaceThing::STATE){
 			return state_variables.get(exp.seq).dimension;
 		}
 		else if(exp.type == NamespaceThing::DERIVED){
@@ -1115,6 +1124,7 @@ struct ComponentType{
 			return requirements.get(exp.seq).dimension;
 		}
 		else{
+			assert(false);
 			return Dimension();
 		}
 	}
