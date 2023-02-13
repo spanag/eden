@@ -7191,7 +7191,7 @@ struct ImportState{
 
 //Top-level NeuroML import routine
 // TODO add debug mode
-bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simulation, bool verbose, FILE *info_log, FILE *error_log){
+bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simulation, NmlImportContext &import_context, bool verbose, FILE *info_log, FILE *error_log){
 	
 	bool ok = false;
 	fprintf(info_log, "Starting import from NeuroML file %s\n", top_level_filename);
@@ -7325,7 +7325,7 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 	ImportState import_state(model);
 	
 	// The set of files currently opened
-	NmlImportContext import_context;
+	// import_context.clear();
 	ImportLogger log(import_context, error_log, verbose); // TODO customise
 	
 	// The set of files to be read
@@ -7792,4 +7792,20 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 	//all handled automatically, actually
 	
 	return ok;
+}
+struct NmlImportContext_Holder::Impl : NmlImportContext { };
+NmlImportContext_Holder::NmlImportContext_Holder(): impl(new Impl()){}
+NmlImportContext_Holder &NmlImportContext_Holder::operator=( NmlImportContext_Holder &&rhs){
+	impl=std::move(rhs.impl);
+	return *this;
+};
+NmlImportContext_Holder::~NmlImportContext_Holder() = default;
+
+bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simulation, bool verbose, FILE *info_log, FILE *error_log){
+	NmlImportContext import_context; // just make up one on the spot
+	return ReadNeuroML(top_level_filename, model, entire_simulation, import_context, verbose, info_log, error_log);
+	// beware: non-essential information like strings and xml tags, filenames etc are lost after this point, unless a holter is used!!
+}
+bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simulation, NmlImportContext_Holder &import_context_holder, bool verbose, FILE *info_log, FILE *error_log){
+	return ReadNeuroML(top_level_filename, model, entire_simulation, *(import_context_holder.impl), verbose, info_log, error_log);
 }

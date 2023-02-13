@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <set>
 #include <list>
+#include <memory>
 
 // set up a namespace LATER
 
@@ -1049,8 +1050,7 @@ struct ComponentType{
 	
 	CoreType extends;
 	
-	static std::list<std::string> eternal_strings; // TODO remove when NameTable is implemented
-	
+	static std::list<std::string> eternal_strings; // not necessary thanks to persistent import context, use that or make a NameTable struct LATER
 	
 	
 	// Constants, may be defined for each component instance separately.
@@ -2323,6 +2323,14 @@ struct Model{
 
 //------------------> Parsed representations of NeuroML entities end
 
+// Helper to keep load context, to preserve access to the model's strings after the model is loaded 
+struct NmlImportContext_Holder{
+	NmlImportContext_Holder(); NmlImportContext_Holder &operator=( NmlImportContext_Holder &&); ~NmlImportContext_Holder(); //; 
+	struct Impl; std::unique_ptr<Impl> impl;
+};
+
+// Get the NeuroML model, use NmlImportContext_Holder to keep its strings loaded also
 bool ReadNeuroML(const char *filename, Model &model, bool entire_simulation, bool verbose = false, FILE *info_log = stdout, FILE *error_log = stderr);
+bool ReadNeuroML(const char *filename, Model &model, bool entire_simulation, NmlImportContext_Holder &import_context, bool verbose = false, FILE *info_log = stdout, FILE *error_log = stderr);
 
 #endif

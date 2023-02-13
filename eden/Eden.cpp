@@ -2883,7 +2883,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		CellInternalSignature &sig = cell_sigs[cell_seq];
 		
-		sig.name = "Cell_type_"+itos(cell_seq);
+		sig.name = std::string("Cell_type_")+cell_types.getName(cell_seq);//itos(cell_seq);
 		
 		// TODO something more elegant to compile the actual code kernels:
 		// dry run, or synchronization to use the same files(beware of distributed file systems !)
@@ -8928,7 +8928,9 @@ int main(int argc, char **argv){
 	
 	RunMetaData metadata;
 	
-	Model model; // TODO move to SimulatorConfig
+	NmlImportContext_Holder import_context;
+	Model model; // TODO move to SimulatorConfig and allow multiple input files
+	
 	bool model_selected = false;
 	
 	timeval config_start, config_end;
@@ -8947,9 +8949,13 @@ int main(int argc, char **argv){
 			
 			timeval nml_start, nml_end;
 			gettimeofday(&nml_start, NULL);
-			if(!( ReadNeuroML( argv[i+1], model, true, config.verbose) )){
+			{
+			NmlImportContext_Holder new_import_context;
+			if(!( ReadNeuroML( argv[i+1], model, true, new_import_context, config.verbose) )){
 				printf("cmdline: could not make sense of NeuroML file\n");
 				exit(1);
+			}
+			import_context = std::move(new_import_context);
 			}
 			gettimeofday(&nml_end, NULL);
 			printf("cmdline: Parsed %s in %lf seconds\n", argv[i+1], TimevalDeltaSec(nml_start, nml_end));
