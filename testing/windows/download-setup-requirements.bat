@@ -105,6 +105,9 @@ copy /Y %DOWNLOADS_DIR%\gnumake-4.3.exe %MAKE_DIR%\make.exe || goto :error
 %ZIP7% -y x %DOWNLOADS_DIR%\mingw32.7z -o%MINGW32_DIR%\.. || goto :error
 %ZIP7% -y x %DOWNLOADS_DIR%\mingw64.7z -o%MINGW64_DIR%\.. || goto :error
 
+:: now setup both pythons, with pip and latest packages to build wheels
+:setup_pythons
+
 :: Python
 %ZIP7% -y x %DOWNLOADS_DIR%\python-win32.zip -o%PYTHON32_DIR% || goto :error
 %ZIP7% -y x %DOWNLOADS_DIR%\python-amd64.zip -o%PYTHON64_DIR% || goto :error
@@ -112,9 +115,6 @@ copy /Y %DOWNLOADS_DIR%\gnumake-4.3.exe %MAKE_DIR%\make.exe || goto :error
 copy /Y %PYTHON32_DIR%\python.exe %PYTHON32_DIR%\python3.exe || goto :error
 copy /Y %PYTHON64_DIR%\python.exe %PYTHON64_DIR%\python3.exe || goto :error
 
-
-:: now setup both pythons, with pip and latest packages to build wheels
-:setup_pythons
 call :setup_python %PYTHON32_DIR% %GETPIP_DIR% || goto :error
 call :setup_python %PYTHON64_DIR% %GETPIP_DIR% || goto :error
 
@@ -132,7 +132,7 @@ for /f "delims=" %%a in ('dir /s /b %1\*._pth') do (echo/&echo Lib\site-packages
 :: type %1\*._pth
 :: "%1\python3" -m site || exit /b %errorlevel%
 
-"%1\python3" -m pip install -U pip setuptools auditwheel twine || exit /b %errorlevel%
+"%1\python3" -m pip install -U pip virtualenv setuptools auditwheel twine || exit /b %errorlevel%
 @exit /b 0
 
 :done_python
