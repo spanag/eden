@@ -16,6 +16,8 @@ import numpy as np
 import logging
 logger = logging.getLogger(__name__)
 
+# Own files
+from . import embeden
 
 def runEden( example_lems_file, threads=None, extra_cmdline_args=None, executable_path=None, verbose = False, full_cmdline=None):
 	'''
@@ -56,17 +58,13 @@ def runEden( example_lems_file, threads=None, extra_cmdline_args=None, executabl
 	args = ["eden", "nml", example_lems_file, "gcc"]
 	
 	# If Eden executable is bundled in the package, use that by default 
-	import pkg_resources
-	import platform
-	exe_extension = ".exe" if platform.system() == 'Windows' else ""
-	eden_bundled_exe = "data/bin/eden"+exe_extension
+	eden_bundled_exe_filename = embeden.get_exe_path()
 	
 	# But in all cases, executable_path takes top priority
 	if executable_path:
 		args[0] = executable_path
 		
-	elif pkg_resources.resource_exists(__name__, eden_bundled_exe):
-		eden_bundled_exe_filename = pkg_resources.resource_filename(__name__, eden_bundled_exe)
+	elif eden_bundled_exe_filename:
 		if verbose:
 			print("Using bundled executable: "+eden_bundled_exe+" on "+eden_bundled_exe_filename)
 		args[0] = eden_bundled_exe_filename

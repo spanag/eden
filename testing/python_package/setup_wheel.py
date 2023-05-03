@@ -172,23 +172,35 @@ def _get_scripts():
     binary_scripts = []
     if not config_options.no_eden_exe: 
         exe_script_names = [
-            'eden',
+            # 'eden', no more binary scripts for now :D
         ]
         if platform.system() == 'Windows':
             extension = '.exe'
         else:
             extension = ''
             
-        # if sys.platform == "darwin":
-            # return [] # TODO a python wrapper instead
+        # NB: binary scripts are not being delocated on osx!! use python wrappers for all platforms whenever possible!
+        if sys.platform == "darwin":
+            exe_script_names = [] 
             
         binary_scripts = [package_name+'/'+exe_files_location+'/%s%s' % (script_name, extension)
             for script_name in exe_script_names]
         
     return python_scripts, binary_scripts
-
+    
 [python_scripts, binary_scripts] = _get_scripts()
 scripts_list = python_scripts + binary_scripts
+
+def _get_entry_points():
+    # see https://python-packaging.readthedocs.io/en/latest/command-line-scripts.html#the-console-scripts-entry-point
+    entry_points = {
+        'console_scripts':[],
+    }
+    if not config_options.no_eden_exe:
+        entry_points['console_scripts'].append('eden=eden_simulator.command_line:runEden')
+        
+    return entry_points
+entry_points = _get_entry_points()
 
 cmd_my_build_scripts = GetBuildScriptsExcept(binary_scripts)
 
@@ -203,7 +215,7 @@ if config_options.no_eden_exe:
     # cmd_my_bdist_wheel =  platform_specific_bdist_wheel
     # cmd_my_install = InstallPlatlib
     # my_distclass = BinaryDistribution
-    zip_safe = False
+    zip_safe = False # because data files that need unpacking may still be included in the future
 else:
     # Wheel contains compiled code and is thus platform specific
     cmd_my_bdist_wheel =  platform_specific_bdist_wheel
@@ -211,9 +223,6 @@ else:
     my_distclass = BinaryDistribution
     zip_safe = False
     package_data_locations = [exe_files_location+'/*']
-
-
-
 
 setuptools.setup(
     name=package_name,
@@ -250,7 +259,7 @@ setuptools.setup(
     include_package_data=False,
     # scripts 
     scripts=scripts_list,  
-    # scripts=['eden'], 
+    entry_points=entry_points,
     install_requires = [
         # 'setuptools', # due to customised setup step ... but it should already be in place to install the wheel right?
         'numpy',

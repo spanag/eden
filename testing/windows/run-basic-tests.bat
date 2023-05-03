@@ -7,6 +7,9 @@ set "REPO_DIR_SLASH=%REPO_DIR:\=/%"
 
 python3 -c "import eden_simulator; eden_simulator.runEden('%REPO_DIR_SLASH%/examples/LEMS_NML2_Ex25_MultiComp.xml')" || goto :error
 
+:: test the console script as well
+eden nml "%REPO_DIR_SLASH%/examples/LEMS_NML2_Ex25_MultiComp.xml"
+
 exit /b 0
 
 :error
