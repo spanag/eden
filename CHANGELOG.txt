@@ -7,6 +7,7 @@ Latest
 - Improve Windows compatibility + build environment
 - Improve OSX build environment
 - Add __version__ and __version_info__ to Python wheels
+- Replace 'eden' binary script with console script in Python wheels
 - Fix linker issues on OSX wheels
 - Fix location of eden executable within the python wheel
 - Add support for 'hollow' eden_simulator wheels when EDEN is already installed by other means

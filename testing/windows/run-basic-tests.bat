@@ -5,7 +5,12 @@ call %~dp0\default-repo-path.bat || goto :error
 set "REPO_DIR_SLASH=%REPO_DIR:\=/%"
 :: echo "%REPO_DIR_SLASH%"
 
+@echo Testing Python module invocation...
 python3 -c "import eden_simulator; eden_simulator.runEden('%REPO_DIR_SLASH%/examples/LEMS_NML2_Ex25_MultiComp.xml')" || goto :error
+
+:: test the console script as well
+@echo Testing console script invocation...
+eden nml "%REPO_DIR_SLASH%/examples/LEMS_NML2_Ex25_MultiComp.xml" || goto :error
 
 exit /b 0
 
