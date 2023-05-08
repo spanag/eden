@@ -1,7 +1,7 @@
 # building stuff in docker
 
 DOCKER_TESTING_DIR := $(abspath $(dir $(firstword $(MAKEFILE_LIST) ) ) )
-TESTING_DIR ?= $(DOCKER_TESTING_DIR)/../
+TESTING_DIR ?= $(DOCKER_TESTING_DIR)/../../
 PROJ_BASE ?= $(TESTING_DIR)/../
 
 USER_UID_GID = $(shell id -u):$(shell id -g)

@@ -11,7 +11,7 @@ COPY . /repo
 WORKDIR /repo
 
 ENV OUT_DIR /app
-RUN bash ./testing/docker/build_on_docker.bash
+RUN bash ./testing/linux/docker/build_on_docker.bash
 
 FROM debian:buster-20191014-slim
 

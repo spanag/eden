@@ -131,7 +131,7 @@ Both types of wheel can be built as the respective targets `wheel` and `hollow_w
 If MPI is also installed, a MPI-enabled version of EDEN (with hybrid MPI/OpenMP parallelization) can be built, by running `make` with the `USE_MPI` flag. This configuration has been tested with standard MPICH on Linux; consult your HPC cluster's documentation for specific details on the process for MPI-enabled builds.
 
 ## Docker images
-Alternatively, Docker images with EDEN and an assortment of tools are available and can also be built, for containerized environments. The Dockerfiles are available on the `testing/docker` folder, and they can be built in the proper order through the Makefile in the folder.
+Alternatively, Docker images with EDEN and an assortment of tools are available and can also be built, for containerized environments. The Dockerfiles are available on the `testing/linux/docker` folder, and they can be built in the proper order through the Makefile in the folder.
 The Docker images are Linux-native but they can as well run on Windows and MacOS through [Docker Desktop]( https://www.docker.com/products/docker-desktop/ ).
 
 If Docker is installed and accessible to the user, an automated testing suite can also be run to verify EDEN's results against the NEURON simulator's for deterministic models. Run `make test` to run the automated tests.

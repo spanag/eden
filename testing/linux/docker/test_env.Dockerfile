@@ -67,11 +67,11 @@ WORKDIR ${EDEN_CODE_REPO}
 # RUN pip install testing/python_package
 
 ENV OUT_DIR ${EDEN_INSTALL_DIR}
-RUN TARGETS="eden hollow_wheel" bash ./testing/docker/build_on_docker.bash
+RUN TARGETS="eden hollow_wheel" bash ./testing/linux/docker/build_on_docker.bash
 
 # one more time, for MPI
 ENV OUT_DIR ${EDEN_INSTALL_DIR}_MPI
-RUN USE_MPI=1 WHEEL_VERSION=$(cat VERSION) bash ./testing/docker/build_on_docker.bash
+RUN USE_MPI=1 WHEEL_VERSION=$(cat VERSION) bash ./testing/linux/docker/build_on_docker.bash
 
 FROM before-build
 ARG EDEN_INSTALL_DIR

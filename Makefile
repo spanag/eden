@@ -296,7 +296,9 @@ ${BIN_DIR}/nml_projector${DOT_O}: ${TESTING_DIR}/nml_projector.cpp ${SRC_COMMON}
 	$(CXX) -c $< $(CXXFLAGS) -o $@
 
 test:
-	make -f testing/docker/Makefile test
+	$(MAYBE_TARGET_LINUX) || echo "make test is for Linux only at the moment !"
+	$(MAYBE_TARGET_LINUX) || false
+	$(MAYBE_NOT_TARGET_LINUX) || make -f testing/linux/docker/Makefile test
 
 clean:
 	rm -f $(OBJ_DIR)/*.o $(OBJ_DIR)/*.yy.* $(OBJ_DIR)/*.tab.* $(OBJ_DIR)/*.a  $(OBJ_DIR)/*.gen.*
