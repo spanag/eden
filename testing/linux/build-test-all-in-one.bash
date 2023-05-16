@@ -17,10 +17,8 @@ mkdir -p "$ARTIFACTS_DIR"
 
 # Build for native arch, test, and get wheel
 source "$(dirname "${BASH_SOURCE[0]}")/build-wheel.bash"
-# REPO_DIR, VERSION, VERSION_PY, WHEEL_PLAT_NAME_FILENAME are set by sourced build script
-# echo $REPO_DIR $VERSION_PY $WHEEL_PLAT_NAME $WHEEL_PLAT_NAME_FILENAME
-WHEEL_TO_TEST=$(find "$BUILD_DIR/bin" -type f -name "eden_simulator-$VERSION_PY-py3-none-*.whl")
-echo $WHEEL_TO_TEST
+
+WHEEL_TO_TEST=$(find "$BUILD_DIR/bin" -type f -name "eden_simulator-$WHEEL_VERSION-py3-none-*.whl")
 
 "$(dirname "${BASH_SOURCE[0]}")/run-tests-on-wheel.bash" "$WHEEL_TO_TEST"
 echo "Tests passed"

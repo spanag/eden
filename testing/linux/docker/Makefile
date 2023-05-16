@@ -7,18 +7,22 @@ PROJ_BASE ?= $(TESTING_DIR)/../
 USER_UID_GID = $(shell id -u):$(shell id -g)
 
 EDEN_DOCKER_BUILD_ENV_IMAGE_NAME?=eden-build
+EDEN_DOCKER_BUILD_MANYLINUX_IMAGE_NAME?=eden-manylinux
 EDEN_DOCKER_TEST_ENV_IMAGE_NAME?=eden-test
 EDEN_DOCKER_IMAGE_NAME?=eden-standalone
 EDEN_DOCKER_IMAGE_TAG?=latest
 
+EDEN_DOCKER_BUILD_MANYLINUX_IMAGE_FULLNAME?=${EDEN_DOCKER_BUILD_MANYLINUX_IMAGE_NAME}:${EDEN_DOCKER_IMAGE_TAG}
 EDEN_DOCKER_BUILD_ENV_IMAGE_FULLNAME?=${EDEN_DOCKER_BUILD_ENV_IMAGE_NAME}:${EDEN_DOCKER_IMAGE_TAG}
 EDEN_DOCKER_TEST_ENV_IMAGE_FULLNAME?=${EDEN_DOCKER_TEST_ENV_IMAGE_NAME}:${EDEN_DOCKER_IMAGE_TAG}
 EDEN_DOCKER_IMAGE_FULLNAME?=${EDEN_DOCKER_IMAGE_NAME}:${EDEN_DOCKER_IMAGE_TAG}
 
-SUDO_DOCKER:=bash ${DOCKER_TESTING_DIR}/sudo_docker.bash # workaround to omit sudo if not needed to call docker
+SUDO_DOCKER:=${DOCKER_TESTING_DIR}/sudo_docker.bash # workaround to omit sudo if not needed to call docker
 
 docker_build_env: ${DOCKER_TESTING_DIR}/build_env.Dockerfile
 	${SUDO_DOCKER} build -t ${EDEN_DOCKER_BUILD_ENV_IMAGE_FULLNAME} - < $<
+docker_build_manylinux: ${DOCKER_TESTING_DIR}/build_manylinux.Dockerfile
+	${SUDO_DOCKER} build --build-arg MANYLINUX_IMAGE=${MANYLINUX_IMAGE} -t ${EDEN_DOCKER_BUILD_MANYLINUX_IMAGE_FULLNAME} - < $<
 
 scipy-notebook-plus: ${DOCKER_TESTING_DIR}/scipy-notebook-plus.Dockerfile
 	${SUDO_DOCKER} build -t scidash/scipy-notebook-plus - < $<

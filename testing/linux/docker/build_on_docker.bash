@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 # Assume runnning from Parallel_HH/ directory, on Docker container
 
 # Default parameters

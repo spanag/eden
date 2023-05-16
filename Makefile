@@ -63,7 +63,6 @@ endif
 MAYBE_TARGET_LINUX ?= false
 MAYBE_NOT_TARGET_LINUX ?= true
 ifneq (,$(findstring linux,$(TARGET)))
-	LIBS := $(LIBS) -ldl
 	MAYBE_TARGET_LINUX := true
 	MAYBE_NOT_TARGET_LINUX := false
 endif
@@ -71,7 +70,6 @@ endif
 MAYBE_TARGET_MAC ?= false
 MAYBE_NOT_TARGET_MAC ?= true
 ifneq (,$(findstring darwin,$(TARGET)))
-	# LIBS := $(LIBS) -ldl
 	MAYBE_TARGET_MAC := true
 	MAYBE_NOT_TARGET_MAC := false
 endif
@@ -144,8 +142,10 @@ CFLAGS_cpu = ${CFLAGS_omp}
 CFLAGS ?= ${CFLAGS_${BUILD}} ${CFLAGS_${PLATFORM}} -I ${SRC_COMMON} -I ${PROJ_BASE}
 
 LIBS ?=  
+# TODO use those flags defined above...
 ifneq (,$(findstring linux,$(TARGET)))
 	LIBS := $(LIBS) -ldl
+	# LATER -Wl,-Bstatic -l:libdl.so -Wl,-Bdynamic if it's worth the hassle
 endif
 ifneq (,$(findstring darwin,$(TARGET)))
 	LIBS := $(LIBS) -ldl
