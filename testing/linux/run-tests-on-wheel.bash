@@ -6,7 +6,8 @@ if [ -z "$1" ]; then
 	exit 2
 fi
 
-BUILD_PATH=$(realpath $(dirname $1))
+# https://stackoverflow.com/questions/5265817/how-to-get-full-path-of-a-file
+BUILD_PATH=$(python3 -c "import os; print(os.path.abspath(\"$(dirname $1)\"))")
 
 if [ -n "$RUN_DIRECT" ]; then
 

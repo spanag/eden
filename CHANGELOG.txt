@@ -3,6 +3,7 @@ Latest
 - Eliminate LEMS constants from the model's memory footprint
 - Add support to keep model files loaded after finishing loading the model. Now EDEN and extensions can access the names of objects, for diagnostics and more!
 - Add support for new Apple Silicon Mac's
+- Add support for Raspberry Pi and other ARM systems on Linux: `armhf`(32-bit) and `aarch64`(64-bit)
 - Fix important typos affecting less common model cases
 - Improve Windows compatibility + build environment
 - Improve OSX build environment
