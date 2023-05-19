@@ -7,7 +7,7 @@
 SUDO_DOCKER="$(dirname "${BASH_SOURCE[0]}")/sudo_docker.bash"
 DOCKER_USER_OR_ROOT=$(id -u):$(id -g)
 
-if [ "rootless" == $($SUDO_DOCKER context show) ]; then
+if $SUDO_DOCKER context show >/dev/null 2>&1 && [ "rootless" == $($SUDO_DOCKER context show) ]; then
     DOCKER_USER_OR_ROOT=0:0
 fi
 

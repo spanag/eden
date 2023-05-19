@@ -10,7 +10,7 @@ This software is released as open-source, under the GPL v3 licence. Refer to LIC
 
 ## Quickstart
 
-The easiest way to get started is to get the Python package: `pip install eden-simiulator`
+The easiest way to get started is to get the Python package: `pip install eden-simulator`
 and then invoke EDEN from Python:
 ```python
 from eden_simulator import runEden
@@ -105,8 +105,11 @@ The following software packages are required to build the source code:
 - `gcc` compiler, or alternatively the `icc` compiler. Specifically, a compiler version that supports C++14.
 - `flex` version 2.6 or later
 - `bison` version 3.0 or later
+- (optional) `python3` with `setuptools` and optionally `wheel` to build the Python wrapper package (see also the next section).
 
-On Linux, most other tools for building are pre-installed or they can be easily installed; consult your distribution's reference on installing essential build tools.  
+for building on Linux, shell scripts are available on the [testing/linux](testing/linux) directory.
+The necessary tools for building are pre-installed or they can be easily installed; consult your distribution's reference on installing essential build tools. 
+Alternatively, if `docker` is installed and available to the user, EDEN can be built without affecting the user setup by just running `bash eden/testing/linux/build-test-all-in-one.bash` outside the source tree. The executable and Python wheel can then be found in `eden/bin` directory.
 
 For building on Windows, batch scripts are available on the [testing/windows](testing/windows) directory for installing all the necessary build tools and libraries, setting the shell's PATH to use them and building the standalone executable or Python wheel, all without affecting the system or user setup.
 
@@ -114,15 +117,15 @@ For building on macOS, shell scripts are available on the [testing/mac](testing/
 *Note* The `testing/mac/download-setup-requirements.bash` script installs Command Line Developer Tools for Mac, Homebrew and various Homebrew packages in the system, in the process installing the required tooling.
 *Note 2* The Apple developer tools are not suitable to build EDEN, because they lack OpenMP support which is required by EDEN. Instead, we recommend the developer tools installed by `download-setup-requirements.bash`.
 
-Before attempting to build manually, source the `setpath` script for the platform you are building against so that the necessary tools are on PATH. (See platform-spacific instructions above.)
+Before attempting to build manually on Windows or macOS, source the `setpath` script for the platform you are building against so that the necessary tools are on PATH. (See platform-specific instructions above.)
 
-Use environment variable `BUILD=release` or `BUILD=debug` to run a production or debugging build of the program executable, respectively. The executable will be available on `bin/eden.<build>.<compiler>.cpu.x` (`.exe` on Windows)
+When running `make eden` (or `make wheel`, see below) manually, use environment variable `BUILD=release` or `BUILD=debug` to run a production or debugging build of the program executable, respectively. The executable will be available on `bin/eden.<build>.<compiler>.cpu.x` (`.exe` on Windows)
 
 ### Building Python wheels
 Beside the program itself, EDEN can also be built as a Python package, which offers more integrated interface to the program. The python package is created in the installable `.whl` (wheel) format. 
 
 There are two options to build a Python wheel:
-- The first is as a standalone wheel containing the EDEN executable (hence the wheel is specific to one OS and processor type).  This is the type of wheels avcailable through `pip install`.
+- The first is as a standalone wheel containing the EDEN executable (hence the wheel is specific to one OS and processor type).  This is the type of wheels available through `pip install`.
 - The second option is as a 'hollow' wheel which works everywhere, but relies on EDEN already being available on PATH through different means. This type is useful in classes where a special (e.g. custom-built) version of EDEN is preferred to the generic version of 'standalone' wheels.
 
 Both types of wheel can be built as the respective targets `wheel` and `hollow_wheel` of the Makefile. The resulting `.whl` files are located in the paths `testing/sandbox/{wheel, wheel_hollow}/dist`.
