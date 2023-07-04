@@ -49,12 +49,14 @@ def VerifyTimeSeries_Box( results_Truth, results_Test, time_Truth, dt_box, dv_bo
 		if over_earliest < under_earliest:
 			fail_desc = "Over limit"
 			fail_sample = over_earliest
+			diff = (results_Test[over_earliest] - results_Truth[over_earliest])
 		elif under_earliest < over_earliest:
 			fail_desc = "Under limit"
 			fail_sample = under_earliest
+			diff = (results_Test[under_earliest] - results_Truth[under_earliest])
 		else:
 			raise AssertionError( 'exceeding both max and min limits')
-		return {'desc': fail_desc, 'sample':fail_sample, 'time': time_Truth[fail_sample]}
+		return {'desc': fail_desc, 'sample':fail_sample, 'time': time_Truth[fail_sample], 'diff':diff}
 	
 	else:
 		return True
@@ -77,15 +79,19 @@ def ExplainVerification( Truth, Test, criteria, key ):
 		raise ValueError('key not found in criteria')
 
 	typ = criterion['type']
-
-	if typ == 'box':
-		dmax, dmin = GetOverUnder_Box( results_Truth, time_Truth, criterion['dt'], criterion['dv'] )
+	
+	
+	if typ == 'box' or typ == 'exact':
+		if typ == 'box': dt, dv = criterion['dt'], criterion['dv']
+		if typ == 'exact': dt, dv = 0, 0
+		
+		dmax, dmin = GetOverUnder_Box( results_Truth, time_Truth, dt,dv )
 		# TODO the Truth in general, there might be another source of Truth (ikr)
 		plt.plot( time_Truth, results_Truth, label="NEURON")
 		plt.plot( time_Truth, results_Test, label="EDEN")
 		plt.plot( time_Truth, dmax, linestyle='--', label='Max')
 		plt.plot( time_Truth, dmin, linestyle='--', label='Min')
-		res = VerifyTimeSeries_Box( results_Truth, results_Test, time_Truth, criterion['dt'], criterion['dv'] )
+		res = VerifyTimeSeries_Box( results_Truth, results_Test, time_Truth, dt, dv )
 		if res is not True:
 			plt.axvline( res['time'], color='red', linewidth='1')
 			plt.axhline( results_Test[res['sample']], color='red', linewidth='1')
@@ -134,10 +140,13 @@ def VerifySimResults(
 				validation_missing.append(key)
 		
 		if criterion:
-			typ = criterion['type']
+			if isinstance(criterion, str): typ = criterion
+			else: typ = criterion['type']
 			
 			if typ == 'box':
 				res = VerifyTimeSeries_Box( res_neuron, res_interp, time_Neuron, criterion['dt'], criterion['dv'])
+			elif typ == 'exact':
+				res = VerifyTimeSeries_Box( res_neuron, res_interp, time_Neuron, 0.0, 0.0)
 			else:
 				raise ValueError('Unknown criterion type "'+ typ + '"')
 			
@@ -169,7 +178,7 @@ def VerifySimResults(
 
 		for res in validation_fails:
 
-			resstr = res['key'] + ' : ' + res['desc']  + " at "+ ("%.3f msec" % (res['time'] * 1000) ) + (" (sample %d)" % res['sample'] )
+			resstr = res['key'] + ' : ' + res['desc']  + " at "+ ("%.3f msec" % (res['time'] * 1000) ) + (" (sample %d, diff %f)" % (res['sample'], res['diff']) )
 			print("\t" + resstr)
 
 		if explain_verification_on_fail:
@@ -190,6 +199,12 @@ def RunTest(
 ):
 	ok = False # return value
 	
+	criteria = test.get('validation_criteria', None)
+	
+	skip_missing = skip_missing_criteria
+	if skip_missing_criteria is not True:
+		skip_missing = not not test.get('skip_missing',False)
+	
 	typ = test['type']
 	if typ == 'smoke_test':
 		test_filename = test['sim_file']
@@ -204,6 +219,8 @@ def RunTest(
 	elif(
 		typ == 'validate_vs_neuron'
 		or typ == 'eden_vs_eden'
+		or typ == 'half_vs_half'
+		or typ == 'function_vs_function'
 	):
 		# TODO add jLEMS
 		test_filename = test['sim_file']
@@ -229,13 +246,68 @@ def RunTest(
 			results_Neuron = runEden( test_filename, **truth_kwargs )
 			results_Eden   = runEden( test_filename, **test_kwargs  )
 			
+		elif typ == 'half_vs_half':
+			testcase_type = 'vs. Half'
+			test_filename = test['sim_file']
+			compare = test['validation_criteria']
+			ignore = test.get('ignore',[])
+			for pair in compare:
+				if not (
+					isinstance(pair, list)
+					and len(pair) == 3
+					and isinstance(pair[0], str)
+					and isinstance(pair[1], str)
+					and ( isinstance(pair[2], dict) or pair[2] == 'exact')
+				):
+					raise ValueError('elements of half_vs_half "validation_criteria" must be triplets of string traj truth, string traj test, dict comparison criterion')
+			
+			default_kwargs = { 'verbose': verbose, 'extra_cmdline_args': extra_cmdline_args }
+			test_kwargs = default_kwargs
+			
+			print( 'Validating %s, trajectories in one run of EDEN (%s)' % ( test_filename, str(test_kwargs) ) )
+			
+			results   = runEden( test_filename, **test_kwargs  )
+			results_test = {'t':results['t']}
+			results_true = {'t':results['t']}
+			results_tezt = {} # just to get the set of trajectories in the 'test' set :D
+			criteria = {}
+			remainder = {}
+			
+			for pair in compare:
+				ltrue = pair[0]
+				ltest = pair[1]
+				results_true[ltrue] = results[ltrue]
+				results_test[ltrue] = results[ltest]
+				results_tezt[ltest] = results[ltest]
+				criteria[ltrue] = pair[2]
+			
+			# check for any remaining trajectories
+			for key,val in results.items():
+				if key == "t": continue
+				if key not in results_true and key not in results_tezt and key not in ignore:
+					remainder[key] = val
+			if not skip_missing_criteria and remainder:
+				ok = False
+				print("Some time series were not checked:")
+				for key in remainder:
+					print("\t" + key)
+			
+			default_kwargs = { 'verbose': verbose, 'extra_cmdline_args': extra_cmdline_args }
+			
+			results_Neuron = results_true
+			results_Eden   = results_test
+			
+		elif typ == 'function_vs_function':
+			testcase_type = 'vs. custom'
+			
+			default_kwargs = { 'verbose': verbose, 'extra_cmdline_args': extra_cmdline_args }
+			
+			results_Neuron = test['truth'](**default_kwargs)
+			results_Eden   = test['test' ](**default_kwargs)
+		
 		else:
 			raise ValueError('unknown subtest type '+ typ+'??')
 		
-		skip_missing = skip_missing_criteria
-		if skip_missing_criteria is not True:
-			skip_missing = not not test.get('skip_missing',False)
-		criteria = test['validation_criteria']
 		
 		res = VerifySimResults( results_Neuron, results_Eden, criteria,
 			skip_missing_criteria=skip_missing, explain_verification_on_fail=explain_verification_on_fail)

@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<neuroml id=" NML_EdenTestNetwork1">
+    <!-- Include core NeuroML2 ComponentType definitions -->
+    <Include file="Cells.xml"/>
+    <Include file="Networks.xml"/>
+    <Include file="Simulation.xml"/>
+	<Include file="PyNN.xml"/>
+    
+    <!-- Example of an isolated, passive compartment; minimal sanity check --> 
+    
+	<ionChannelHH id="passiveChan" conductance="10pS">
+		<notes>Leak conductance</notes>
+	</ionChannelHH>
+    
+    <biophysicalProperties id="bioPhys_Passive">
+        <membraneProperties>
+            <channelDensity id="leak" ionChannel="passiveChan" condDensity="3.0 S_per_m2" erev="-0mV" ion="non_specific"/> 
+            <!-- <spikeThresh value="-64.5mV"/> -->
+            <specificCapacitance value="1.0 uF_per_cm2"/>
+            <initMembPotential value="-65mV" />
+        </membraneProperties>
+        <intracellularProperties>
+            <resistivity value="1 kohm_cm"/>   
+        </intracellularProperties>
+    </biophysicalProperties>
+    
+    <!-- (A) tonic spiking -->
+    <izhikevichCell id="izTonicSpiking" v0 = "-70mV" thresh = "30mV" a ="0.02" b = "0.2" c = "-65" d = "6"/>
+
+    <!-- (B) phasic spiking -->
+    <izhikevichCell id="izPhasicSpiking" v0 = "-64mV" thresh = "30mV" a ="0.02" b = "0.25" c = "-65" d = "6"/>
+
+    <!-- (C) tonic bursting -->
+    <izhikevichCell id="izTonicBursting" v0 = "-70mV" thresh = "30mV" a ="0.02" b = "0.2" c = "-50" d = "2"/>
+
+    <!-- (D) phasic bursting -->
+    <izhikevichCell id="izPhasicBursting" v0 = "-64mV" thresh = "30mV" a ="0.02" b = "0.25" c = "-55" d = "0.05"/>
+
+    <!-- (E) mixed mode -->
+    <izhikevichCell id="izMixedMode" v0 = "-70mV" thresh = "30mV" a ="0.02" b = "0.2" c = "-55" d = "4"/>
+    
+    <!-- TODO omit the varying parameters, put them as properties! -->
+    <izhikevichCell id="izGeneric" v0 = "-70mV" thresh = "30mV" a ="0.02" b = "0.2" c = "-65" d = "6"/>
+    <pulseGeneratorDL id="iDlGeneric" delay="10ms" duration="100ms" amplitude="10" />
+
+    <pulseGeneratorDL id="iA" delay="10ms" duration="90ms" amplitude="14" />
+    <pulseGeneratorDL id="iB" delay="20ms" duration="180ms" amplitude="0.5" />
+    <pulseGeneratorDL id="iC" delay="22ms" duration="198ms" amplitude="15" />
+    <pulseGeneratorDL id="iD" delay="20ms" duration="180ms" amplitude="0.6" />
+    <pulseGeneratorDL id="iE" delay="16ms" duration="144ms" amplitude="10" />
+        
+    <pulseGenerator id="pulseGen1" delay="10ms" duration="8ms" amplitude="0.2nA"/>
+    
+    <network id="EdenTestNetwork">
+    
+        <population id="popA" component="izTonicSpiking" type="populationList" size="1">
+            <instance id="0">
+                <location x="0" y="0" z="0"/>
+            </instance>
+        </population>
+        <population id="popB" component="izPhasicSpiking" type="populationList" size="1">
+            <instance id="0">
+                <location x="50" y="0" z="0"/>
+            </instance>
+        </population>
+        <population id="popC" component="izTonicBursting" type="populationList" size="1">
+            <instance id="0">
+                <location x="100" y="0" z="0"/>
+            </instance>
+        </population>
+        <population id="popD" component="izPhasicBursting" type="populationList" size="1">
+            <instance id="0">
+                <location x="150" y="0" z="0"/>
+            </instance>
+        </population>
+        <population id="popE" component="izMixedMode" type="populationList" size="1">
+            <instance id="0">
+                <location x="200" y="0" z="0"/>
+            </instance>
+        </population>
+        
+        <population id="pop0" component="izGeneric" size="5" />
+        
+        <inputList id="IIputA" component="iA" population="pop0">
+            <input id="0" target="pop0[0]" destination="synapses"/>
+        </inputList>
+        <inputList id="IIputB" component="iB" population="pop0">
+            <input id="0" target="pop0[1]" destination="synapses"/>
+        </inputList>
+        <inputList id="IIputC" component="iC" population="pop0">
+            <input id="0" target="pop0[2]" destination="synapses"/>
+        </inputList>
+        <inputList id="IIputD" component="iD" population="pop0">
+            <input id="0" target="pop0[3]" destination="synapses"/>
+        </inputList>
+        <inputList id="IIputE" component="iE" population="pop0">
+            <input id="0" target="pop0[4]" destination="synapses"/>
+        </inputList>
+        
+        <inputList id="InputA" component="iA" population="popA">
+            <input id="0" target="../popA/0/izTonicSpiking" destination="synapses"/>
+        </inputList>
+        
+        <inputList id="InputB" component="iB" population="popB">
+            <input id="0" target="../popB/0/izPhasicSpiking" destination="synapses"/>
+        </inputList>
+        
+        <inputList id="InputC" component="iC" population="popC">
+            <input id="0" target="../popC/0/izTonicBursting" destination="synapses"/>
+        </inputList>
+        <inputList id="InputD" component="iD" population="popD">
+            <input id="0" target="../popD/0/izPhasicBursting" destination="synapses"/>
+        </inputList>
+        <inputList id="InputE" component="iE" population="popE">
+            <input id="0" target="../popE/0/izMixedMode" destination="synapses"/>
+        </inputList>
+        
+        <!-- <inputList id="Input0" component="iDlGeneric" population="pop0">
+            <input id="0" target="../pop0[0]" destination="synapses"/>
+        </inputList> -->
+        
+    </network>
+    
+    <Simulation id="sim1" length="100.0ms" step="0.010ms" target="EdenTestNetwork">
+		<OutputFile id="first" fileName="results.gen.txt">
+        
+			<OutputColumn id="iiA" quantity="pop0[0]/v" />
+			<OutputColumn id="iiB" quantity="pop0[1]/v" />
+			<OutputColumn id="iiC" quantity="pop0[2]/v" />
+			<OutputColumn id="iiD" quantity="pop0[3]/v" />
+			<OutputColumn id="iiE" quantity="pop0[4]/v" />
+            
+			<OutputColumn id="izA" quantity="popA/0/izTonicSpiking/v" />
+            <OutputColumn id="izB" quantity="popB/0/izPhasicSpiking/v" />
+            <OutputColumn id="izC" quantity="popC/0/izTonicBursting/v" />
+            <OutputColumn id="izD" quantity="popD/0/izPhasicBursting/v" />
+            <OutputColumn id="izE" quantity="popE/0/izMixedMode/v" />
+			
+		</OutputFile>
+        
+        
+        <EdenCustomSetup filename="./EdenTest_Extension_CustomSetup.txt">
+        </EdenCustomSetup>
+    </Simulation>
+    <!-- Specify which component to run -->
+    <Target component="sim1"/>
+    
+</neuroml>
+

@@ -28,6 +28,7 @@ Parallel simulation engine for ODE-based models
 #include <map>
 #include <set>
 #include <chrono>
+#include <numeric>
 
 #include "MMMallocator.h"
 
@@ -263,6 +264,66 @@ void Say( const char *format, ... ){
 #endif
 
 
+// references to the raw tables
+struct TabEntryRef{
+	long long table;
+	int entry;
+	// could also use the compressed, encoded combination
+};
+struct RawTablesLocator : public TabEntryRef{
+	enum LayoutType{
+		FLAT, // TODO abolish
+		TABLE
+	} layou_type;
+	enum VariableType{
+		STATE,
+		CONST
+	} varia_type;
+	enum FormatType{
+		F32,
+		I64
+	} forma_type;
+	std::string Stringify() const{
+		char tmps[1000];
+		sprintf(tmps,"> %d%d%d %lld %d", (int)layou_type, (int)varia_type, (int)forma_type, (long long)table, (int)entry);
+		return std::string(tmps);
+	}
+};
+
+typedef long long TabEntryRef_Packed;
+auto GetEncodedTableEntryId = []( long long global_idx_T_dest_table, long long entry_idx_T_dest ){
+	// pack 1 trillion tables -> 16 million entries into 64bit indexes, upgrade if needed LATER
+	
+	const long long table_id = global_idx_T_dest_table * (1 << 24);
+	const long long entry_id = entry_idx_T_dest % (1 << 24);
+	const TabEntryRef_Packed packed_id = table_id | entry_id ;
+	
+	return packed_id;
+};
+auto GetDecodedTableEntryId = [  ]( TabEntryRef_Packed packed_id ){
+	long long global_idx_T_dest_table = packed_id >> 24;
+	int entry_idx_T_dest = packed_id % (1 << 24);
+	TabEntryRef ret = { global_idx_T_dest_table, entry_idx_T_dest };
+	return ret;
+};
+
+// smuggle int32 into f32 position
+// dodgy, but that's life
+union TypePun_I32F32{
+	int32_t i32; float f32;
+	static_assert( sizeof(i32) == sizeof(f32), "Single-precision float must have same same size as int32_t for type punning to work" );
+};
+auto EncodeI32ToF32( int32_t i ){
+	TypePun_I32F32 cast;
+	cast.i32 = i;
+	return cast.f32;
+}
+auto EncodeF32ToI32( float f ){
+	TypePun_I32F32 cast;
+	cast.f32 = f;
+	return cast.i32;
+}
+
 // initial states, internal constants, connectivity matrices, iteration function pointers and everything
 // so crunching can commence
 struct RawTables{
@@ -308,47 +369,36 @@ struct RawTables{
 		global_const_tabref = -1;
 		global_state_tabref = -1;
 	}
-};
-// references to the raw tables
-struct TabEntryRef{
-	long long table;
-	int entry;
-	// could also use the compressed, encoded combination
-};
-typedef long long TabEntryRef_Packed;
-auto GetEncodedTableEntryId = []( long long global_idx_T_dest_table, long long entry_idx_T_dest ){
-	// pack 1 trillion tables -> 16 million entries into 64bit indexes, upgrade if needed LATER
 	
-	const unsigned long long table_id = global_idx_T_dest_table * (1 << 24);
-	const unsigned long long entry_id = entry_idx_T_dest % (1 << 24);
-	const unsigned long long packed_id = table_id | entry_id ;
-	
-	return packed_id;
+	float &GetSingleF32(const RawTablesLocator &tabloc){
+		assert(tabloc.forma_type == RawTablesLocator::FormatType::F32);
+		if(tabloc.layou_type == RawTablesLocator::LayoutType::FLAT){
+			if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+				return global_initial_state[tabloc.entry]; }
+			else{ // if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+				return global_constants[tabloc.entry]; }
+		}
+		else{ // if(tabloc.layou_type == RawTablesLocator::LayoutType::TABLE){
+			if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+				return global_tables_state_f32_arrays[tabloc.table][tabloc.entry]; }
+			else{ // if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+				return global_tables_const_f32_arrays[tabloc.table][tabloc.entry]; }
+		}
+	}
+	long long &GetSingleI64(const RawTablesLocator &tabloc){
+		assert(tabloc.forma_type == RawTablesLocator::FormatType::I64);
+		if(tabloc.layou_type == RawTablesLocator::LayoutType::FLAT){
+			assert(tabloc.varia_type == RawTablesLocator::VariableType::CONST);
+			return index_constants[tabloc.entry];
+		}
+		else{ // if(tabloc.layou_type == RawTablesLocator::LayoutType::TABLE){
+			if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+				return global_tables_state_i64_arrays[tabloc.table][tabloc.entry]; }
+			else{ // if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+				return global_tables_const_i64_arrays[tabloc.table][tabloc.entry]; }
+		}
+	}
 };
-auto GetDecodedTableEntryId = [  ]( unsigned long long packed_id ){
-	long long global_idx_T_dest_table = packed_id >> 24;
-	int entry_idx_T_dest = packed_id % (1 << 24);
-	TabEntryRef ret = { global_idx_T_dest_table, entry_idx_T_dest };
-	return ret;
-};
-
-// smuggle int32 into f32 position
-// dodgy, but that's life
-union TypePun_I32F32{
-	int32_t i32; float f32;
-	static_assert( sizeof(i32) == sizeof(f32), "Single-precision float must have same same size as int32_t for type punning to work" );
-};
-auto EncodeI32ToF32( int32_t i ){
-	TypePun_I32F32 cast;
-	cast.i32 = i;
-	return cast.f32;
-}
-auto EncodeF32ToI32( float f ){
-	TypePun_I32F32 cast;
-	cast.f32 = f;
-	return cast.i32;
-}
-
 
 // and more information that is needed for the engine
 struct EngineConfig{
@@ -356,21 +406,8 @@ struct EngineConfig{
 	struct TrajectoryLogger {
 		
 		struct LogColumn{
-			enum Type{
-				NONE,
-				TOPLEVEL_STATE,
-				TABLE_STATE
-			};
-			enum ValueType{
-				F32,
-				I64
-			};
 			
-			Type type;
-			ValueType value_type;
-			
-			size_t entry;
-			// size_t table;
+			RawTablesLocator tabloc;
 			double scaleFactor; // in case of float values
 			
 			#ifdef USE_MPI
@@ -636,7 +673,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				};
 				
 				size_t index;
-				ValueType type;
+				ValueType type; // TODO refactor raw access of 'index' to accoint for this
 				
 				Entry(){ type = UNSET; }
 				Entry( size_t _i, int _t ) : index(_i), type((ValueType)_t) { } // ICC crashes if _t is a ValueType
@@ -6761,7 +6798,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	
 	
 	// symbolic reference to some point, on some neuron, under NeuroML
-	// perhaps move this to be more general, in header LATER
+	// TODO replace with LemsQuantityPath or equivalent
+	// what should be done with fractionalong vs ? one workaround is to know the discretization beforehand and use the middle of each compartment as discrete fractionAlong (it's not like it's practical to vary things if the discrete element is the same i guess?)
 	struct PointOnCellLocator{
 		Int population;
 		Int cell_instance;
@@ -6942,7 +6980,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// sanity check
 		if(!( 0 <= pop_seq && pop_seq < (Int)net.populations.contents.size() )) return (ptrdiff_t) -1;
 		
-		auto &hm = local_workunit_per_cell_per_population[pop_seq];
+		const auto &hm = local_workunit_per_cell_per_population[pop_seq];
 		
 		if( !hm.count(cell_seq) ) return (ptrdiff_t) -1;
 		
@@ -6960,7 +6998,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		return hm.at(cell_seq);
 	};
-	
+	// FIXME make fallible !
 	auto GetRemoteNode_FromPopInst = [ &GetGlobalGid_FromPopInst, &neuron_gid_to_node ]( Int pop_seq, Int cell_seq ){
 		// sanity check
 		
@@ -6976,6 +7014,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	};
 	
 	// Maps neuron instance to either non-negative local work item, or negative ~(remote_node_id)
+	// FIXME make fallible !
 	auto WorkUnitOrNode = [ &GetLocalWorkItem_FromPopInst, &GetRemoteNode_FromPopInst ]( int pop, int cell_inst ){
 		work_t ret = GetLocalWorkItem_FromPopInst( pop, cell_inst );
 		// Say("pop %d %d = %llx", pop, cell_inst, (long long)ret);
@@ -6986,6 +7025,18 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// Say("popp %d %d = %llx", pop, cell_inst, (long long)ret);
 		
 		return ret;
+	};
+	
+	auto LocateNodeForPath = [&GetRemoteNode_FromPopInst]( const Simulation::LemsQuantityPath &path, int &node ){
+		if( path.RefersToCell() ){
+			Int nodecode = GetRemoteNode_FromPopInst(path.population, path.cell_instance);
+			if(nodecode == ~0xABadD00d) return false;
+			node = (Int) nodecode; return true;
+		}
+		else{
+			// FIXME with synapse paths and such
+			return false;
+		}
 	};
 	
 	#else
@@ -7267,7 +7318,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	gettimeofday(&time_pops_end, NULL);
 	printf("Created populations in %.4lf sec.\n",TimevalDeltaSec(time_pops_start, time_pops_end));
 	
-	// Add some extra misc-purpose tables
+	// Add some extra misc-purpose tables, TODO move to, or abolish even?
 	tabs.global_const_tabref = tabs.global_tables_const_f32_arrays.size();
 	tabs.                           global_tables_const_f32_arrays.emplace_back();
 	tabs.global_state_tabref = tabs.global_tables_state_f32_arrays.size();
@@ -7684,6 +7735,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					}
 					#endif
 					// otherwise it's local
+					// TODO use single 
 					ptrdiff_t local_idx_V_peer = GetCompartmentVoltageStatevarIndex( peer_sig, peer_cell_type_seq, peer_loc.segment, peer_loc.fractionAlong );
 						
 					if( local_idx_V_peer < 0 ){
@@ -7693,7 +7745,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					
 					// get reference to where peer's voltage is located
 					ptrdiff_t global_idx_V_peer = tabs.global_state_f32_index[peer_work_unit] + local_idx_V_peer;
-					auto global_tabentry = GetEncodedTableEntryId( tabs.global_state_tabref, global_idx_V_peer);
+					TabEntryRef_Packed global_tabentry = GetEncodedTableEntryId( tabs.global_state_tabref, global_idx_V_peer);
 					
 					Vpeer.push_back(global_tabentry);
 					
@@ -7910,10 +7962,102 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	
 	printf("Creating data outputs...\n");
 	
-	// add the loggers
+	auto MustBePhysicalCell = [](const auto &log_error, const CellType &cell_type ){
+		if( cell_type.type != CellType::PHYSICAL ){
+			log_error("internal error: channel path on non-physical cell");
+			return false;
+		}
+		return true;
+	};
+	auto MustBeArtificialCell = [](const auto &log_error, const CellType &cell_type ){
+		if( cell_type.type != CellType::ARTIFICIAL ){
+			log_error("internal error: cell path on non-artificial cell");
+			return false;
+		}
+		return true;
+	};
 	
-	// TODO explicit capture
-	auto Implement_LoggerColumn = [ & ]( const Int daw_seq, const Int col_seq, const std::string &output_filepath,const auto &path, EngineConfig::TrajectoryLogger::LogColumn &column ){
+	auto LocateEntryFromPath = [&]( const Simulation::LemsQuantityPath &path, RawTablesLocator &tabloc, const auto &log_error = printf ){
+		
+		auto LocateSubentryFromComponentPath = [&component_types](const auto &log_error, const ComponentInstance &compinst, const CellInternalSignature::ComponentSubSignature &compsubsig, const Simulation:: LemsInstanceQuantityPath &lemspath, RawTablesLocator::VariableType &varia_type, RawTablesLocator::FormatType &forma_type, int &subentry){
+			
+			Int comp_type_seq = compinst.id_seq;
+		
+			const ComponentType &comp_type = component_types.get(comp_type_seq);
+			const auto &namespace_thing_seq = lemspath.namespace_thing_seq;
+			const auto &refer_thing = comp_type.name_space.get(namespace_thing_seq);
+			
+			if( refer_thing.type == ComponentType::NamespaceThing::STATE ){
+				varia_type = RawTablesLocator::VariableType::STATE;
+				forma_type = RawTablesLocator::FormatType::F32;
+				subentry = compsubsig.statevars_to_states[ refer_thing.seq ].index;
+				return true;
+			}
+			else if( refer_thing.type == ComponentType::NamespaceThing::PROPERTY ){
+				varia_type = RawTablesLocator::VariableType::CONST;
+				forma_type = RawTablesLocator::FormatType::F32;
+				subentry = compsubsig.properties_to_constants[ refer_thing.seq ].index;
+				return true;
+			}
+			else{
+				log_error("error: only state variables and properties can be located, %s can't", refer_thing.getTypeName());
+				return false; // perhaps fix LATER
+			}
+			
+		};
+		// is both input and output, input is format, variable, layout type and subentry on entry,
+		auto MapCellWorkitemSubentryToLocation = [](const auto &log_error, const RawTables &tabs, work_t work_unit, RawTablesLocator &tabloc){
+			
+			if(tabloc.layou_type == RawTablesLocator::LayoutType::FLAT){
+				// offset the entry, overwrithe the table to global flat
+				if(tabloc.forma_type == RawTablesLocator::FormatType::F32){
+					if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+						tabloc.table = tabs.global_state_tabref;
+						tabloc.entry += (int) tabs.global_state_f32_index[work_unit];
+						return true;
+					}
+					else if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+						tabloc.table = tabs.global_const_tabref;
+						tabloc.entry += (int) tabs.global_const_f32_index[work_unit];
+						return true;
+					}
+					else{ assert(false); return false; }
+				}
+				else if(tabloc.forma_type == RawTablesLocator::FormatType::I64){
+					// TODO refs
+					log_error("internal error: flat subentry i64 not supported yet");
+					return false;
+				}
+				else{ assert(false); return false; }
+			}
+			else if(tabloc.layou_type == RawTablesLocator::LayoutType::TABLE){
+				// keep the entry, offset the table
+				if(tabloc.forma_type == RawTablesLocator::FormatType::F32){
+					if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+						tabloc.table = tabs.global_table_state_f32_index[work_unit];
+						return true;
+					}
+					else if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+						tabloc.table = tabs.global_table_const_f32_index[work_unit];
+						return true;
+					}
+					else{ assert(false); return false; }
+				}
+				else if(tabloc.forma_type == RawTablesLocator::FormatType::I64){
+					if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+						tabloc.table = tabs.global_table_state_i64_index[work_unit];
+						return true;
+					}
+					else if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+						tabloc.table = tabs.global_table_const_i64_index[work_unit];
+						return true;
+					}
+					else{ assert(false); return false; }
+				}
+				else{ assert(false); return false; }
+			}
+			else{ assert(false); return false; }
+		};
 		
 		if( path.RefersToCell() ){
 			
@@ -7923,25 +8067,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// get work item for this neuron here, or perhaps further on when compartments are work items
 			
 			#ifdef USE_MPI
-			
 			work_t work_unit = WorkUnitOrNode( path.population, path.cell_instance );
-			
-			if( work_unit < 0 ){
-				#ifdef MPI
-				assert( my_mpi.rank == 0 );
-				#endif
-				
-				int remote_node = ~(work_unit);
-				column.on_node = remote_node;
-				if( !AppendRemoteDependency_DataWriter( {daw_seq, col_seq}, remote_node ) ) return false;
-				
-				return true;
-			}
-			
+			if( work_unit < 0 ) return false; // TODO return node name or leave it to the caller? where should the domain decomposition be checked
+			// TODO leave the check to the caller?
 			#else
-			
 			work_t work_unit = workunit_per_cell_per_population[path.population][path.cell_instance];
-			
+			if( work_unit < 0 ) return false; // TODO check the indices as well!
 			#endif
 			
 			// get sig for said neuron, to properly manipulate the work item
@@ -7951,20 +8082,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			// otherwise cell-type-specific paths
 			
-			auto MustBePhysicalCell = [ &col_seq, &output_filepath ]( const CellType &cell_type ){
-				if( cell_type.type != CellType::PHYSICAL ){
-					printf("internal error: column %ld for data writer %s has channel path on non-physical cell\n", col_seq, output_filepath.c_str());
-					return false;
-				}
-				return true;
-			};
-			auto MustBeArtificialCell = [ &col_seq, &output_filepath ]( const CellType &cell_type ){
-				if( cell_type.type != CellType::ARTIFICIAL ){
-					printf("internal error: column %ld for data writer %s has cell path on non-artificial cell\n", col_seq, output_filepath.c_str());
-					return false;
-				}
-				return true;
-			};
 			
 			// NB currently, all cell-facing references have a valid reference to segment. (That is 0 for artificial cells.)
 			// But this could not always hold LATER...
@@ -7973,16 +8090,18 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			if( cell_type.type == CellType::PHYSICAL ){
 				if( path.segment_seq >= 0 ){
 					comp_seq = GetCompSeqForCell(cell_type, sig, path.segment_seq, 0.5); // NB: LEMS refs lack fractionAlong for now
+					// TODO add fractionAlong to path
 				}
 				else{
-					assert(false); // should not happen as of now, guard for when this case happens LATER
+					log_error("internal error: missing segment # on segment path");// should not happen as of now, guard for when this case happens LATER
+					return false;
 				}
 			}
 			
 			switch(path.type){
 			case Simulation::LemsQuantityPath::Type::SEGMENT: {
 				
-				if( !MustBePhysicalCell( cell_type ) ) return false;
+				if(!MustBePhysicalCell(log_error, cell_type)) return false;
 				
 				const PhysicalCell &cell = cell_type.physical;
 				// const Morphology &morph = morphologies.get(cell.morphology);
@@ -7990,29 +8109,30 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				auto &pig = sig.physical_cell;
 				
-				// NB: If the path refers to a segment, 
+				// NB: If the path refers to a segment, FIXME
 				
 				switch(path.segment.type){
 					
 					case Simulation::LemsQuantityPath::SegmentPath::Type::VOLTAGE: {
 						// printf("daw volt cell %ld seg %ld comp %d\n", (Int)path.cell_instance, (Int)path.segment_seq, (int) comp_seq );
-						const ScaleEntry volts = {"V" ,  0, 1.0};
-						column.type = EngineConfig::TrajectoryLogger::LogColumn::Type::TOPLEVEL_STATE;
-						column.value_type = EngineConfig::TrajectoryLogger::LogColumn::ValueType::F32;
+						tabloc.layou_type = RawTablesLocator::LayoutType::FLAT;
+						tabloc.varia_type = RawTablesLocator::VariableType::STATE;
+						tabloc.forma_type = RawTablesLocator::FormatType::F32;
 						
-						// TODO multinode - global state is not global anymore, redirect to comm buffers !
+						//TODOOOO
 						size_t global_idx_V = tabs.global_state_f32_index[work_unit] + pig.GetVoltageStatevarIndex( comp_seq ); // LATER change for split cell?
-						column.entry = global_idx_V;
-						column.scaleFactor = Scales<Voltage>::native.ConvertTo(1, volts);
+						
+						tabloc.table = tabs.global_state_tabref;
+						tabloc.entry = global_idx_V;
 						// printf("\n\n\n record %zd \n\n\n", global_idx_V);
 						break;
 					}
 					case Simulation::LemsQuantityPath::SegmentPath::Type::CALCIUM_INTRA:
 					case Simulation::LemsQuantityPath::SegmentPath::Type::CALCIUM2_INTRA:
 					{
-						const ScaleEntry millimolar = {"mM" ,  0, 1.0}; // the reported scale is in fundamental units: mol/m^3 that is mmol/L
-						column.type = EngineConfig::TrajectoryLogger::LogColumn::Type::TOPLEVEL_STATE;
-						column.value_type = EngineConfig::TrajectoryLogger::LogColumn::ValueType::F32;
+						tabloc.layou_type = RawTablesLocator::LayoutType::FLAT;
+						tabloc.varia_type = RawTablesLocator::VariableType::STATE;
+						tabloc.forma_type = RawTablesLocator::FormatType::F32;
 						
 						const auto &comp_impl = pig.comp_implementations.at(comp_seq);
 						const auto &comp_def  = pig.comp_definitions.at(comp_seq);
@@ -8025,15 +8145,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						} 
 						
 						if( Ca_seq < 0 ){
-							printf("internal error: logged biophysics missing %s", sCalcium);
+							log_error("internal error: logged biophysics missing %s", sCalcium);
 							return false;
 						}
 						if( !comp_impl.concentration.count(Ca_seq) ){
-							printf("internal error: logged biophysics missing %s impl", sCalcium);
+							log_error("internal error: logged biophysics missing %s impl", sCalcium);
 							return false;
 						}
 						if( !comp_def.ions.count(Ca_seq) ){
-							printf("internal error: logged biophysics missing %s def", sCalcium);
+							log_error("internal error: logged biophysics missing %s def", sCalcium);
 							return false;
 						}
 						
@@ -8047,41 +8167,44 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							
 							Int comp_type_seq = calcconc.component.id_seq;
 							if( comp_type_seq < 0 ){
-								printf("internal error: lems quantity path for %s: missing component type\n", sCalcium);
+								log_error("internal error: lems quantity path for %s: missing component type", sCalcium);
 								return false;
 							}
 							const ComponentType &comp_type = component_types.get(comp_type_seq);
 							
 							const auto exposure_seq = comp_type.common_exposures.concentration_intra;
 							if( exposure_seq < 0 ){
-								printf("internal error: lems quantity path for %s: missing component exposure %d\n", sCalcium, (int) exposure_seq);
+								log_error("internal error: lems quantity path for %s: missing component exposure %d", sCalcium, (int) exposure_seq);
 								return false;
 							}
 							const auto &exposure = comp_type.exposures.get(exposure_seq);
+							
+							// let it be restricted to state for now and bother LATER, because this is an indirect access of the conc model... access directly with path for the full lems path experience
 							
 							if( exposure.type == ComponentType::Exposure::STATE ){
 								Index_CaConcIn = calcimpl.component.statevars_to_states[ exposure.seq ].index;
 							}
 							else{
-								printf("error: lems quantity path for %s is not a state variable; this is not supported yet\n", sCalcium );
+								log_error("segment based immediate lems quantity path for %s is not a state variable; this is not supported yet", sCalcium );
 								return false; // perhaps fix LATER
 							}
 						}
 						
 						if( Index_CaConcIn < 0 ){
-							printf("internal error: logged biophysics missing %s impl idx", sCalcium);
+							log_error("internal error: logged biophysics missing %s impl idx", sCalcium);
 							return false;
 						}
 						
 						// TODO multinode - global state is not global naymore, redirect to comm buffers !
 						size_t global_idx_CaconcIn = tabs.global_state_f32_index[work_unit] + Index_CaConcIn; //TODO change for split cell?
-						column.entry = global_idx_CaconcIn;
-						column.scaleFactor = Scales<Concentration>::native.ConvertTo(1, millimolar);
+						
+						tabloc.table = tabs.global_state_tabref;
+						tabloc.entry = global_idx_CaconcIn;
 						// printf("\n\n\n record %zd \n\n\n", global_idx_V);
 						break;
 					}
 					default: {
-						printf("column %ld for segment-located data writer %s not supported yet \n", col_seq, output_filepath.c_str());
+						log_error("segment-located path not supported yet");
 						return false;
 					}
 				}
@@ -8091,33 +8214,34 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			case Simulation::LemsQuantityPath::Type::CHANNEL: {
 				
-				if( !MustBePhysicalCell( cell_type ) ) return false;
+				if(!MustBePhysicalCell(log_error, cell_type)) return false;
 				auto &pig = sig.physical_cell;
 				
 				switch(path.channel.type){
 					
 					case Simulation::LemsQuantityPath::ChannelPath::Type::Q: {
 						
-						column.type = EngineConfig::TrajectoryLogger::LogColumn::Type::TOPLEVEL_STATE;
-						column.value_type = EngineConfig::TrajectoryLogger::LogColumn::ValueType::F32;
+						tabloc.layou_type = RawTablesLocator::LayoutType::FLAT;
+						tabloc.varia_type = RawTablesLocator::VariableType::STATE;
+						tabloc.forma_type = RawTablesLocator::FormatType::F32;
 						
 						// get states for the specific ion channel distribution
 						const auto &comp_impl = pig.comp_implementations[comp_seq];
 						size_t sig_Q_offset = comp_impl.channel[path.channel.distribution_seq].per_gate[path.channel.gate_seq].Index_Q;
 						if(sig_Q_offset < 0){
 							// TODO check for complex gates
-							printf("column %ld for ion channel-located composite Q data writer %s not supported yet \n", col_seq, output_filepath.c_str());
+							log_error("ion channel-located composite Q not supported yet");
 							return false;
 						}
 						
-						column.entry = tabs.global_state_f32_index[work_unit] + sig_Q_offset; //TODO change for split cell?
-						column.scaleFactor = 1;
+						tabloc.table = tabs.global_state_tabref;
+						tabloc.entry = tabs.global_state_f32_index[work_unit] + sig_Q_offset; //TODO change for split cell?
 						// printf("\n\n\n record %zd \n\n\n", global_idx_V);
 						break;
 					}
 					
 					default: {
-						printf("column %ld for ion channel-located data writer %s not supported yet \n", col_seq, output_filepath.c_str());
+						log_error("ion channel-located path not supported yet");
 						return false;
 					}
 				}
@@ -8126,72 +8250,66 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 			
 			case Simulation::LemsQuantityPath::Type::SYNAPSE:{
-				printf("column %ld for data writer %s not supported yet : synapse path\n", col_seq, output_filepath.c_str());
+				printf("not supported yet : synapse path");
 				return false;
 			}
 			case Simulation::LemsQuantityPath::Type::INPUT:{
-				printf("column %ld for data writer %s not supported yet : input path\n", col_seq, output_filepath.c_str());
+				printf("not supported yet : input path");
 				return false;
 			}
 			case Simulation::LemsQuantityPath::Type::CELL:{
 				
-				if( !MustBeArtificialCell( cell_type ) ) return false;
+				if(!MustBeArtificialCell(log_error, cell_type)) return false;
 				auto &aig = sig.artificial_cell;
-				
-				Int comp_type_seq = cell_type.artificial.component.id_seq;
-				if( comp_type_seq < 0 ){
-					printf("internal error: lems quantity path for artificial cell: none native\n");
+				// FIXME what if it is an input??
+				if( !cell_type.artificial.component.ok() ){
+					log_error("internal error: lems quantity path for artificial cell: none native");
 					return false;
 				}
 				
-				const ComponentType &comp_type = component_types.get(comp_type_seq);
-				const auto &namespace_thing_seq = path.cell.lems_quantity_path.namespace_thing_seq;
-				const auto refer_thing = comp_type.name_space.get(namespace_thing_seq);
+				tabloc.layou_type = RawTablesLocator::LayoutType::FLAT; tabloc.entry = -1; // we know this for all artificial cells
+				tabloc.table = -1;
+				if(!LocateSubentryFromComponentPath(log_error, cell_type.artificial.component, aig.component, path.cell.lems_quantity_path, tabloc.varia_type, tabloc.forma_type, tabloc.entry)) return false;
 				
-				ptrdiff_t Index_Statevar = -1;
-				if( refer_thing.type == ComponentType::NamespaceThing::STATE ){
-					Index_Statevar = aig.component.statevars_to_states[ refer_thing.seq ].index;
-				}
-				else{
-					printf("error: lems quantity path for artificial cell is not a state variable; this is not supported yet\n");
-					return false; // perhaps fix LATER
-				}
+				printf("blocc %s\n", tabloc.Stringify().c_str());
 				
-				column.type = EngineConfig::TrajectoryLogger::LogColumn::Type::TOPLEVEL_STATE;
-				column.value_type = EngineConfig::TrajectoryLogger::LogColumn::ValueType::F32;
+				// TODO in physical cells, remember the offsets for deduplicated compartments! pig.comp_implementations wait... isn;t that done by calcium already?
+				if(!MapCellWorkitemSubentryToLocation(log_error, tabs, work_unit, tabloc)) return false;
 				
-				// TODO multinode - global state is not global anymore, redirect to comm buffers !
-				size_t global_idx = tabs.global_state_f32_index[work_unit] + Index_Statevar;
-				column.entry = global_idx;
-				
-				Dimension dim = comp_type.getNamespaceEntryDimension(namespace_thing_seq);
-				// TODO scales should be strictly defined for lems quantities !					
-				const LemsUnit native = dimensions.GetNative(dim);
-				// const LemsUnit desired = native;					
-				// use fundamental units for now
-				const ScaleEntry fundamental_units = {"fundamental units" ,  0, 1.0}; 
-				const LemsUnit desired = fundamental_units;
-				
-				column.scaleFactor = native.ConvertTo(1, desired);
-				// printf("\n\n\n record %zd \n\n\n", global_idx_V);
 				break;
 			}
 			
 			case Simulation::LemsQuantityPath::Type::ION_POOL: // TODO
 			default: {
-				printf("column %ld for data writer %s not supported yet : cell-based path type %d\n", col_seq, output_filepath.c_str(), path.type);
+				log_error("not supported yet : cell-based path type %d", path.type);
 				return false;
 			}
 			}
 		}
 		else{
-			printf("column %ld for data writer %s not supported yet : non-cell-based path type %d \n", col_seq, output_filepath.c_str(), path.type);
+			log_error("not supported yet : non-cell-based path type %d", path.type);
 			return false;
 		}
 		
+		// column %ld for data writer %s 
 		return true;
 	};
 	
+	// add the loggers
+	struct LogInsideDataWriter{
+		// const LogCustomFile &log;
+		Int col_seq;
+		std::string output_filepath;
+		// LogWithElement():{}
+		void operator()(const char *format, ...) const {
+			va_list args; va_start(args, format);
+			std::string prefix = "data writer"+output_filepath+", column "+accurate_string(col_seq)+": "; // FIXME allow no printf % to be injected here!
+			vprintf((prefix+format).c_str(), args);
+			va_end(args);
+			// 1+vsnprintf(NULL, 0, fmt, args1)
+		}
+	
+	};
 	
 	bool i_log_the_data = true;
 	
@@ -8223,17 +8341,170 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				const auto &col = daw.output_columns.get(col_seq);
 				const auto &path = col.quantity;
+				LogInsideDataWriter log_proxy{col_seq, daw.fileName};
 				
 				EngineConfig::TrajectoryLogger::LogColumn column;
 				
-				if( !Implement_LoggerColumn( daw_seq, col_seq, daw.fileName, path, column ) ) return false;
+				#ifdef USE_MPI
+				int path_node;
+				if(!LocateNodeForPath( path, path_node )) return false;
+				if( path_node != my_mpi.rank ){
+					assert( my_mpi.rank == 0 ); // for now at least...
+					column.on_node = path_node;
+					
+					if( !AppendRemoteDependency_DataWriter( {daw_seq, col_seq}, path_node ) ) return false;
+				} else
+				#endif
+				if( !LocateEntryFromPath(path, column.tabloc, log_proxy ) ) return false;
+				if(column.tabloc.forma_type != RawTablesLocator::F32){ log_proxy("not a float value!"); return false; }
 				
+				// and add scaling factor for output
+				ComponentType::NamespaceThing::Type type; Dimension dimension;
+				if(!model.GetLemsQuantityPathType(net, path, type, dimension)){
+					log_proxy("internal error: get qty path type"); return false;
+				}
+				
+				// TODO scales should be strictly defined for lems quantities !					
+				const LemsUnit native = dimensions.GetNative(dimension);
+				
+				// use fundamental units for now
+				const ScaleEntry fundamental_units = {"fundamental units" ,  0, 1.0}; 
+				const LemsUnit desired = fundamental_units;
+				
+				column.scaleFactor = native.ConvertTo(1, desired);
+				
+				// done with column
 				logger.columns.push_back(column);
 			}
 			
 		}
 	}
-	//FIXME add event writers
+	// TODO add event writers
+	
+	
+	// Now apply customsetup parameter override statements (if not done early on)
+	
+	const auto &statements = sim.custom_init.statements;
+	// FIXME call them verbs or statements
+	for( Int statement_seq = 0; statement_seq < (int)statements.size(); statement_seq++ ){
+		const Simulation::CustomSetup::Statement &set = statements[statement_seq];
+		printf("stmt %d\n", (int)statement_seq);
+		if(set.type == Simulation::CustomSetup::Statement::POPULATION){
+			
+			Int pop_seq = set.group_seq;
+			const auto &pop = net.populations.get(pop_seq);
+			const auto &cell_type = cell_types.get(pop.component_cell);
+			
+			auto items_seq = set.items_seq;
+			if(items_seq.empty()){ items_seq.resize(pop.instances.size()); std::iota(items_seq.begin(), items_seq.end(), 0); } // special case: the whole population
+			for(int item_i = 0; item_i < (int)items_seq.size(); item_i++ ){
+				Int instance_seq = items_seq[item_i];
+				printf("item %d %d\n", (int)item_i, (int)instance_seq);
+				struct LogSetStmtInsidePopulation{
+					Int statement_seq; Int instance_seq;
+					void operator()(const char *format, ...) const {
+						va_list args; va_start(args, format);
+						std::string prefix = "Setup statement "+accurate_string(statement_seq)+", "+std::string("cell")+": "; // NOTE allow no printf % to be injected here!
+						vprintf((prefix+format).c_str(), args);
+						va_end(args);
+					}
+				} log_error = {statement_seq, instance_seq};
+				
+				
+				Simulation::LemsQuantityPath path = set.path;
+				path.population = pop_seq;
+				path.cell_instance = instance_seq;
+				// get work item for this neuron here, or perhaps further on when compartments are work items
+				
+				#ifdef USE_MPI
+				work_t work_unit = WorkUnitOrNode( path.population, path.cell_instance );
+				if( work_unit < 0 ){
+					continue; // another node will initialize this cell
+				}
+				#else
+				// work_t work_unit = workunit_per_cell_per_population[path.population][path.cell_instance];
+				#endif
+				
+				// get sig for said neuron, to properly manipulate the work item
+				// const auto &sig = cell_sigs[pop.component_cell]; TODO this may be needed for properties of multicomp distributions
+				
+				RawTablesLocator tabloc;
+				
+				if(path.type == Simulation::LemsQuantityPath::Type::CELL){
+					if(cell_type.type == CellType::ARTIFICIAL){
+						if(!LocateEntryFromPath(path, tabloc, log_error)) return false;
+					}
+					else{
+						log_error("internal error: cell path on physical cell"); return false;
+					}
+				}
+				else{
+					// seggroup_seq
+					// segments_seq
+					
+					// multi_mode
+					// cable_mode
+					
+					// path
+					// real_data
+					// ref_data
+					log_error("error: pop path type not supported yet %d", (int)path.type); return false;
+				}
+				printf("set %s\n", tabloc.Stringify().c_str());
+				int row, col;
+				if(set.cable_mode){
+					col = 0; row = (false) ? 0 : 1;// TODO displace, or leave empty?? it would be simpler to skip the first line?
+					if(set.multi_mode) row += item_i;
+					
+					log_error("error: TODO fill in cable mode!"); return false; // TODO multiseg mode also, for segments which are not in cables
+				}
+				else{
+					row = 0;
+					if(set.multi_mode) col = item_i; else col = 0;
+					
+					if(false){ // VARREQ REF? VariableReference
+						const Simulation::LemsQuantityPath &ref_path = set.ref_data[row][col];
+						RawTablesLocator ref_tabloc;
+						if(!LocateEntryFromPath(ref_path, ref_tabloc, log_error)){
+							// TODO add varref dependency to mpi list!
+							return false;
+						}
+						else{
+							if(!( ref_tabloc.varia_type == RawTablesLocator::VariableType::STATE 
+							&& ref_tabloc.forma_type == RawTablesLocator::FormatType::F32 )){
+								log_error("error: path ref  non state float type not supported yet");
+								return false; // allow and check for more possibilities if ever needed, LATER
+							}
+							
+							tabs.GetSingleI64(tabloc) = GetEncodedTableEntryId(tabloc.table, tabloc.entry);
+						}
+					}
+					else{
+						// float value
+						printf("rowcol %d %d %zd\n", row, col, set.real_data.size());
+						Real val = set.real_data[row][col];
+						printf("val %f\n", val);
+						tabs.GetSingleF32(tabloc) = val;
+					}
+				}
+				// done setting item
+			}
+			// done setting on items
+		}
+		else{
+			printf("set type %d not supported yet\n", (int)set.type);
+			return false;
+		}
+		// done with statements
+	}
+	
+	// // for cell, for segment
+	// get location of target (maybe use shortcut?)
+	// update value
+	// // for cable
+	// // maybe use set population statement? to tell from projection etc
+	// simulation. custom_initialization....
+	// look at how syns are applied?
 	
 	#ifdef USE_MPI
 	
@@ -8799,7 +9070,14 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			auto &impl_col = send_list_impl.daw_columns[i];
 			
-			if( !Implement_LoggerColumn( ref.daw_seq, ref.col_seq, daw.fileName, path, impl_col) ) return false;
+			int path_node;
+			if(!LocateNodeForPath( path, path_node )) return false;
+			LogInsideDataWriter log_proxy{ref.col_seq, daw.fileName};
+			if( path_node != my_mpi.rank ){
+				log_proxy("internal error: received send list for remote node"); return false;
+			}
+			if( !LocateEntryFromPath(path, impl_col.tabloc, log_proxy ) ) return false;
+			if(impl_col.tabloc.forma_type != RawTablesLocator::F32){ log_proxy("internal error: send list element not a float value!"); return false; }
 		}
 		
 		// allocate mirror buffers for spike triggers
@@ -8854,10 +9132,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		// right next, the daw values
 		for( const auto &daw_ref : recv_list.daw_refs ){
-			
 			assert(my_mpi.rank == 0);
 			
-			engine_config.trajectory_loggers[daw_ref.daw_seq].columns[daw_ref.col_seq].entry = value_mirror_entry;
+			engine_config.trajectory_loggers[daw_ref.daw_seq].columns[daw_ref.col_seq].tabloc = {value_mirror_table, value_mirror_entry, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::F32};
 			
 			value_mirror_entry++;
 		}
@@ -8872,8 +9149,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			spike_mirror_entry++;
 		}
-		#ifdef LOLOL
-		#endif
 	}
 	
 	// MPI_Finalize();
@@ -9293,6 +9568,23 @@ int main(int argc, char **argv){
 	// need multiple initialization steps, to make sure the dependency chains of all state variables are resolved
 	for( long long step = -3; time <= engine_config.t_final; step++ ){
 		
+		// same as tabs but for the raw raw tables this time !
+		auto GetSingleF32 = [&global_state_now, &global_tables_stateNow_f32, &global_tables_const_f32_arrays, &tabs](const RawTablesLocator &tabloc) -> float & {
+			assert(tabloc.forma_type == RawTablesLocator::FormatType::F32);
+			if(tabloc.layou_type == RawTablesLocator::LayoutType::FLAT){
+				if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+					return global_state_now[tabloc.entry]; }
+				else{ // if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+					return tabs.global_constants[tabloc.entry]; }
+			}
+			else{ // if(tabloc.layou_type == RawTablesLocator::LayoutType::TABLE){
+				if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+					return global_tables_stateNow_f32[tabloc.table][tabloc.entry]; }
+				else{ // if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+					return global_tables_const_f32_arrays[tabloc.table][tabloc.entry]; }
+			}
+		};
+		
 		bool initializing = step <= 0;
 		
 		#ifdef USE_MPI
@@ -9338,10 +9630,8 @@ int main(int argc, char **argv){
 			for( size_t i = 0; i < sendlist_impl.daw_columns.size(); i++ ){
 				assert( my_mpi.rank != 0 && other_rank == 0 );
 				auto &col = sendlist_impl.daw_columns[i];
-				size_t off = col.entry;
-				// also apply scaling, so receiving node won't bother
-				
-				buf[ daw_buf_idx + i ] = global_state_now[ off ] * col.scaleFactor ;
+				// do not apply scaling! keep engine units consistent or at most marshalled!
+				buf[ daw_buf_idx + i ] = GetSingleF32(col.tabloc); // global_state_now[ off ];  * col.scaleFactor ;
 			}
 			
 			size_t spikebuf_off = sendlist_impl.spike_mirror_buffer;
@@ -9497,43 +9787,14 @@ int main(int argc, char **argv){
 				fprintf(fout, "%s", tmps_column);
 				
 				auto GetColumnValue = [
-				#ifdef USE_MPI
-					&engine_config,
-					&global_tables_stateNow_f32,
-				#endif
-					&global_state_now
+					&GetSingleF32
 				]( const EngineConfig::TrajectoryLogger::LogColumn &column ){
-					
-					switch( column.type ){
-						case EngineConfig::TrajectoryLogger::LogColumn::Type::TOPLEVEL_STATE :{
-							if(column.value_type == EngineConfig::TrajectoryLogger::LogColumn::ValueType::F32){
-								#ifdef USE_MPI
-								if( column.on_node >= 0 && column.on_node != my_mpi.rank ){
-									size_t table = engine_config.recvlist_impls.at(column.on_node).value_mirror_buffer;
-									
-									// scaling is done on remote node
-									return global_tables_stateNow_f32[table][column.entry];
-								}
-								#endif
-								// otherwise a local one
-								return (float) (global_state_now[column.entry] * column.scaleFactor);
-							}
-							else if(column.value_type == EngineConfig::TrajectoryLogger::LogColumn::ValueType::I64){
-								printf("but i have no flat i64 states lol\n");
-								exit(2);
-							}
-							else{
-								printf("internal error: unknown value type\n");
-								exit(2);
-							}
-							
-							break;
-						}
-						case EngineConfig::TrajectoryLogger::LogColumn::Type::TABLE_STATE :
-						default:
-							printf("internal error: unknown log type\n");
-							exit(2);
+					if(column.tabloc.forma_type != RawTablesLocator::F32){
+						printf("internal error: logged value not is not float\n");
+						exit(2);
 					}
+					// Note: scaling is done on the node writing down the log! to keep the units consistent
+					return GetSingleF32(column.tabloc) * column.scaleFactor;
 				};
 				for( const auto &column : logger.columns ){
 					char tmps_column[ column_width + 5 ];
@@ -9542,7 +9803,6 @@ int main(int argc, char **argv){
 					column_fmt.write( col_val, tmps_column );
 					fprintf( fout, "\t%s", tmps_column );
 					// fprintf( fout, "\t%f", col_val );
-					
 				}
 				fprintf(fout, "\n");
 			}

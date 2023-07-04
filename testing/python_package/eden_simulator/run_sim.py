@@ -144,7 +144,7 @@ def reload_saved_data(
     sim = tree.getroot().find("Simulation")
     ns_prefix = ""
 
-    possible_prefixes = ["{http://www.neuroml.org/lems/0.7.2}"]
+    possible_prefixes = ["{http://www.neuroml.org/lems/0.7.2}", "{http://www.neuroml.org/schema/neuroml2}"]
     if sim is None:
         for pre in possible_prefixes:
             for comp in tree.getroot().findall(pre + "Component"):

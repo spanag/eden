@@ -1,11 +1,24 @@
 import sys
 from eden_tools import *
+from eden_simulator import runEden
+from eden_tools.run_sim import runNeuron
 
 test_nml_dir = 'neuroml/'
 tests = [
 {
 	'type': 'smoke_test',
 	'sim_file': test_nml_dir + 'LEMS_EdenTest_PassiveCompartment.xml',
+},
+{
+    'type': 'half_vs_half',
+    'sim_file': 'neuroml/' + 'EdenTest_Extension_CustomSetup.nml',
+    'validation_criteria':[
+        ["popA/0/izTonicSpiking/v"  , "pop0[0]/v", "exact"],
+        ["popB/0/izPhasicSpiking/v" , "pop0[1]/v", "exact"],
+        ["popC/0/izTonicBursting/v" , "pop0[2]/v", "exact"],
+        ["popD/0/izPhasicBursting/v", "pop0[3]/v", "exact"],
+        ["popE/0/izMixedMode/v"     , "pop0[4]/v", "exact"],
+    ]
 },
 {
 	'type': 'validate_vs_neuron',

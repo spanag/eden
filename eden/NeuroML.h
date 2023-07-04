@@ -21,7 +21,6 @@ typedef long Int;
 //Run-length compressed arrays.
 //A list of [start, start + length) pairs.
 struct IdListRle{
-	//TODO add some validation tests.
 	std::vector<Int> run_starts;
 	std::vector<Int> run_lengths;
 	
@@ -274,6 +273,26 @@ struct IdListRle{
 		});
 		return ret;
 	}
+	
+	void shrink_to_fit(){
+		
+		run_starts.shrink_to_fit();
+		run_lengths.shrink_to_fit();
+	}
+	
+	IdListRle(){}
+	IdListRle(const std::vector<Int> &_s, const std::vector<Int> _l):run_starts(_s), run_lengths(_l){}
+	// make a IdListRle from a vector of integers
+	template< typename T, typename = typename std::enable_if< std::is_integral<T>::value >::type > 
+	IdListRle(const std::vector<T> &from_list){
+		auto sorted = from_list;
+		
+		run_starts.assign(sorted.begin(), sorted.end());
+		run_lengths.assign(sorted.size(), 1);
+		std::sort(run_starts.begin(), run_starts.end());
+		Compact();
+		shrink_to_fit();
+	}
 };
 
 //make a string-indexed, low-overhead hash table, the lazy-arcane way
@@ -303,7 +322,7 @@ struct CollectionWithNames{
 	bool has(const char *name) const{
 		return names.count(name) > 0 ;
 	}
-	
+	// this is seq really, TODO rename
 	Int get_id(const char *name) const{
 		if(has(name)) return names.at(name);
 		else return -1;
@@ -891,6 +910,17 @@ struct ComponentType{
 			// magical requirements are in CommonRequirements
 			
 		}type;
+		static const char *getTypeName(Type type) {
+			switch(type){
+				case CONSTANT   : return "Constant";
+				case PROPERTY   : return "Property";
+				case REQUIREMENT: return "Requirement";
+				case STATE      : return "StateVariable";
+				case DERIVED    : return "DerivedVariable";
+				default: return "Invalid";
+			}
+		}
+		const char *getTypeName() const { return getTypeName(type); }
 		Int seq; // in respective container
 	};
 	
@@ -1593,8 +1623,7 @@ struct SpeciesAcrossSegOrSegGroup : public AcrossSegOrSegGroup{
 // All ion channel density specifications, rolled into one
 struct ChannelDistribution : public AcrossSegOrSegGroup{
 	
-	// NOTE this may be the same for different objects, since it may be instantiated on different section s (possibly LATER).
-	// Is an empty string if absent.
+	// TODO this should be an unique identifier!
 	const char * name; 
 	
 	//These are standard for all channel distributions
@@ -1782,14 +1811,18 @@ struct IonChannel{
 		enum Type{
 			NONE, //dummy value
 			//PASSIVE, // ionChannelPassive
+			
 			RATES,
 			TAUINF,
 			RATESTAU,
 			RATESINF,
 			RATESTAUINF,
+			
 			INSTANTANEOUS,
+			
 			FRACTIONAL,
 			KINETIC,
+			
 			COMPONENT
 		}type;
 		
@@ -1799,6 +1832,7 @@ struct IonChannel{
 			
 			Int fractional;
 			Int kinetic;
+			
 			ComponentInstance component;
 		//};
 	};
@@ -2053,6 +2087,7 @@ struct Network{
 struct Simulation{
 	
 	// network is assumed to be the only one used in the simulation
+	// TODO extract LemsCellLocator
 	struct LemsSegmentLocator{
 		// common for all, anything not applicable is set to -1
 		// all internal id's are sequential, to preserve sanity
@@ -2062,6 +2097,7 @@ struct Simulation{
 		Int segment_seq; // XXX explain what happens to this if it's a synapse or sth else
 		// TODO move this to segment-based
 		// Note that fractionAlong is missing ! Assume 0.5 (in the middle of the segment)
+		// TODO add extension to the parser for "seg.fractionAlong" format
 		
 		// default invalid values, just in case
 		LemsSegmentLocator(){
@@ -2084,8 +2120,15 @@ struct Simulation{
 	struct InputInstanceQuantityPath : public MayBeLemsInstanceQuantity{
 		enum Type{
 			NONE,
+			NATIVE,
 			LEMS // for a LEMS component
 		}type;
+		
+		enum{
+			AMPLITUDE,
+			DURATION,
+			DELAY
+		}native_entry;
 		
 		// nothing else to add, for now
 	};
@@ -2095,11 +2138,11 @@ struct Simulation{
 		enum Type{
 			NONE,
 			CELL, // artificial point neurons (or perhaps per-cell state variables?)
-			SEGMENT, // only voltage is here, i guess
+			SEGMENT, // only voltage is here, i guess - but also ca and ca2 concentration can be accessed from here!
 			CHANNEL, // inside a channel(distribution), which may be a LEMS component as well
 			ION_POOL, // may be a LEMS component as well
 			SYNAPSE,  // may be a LEMS component as well
-			INPUT, // may be used LATER
+			INPUT, // an alternative way to access input instances
 			NETWORK, // quite silly but networks can be (extended by) LEMS components, may be used LATER
 			MAX // sentinel
 		};
@@ -2109,6 +2152,7 @@ struct Simulation{
 			enum Type{
 				NONE,
 				INPUT, // for a cell that's actually an input
+				// NATIVE, they all have lems representations for now
 				LEMS // for a LEMS component
 			}type;
 			
@@ -2133,7 +2177,7 @@ struct Simulation{
 		struct ChannelPath : public MayBeLemsInstanceQuantity{
 			enum Type{
 				NONE,
-				I,
+				I, // when channel is population based?
 				G,
 				G_DENSITY,	// when channel is density-based!
 				I_DENSITY,
@@ -2145,6 +2189,8 @@ struct Simulation{
 			Int distribution_seq; // which cell-wide distribution spec? required
 			Int gate_seq; // in case of particular gate
 			Int subgate_seq; // in case of KS or composite gates
+			
+			// TODO add access to lems gates, gate rates and such!
 		};
 		
 		struct IonPoolPath : public MayBeLemsInstanceQuantity{
@@ -2155,21 +2201,29 @@ struct Simulation{
 				LEMS
 			}type;
 			
-			Int ion_type_seq;
+			Int distribution_seq; // which cell-wide distribution spec? required
+			Int ion_type_seq; // TODO 
 		};
 		
 		struct SynapsePath : public MayBeLemsInstanceQuantity{
 			enum Type{
 				NONE,
 				I,
-				G, // for conductance-based only
+				G, // for conductance-based synapses only
 				LEMS
 			}type;
 			
 			Int synapse_type_seq;
 			Int instance_index_seq; // serial number of synapses of the same type on the same post-synaptic segment on the same post-synaptic cell
 		};
+		
+		// LemsSegmentLocator is not used for these!
+		struct InputPath : public InputInstanceQuantityPath{
 			
+			Int list_seq; // list in the network
+			Int inst_seq; // instance in the list
+		};
+		
 		Type type;
 		
 		union{
@@ -2178,13 +2232,15 @@ struct Simulation{
 			ChannelPath channel;
 			IonPoolPath pool;
 			SynapsePath synapse;
+			InputPath input;
 		};
 		
+		// in the wider sense that it refers to something attached to a specific cell
 		bool RefersToCell() const {
 			if(
 				type == CELL
 				|| type == SEGMENT || type == CHANNEL || type == ION_POOL
-				|| type == SYNAPSE || type == INPUT
+				|| type == SYNAPSE //|| type == INPUT
 			) return true;
 			else return false;
 		
@@ -2283,6 +2339,53 @@ struct Simulation{
 		CollectionWithNames<EventSelection> outputs;
 	};
 	
+	// extensions!
+	struct CustomSetup{
+		struct Statement{
+			enum Type{
+				NONE = 0,
+				POPULATION,
+				PROJECTION,
+				INPUT_LIST
+			};
+			Type type;
+			
+			Int group_seq;
+			std::vector<int> items_seq; // items of the cell population, or input list, or synapse list. Special case: empty means "all" in the order they were listed (ie seq).
+			bool multi_mode; // are values different per item?
+			
+			Int seggroup_seq; // for physical cell entries
+			
+			// TODO IdListRle?
+			std::vector<int> segments_seq; // for physical cell entries, *only* if a segment group is not listed; otherwise it is ignored.
+			// special case: if seggroup_seq *and* segments_seq is empty, then the whole cell is set.
+			
+			bool cable_mode; // is a cable being sampled across its length?
+			
+			bool on_pre, on_post; // for synapse specifier
+			
+			// use this object for its parts really - not the whole of it, be careful! TODO explain
+			Simulation::LemsQuantityPath path;
+			
+			std::vector<std::vector<Real> > real_data; // in engine units; one or many rows. If cable mode is set, the first row is fractionAlong sample points
+			std::vector<std::vector<Simulation::LemsQuantityPath> > ref_data; // for 'reference' values.
+			
+			Statement(){
+				group_seq = -1;
+				multi_mode = false;
+				
+				seggroup_seq = -1;
+				cable_mode = false;
+				
+				on_pre = on_post = false;
+			}
+			
+		};
+		std::vector<Statement> statements;	
+	};
+	
+	// ---> fields
+	
 	Real length; // duration, that's how it's called in LEMS
 	Real step; // timestep, likewise
 	
@@ -2294,6 +2397,9 @@ struct Simulation{
 	// DataDisplay, Record, EventRecord not applicable yet
 	CollectionWithNames<DataWriter> data_writers;
 	CollectionWithNames<EventWriter> event_writers;
+	
+	// extensions!
+	CustomSetup custom_init;
 	
 	Simulation(){
 		seed_defined = false;
@@ -2327,6 +2433,11 @@ struct Model{
 	CollectionWithNames<Simulation> simulations;
 	
 	Int target_simulation;
+	
+	bool GetLemsQuantityPathType_FromLems(const Simulation::LemsInstanceQuantityPath &path, const ComponentInstance &compinst, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const ;
+	bool GetLemsQuantityPathType_InputInstance(const Simulation::InputInstanceQuantityPath &path, const InputSource &input, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const;
+	bool GetLemsQuantityPathType(const Network &net, const Simulation::LemsQuantityPath &path, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const;
+	
 	
 	Model(){ target_simulation = -1; }
 };

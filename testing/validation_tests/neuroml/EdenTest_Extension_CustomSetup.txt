@@ -1,0 +1,23 @@
+
+# artificial cell, set some single
+set cell pop0 1,3 all v0 -64 mV
+
+# artificial cell, set some single
+set cell pop0 1,3 all b 0.25
+
+# artificial cell, set some multi
+set cell pop0 2,3,4 all c multi
+values -55 -55 -55
+
+# artificial cell, set single
+set cell pop0 2 all c -50
+
+# artificial cell, set all multi
+set cell pop0 all all d multi
+values 6 6 2 0.05 4
+
+# synapse, set ref to something...
+
+# split izh population...
+
+# 

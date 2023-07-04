@@ -5,6 +5,9 @@
 
 #include <type_traits>
 #include <map>
+#include <iterator>
+#include <sstream>
+#include <fstream>
 
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -41,6 +44,148 @@ static bool StrToF( const char *str, float &F ){
 	}
 	F = ret;
 	return true;
+}
+
+
+//Linear interpolation from a -> b with respective parameter from 0 -> 1
+static Real Lerp(Real a, Real b, Real ratio){
+	return a + (b-a)*ratio;
+}
+
+// Append vector to vector
+auto AddToVec = []( auto &add_to, const auto &add_from ){
+	add_to.insert( std::end(add_to), std::begin(add_from), std::end(add_from) );	
+};
+
+// Also eliminate some "../" for a better attempt to de-duplicate them.
+std::string GetRelativeFilePath(const std::string &origin_path, const std::string &relative_path ){
+	
+	auto PathIsRelativeToCwd = []( const std::string &path ){
+		#if defined _WIN32
+			if( path.size() >= 1 && path[0] == '/' ) return false; // relative to current drive, or new-style absolute path
+			if( path.size() >= 1
+				&& (
+					(path[0] >= 'A' && path[0] <= 'Z')
+					|| (path[0] >= 'a' && path[0] <= 'z')
+				)
+				&& path[1] == ':'
+			) return false; // relative to root, or cwd, of a drive
+			// Does not include CP/M device names such as CON, LPT#, AUX, &c. which are erroneously considered to be files atm; Contact the devs if you need support on this
+			// More details on: https://docs.microsoft.com/en-us/dotnet/standard/io/file-path-formats#identify-the-path
+			return true;
+		#else
+			// basically Unix paths otherwise
+			if( path.size() > 0 && path[0] == '/' ) return false; // is absoute path
+			return true;
+		#endif
+	};
+	
+	std::string resolved_path; // the path to the file to be used, eventually
+	if(!PathIsRelativeToCwd(relative_path)){
+		// the path is not relative to the file including it
+		resolved_path = relative_path;
+	}
+	else{
+		// the path is relative to the directory of the file including it
+		
+		// generate new path, replacing current name of the file with the new href
+		// contact this code's devs for more safety (not accessing sensitive files), or just run the program in chroot or something
+		auto new_path = origin_path;
+		// find the last slash and replace everything after it with href
+		
+		auto last_slash_pos = new_path.rfind('/');
+		if(last_slash_pos == std::string::npos) last_slash_pos = 0;
+		else last_slash_pos++; //do include the slash
+		
+		#if defined _WIN32
+		// consider the backslash, as well
+		auto last_backslash_pos = new_path.rfind('\\');
+		if(last_backslash_pos == std::string::npos) last_backslash_pos = 0;
+		else last_backslash_pos++; //do include the slash
+		
+		if( last_backslash_pos > last_slash_pos ) last_slash_pos = last_backslash_pos;
+		#endif
+		
+		new_path.resize(last_slash_pos);
+		new_path += relative_path;
+		
+		resolved_path = new_path;
+	}
+	
+	// and get rid of all ../ nonsense, including symlinks? (probably not including symlinks)
+	// unfortunately, realpath doesn't exist in certain environments, TODO detect and use fallback
+	// const char *sResolved = realpath( new_path, NULL );
+	// if( !sResolved ){
+	// 	perror( ("error resolving path "+new_path).c_str() );
+	// 	goto CLEANUP;
+	// }
+	// std::string resolved_path = sResolved;
+	// free( (void *)sResolved ); sResolved = NULL;
+	auto ResolvePathTextually = [  ]( const std::string &original_path ){
+			
+		auto tokens = string_split(std::string(original_path), "/");
+		#if defined _WIN32
+		// do this for Windows backslashes as well
+		{
+		std::vector<std::string> new_tokens;
+		
+		// For each token, split by slash (may contain backslashes)
+		for( const auto token : tokens ){
+			// For each sub-token, split by backslash
+			for( const auto new_token : string_split( token,  "\\") ){
+				new_tokens.push_back(new_token);
+			}
+		}
+		
+		tokens = new_tokens;
+		}
+		#endif
+		
+		std::vector<std::string> resolved_tokens;
+		for( int i = 0; i < (int)tokens.size(); i++ ){
+			const auto &token = tokens[i];
+			
+			if( token == ".." ){
+				if(
+					!resolved_tokens.empty()
+					&& *resolved_tokens.rbegin() != ".."
+				){
+					// move level up from last folder
+					resolved_tokens.pop_back();
+				}
+				else{
+					// higher than cwd, probably
+					resolved_tokens.push_back(token);
+				}
+			}
+			else if( token == "." ){
+				// skip
+			}
+			else if( token == "" ){
+				if( i == 0 ){
+					// path begins with a slash, keep for the sake of Unix
+					resolved_tokens.push_back(token);
+				}
+				else{
+					// superfluous slashes, skip
+				}
+			}
+			else{
+				resolved_tokens.push_back(token);
+			}
+		}
+		
+		std::string resolved_path;						
+		for( int i = 0; i < (int)resolved_tokens.size(); i++ ){
+			const auto &token = resolved_tokens[i];
+			resolved_path += token;
+			if( i + 1 < (int)resolved_tokens.size() ) resolved_path += "/";
+		}
+		return resolved_path;
+	};
+	resolved_path = ResolvePathTextually( resolved_path );
+
+	return resolved_path;
 }
 
 //------------------> XML Utilities start
@@ -97,8 +242,19 @@ struct ImportLogger{
 	}
 	
 	// LATER maybe add RAII context stack (e.g. in file, in segment, ...)
+	void _doit(const char *filename, const ptrdiff_t file_byte_offset, const char *format, va_list args) const {
+		ReportErrorInFile_Base(error_log, filename, file_byte_offset, format, args);
+	}
 	void _doit(const pugi::xml_node &node, const char *format, va_list args) const {
-		ReportErrorInFile_Base(error_log, GetFilenameFromElement(node), node.offset_debug(), format, args);
+		// ReportErrorInFile_Base(error_log, GetFilenameFromElement(node), node.offset_debug(), format, args);
+		_doit(GetFilenameFromElement(node), node.offset_debug(), format, args);
+	}
+	
+	void error(const char *filename, const ptrdiff_t file_byte_offset, const char *format, ...) const {
+		va_list args;
+		va_start(args, format);
+		_doit(filename, file_byte_offset, format, args);
+		va_end (args);
 	}
 	void error(const pugi::xml_node &node, const char *format, ...) const {
 		va_list args;
@@ -109,12 +265,36 @@ struct ImportLogger{
 		va_end (args);
 	}
 	//same as error, really
+	void warning(const char *filename, const ptrdiff_t file_byte_offset, const char *format, ...) const {
+		va_list args;
+		va_start(args, format);
+		_doit(filename, file_byte_offset, format, args);
+		va_end (args);
+	}
 	void warning(const pugi::xml_node &node, const char *format, ...) const {
 		va_list args;
 		va_start(args, format);
 		
 		_doit(node, format, args);
 		
+		va_end (args);
+	}
+};
+
+struct LogWithElement{
+	const ImportLogger &log;
+	const pugi::xml_node &eLement;
+	// LogWithElement():{}
+	void error(const char *format, ...) const {
+		va_list args;
+		va_start(args, format);
+		log._doit(eLement, format, args);
+		va_end (args);
+	}
+	void warning(const char *format, ...) const {
+		va_list args;
+		va_start(args, format);
+		log._doit(eLement, format, args);
 		va_end (args);
 	}
 };
@@ -265,14 +445,17 @@ template<> const ScaleList Scales<Temperature>::scales = {
 };
 
 //                                          M   L   T   I   K   N   J
+const Dimension LEMS_Pure               = { 0,  0,  0,  0,  0,  0,  0};
 const Dimension LEMS_Time               = { 0,  0, +1,  0,  0,  0,  0};
 const Dimension LEMS_Frequency          = { 0,  0, -1,  0,  0,  0,  0};
 const Dimension LEMS_Voltage            = { 1,  2, -3, -1,  0,  0,  0};
 const Dimension LEMS_Area               = { 0,  2,  0,  0,  0,  0,  0};
 const Dimension LEMS_Concentration      = { 0, -3,  0,  0,  0,  1,  0};
 const Dimension LEMS_Current            = { 0,  0,  0,  1,  0,  0,  0};
+const Dimension LEMS_CurrentDensity     = { 0, -2,  0,  1,  0,  0,  0};
 const Dimension LEMS_Temperature        = { 0,  0,  0,  0,  1,  0,  0};
 const Dimension LEMS_Conductance        = {-1, -2,  3,  2,  0,  0,  0};
+const Dimension LEMS_Conductivity       = {-1, -4,  3,  2,  0,  0,  0};
 const Dimension LEMS_Capacitance        = {-1, -2,  4,  2,  0,  0,  0};
 /* To obtain a consistent units system, solve the following linear equation between exponents:
 
@@ -287,7 +470,7 @@ const Dimension LEMS_Capacitance        = {-1, -2,  4,  2,  0,  0,  0};
 */
 void DimensionSet::AddDefaults(){
 	//             M  L  T  I  K  N  J
-	Add(Dimension( 0, 0, 0, 0, 0, 0, 0), {"unitless"               , });
+	Add(Dimension( 0, 0, 0, 0, 0, 0, 0), {"unitless"               , { "units",   0}, {{ "units",   0}} });
 	Add(Dimension( 0, 0, 0, 0, 0, 0, 0), {"none"                   , });
 	Add(Dimension( 0, 0, 1, 0, 0, 0, 0), DimensionInfo::FromOld<Time               >("time"                   ));
 	Add(Dimension( 0, 0,-1, 0, 0, 0, 0), DimensionInfo::FromOld<Frequency          >("per_time"               ));
@@ -319,17 +502,6 @@ void DimensionSet::AddDefaults(){
 }
 
 //------------------> Misc utilities
-
-//Linear interpolation from a -> b with respective parameter from 0 -> 1
-static Real Lerp(Real a, Real b, Real ratio){
-	return a + (b-a)*ratio;
-}
-
-// Append vector to vector
-auto AddToVec = []( auto &add_to, const auto &add_from ){
-	add_to.insert( std::end(add_to), std::begin(add_from), std::end(add_from) );	
-};
-
 
 // map core components to LEMS core implementations
 const char *LEMS_CoreComponents_filename = "LEMS_CoreComponents.inc.xml";
@@ -671,6 +843,123 @@ constexpr Int ComponentType::CommonRequirements::* ComponentType::CommonRequirem
 constexpr Int ComponentType::CommonExposures   ::* ComponentType::CommonExposures   ::members[];
 constexpr Int ComponentType::CommonEventInputs ::* ComponentType::CommonEventInputs ::members[];
 constexpr Int ComponentType::CommonEventOutputs::* ComponentType::CommonEventOutputs::members[];
+
+bool Model::GetLemsQuantityPathType_FromLems(const Simulation::LemsInstanceQuantityPath &path, const ComponentInstance &compinst, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const {
+	if(!compinst.ok()) return false;
+	Int comp_type_seq = compinst.id_seq;
+	
+	const ComponentType &comp_type = component_types.get(comp_type_seq);
+	const auto &namespace_thing_seq = path.namespace_thing_seq;
+	type = comp_type.name_space.get(namespace_thing_seq).type;
+	dimension = comp_type.getNamespaceEntryDimension(namespace_thing_seq);
+	return true;
+}
+bool Model::GetLemsQuantityPathType_InputInstance(const Simulation::InputInstanceQuantityPath &path, const InputSource &input, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const {
+	// TODO work with child synapses in input component!
+	if(path.type == Simulation::InputInstanceQuantityPath::LEMS){
+		return GetLemsQuantityPathType_FromLems(path.lems_quantity_path, input.component, type, dimension);
+	}
+	else if(path.type == Simulation::InputInstanceQuantityPath::NATIVE){
+		// dc pulse is not lemsified
+		if( path.native_entry == Simulation::InputInstanceQuantityPath::AMPLITUDE ){
+			type = ComponentType::NamespaceThing::PROPERTY;
+			dimension = LEMS_Current;
+			return true;
+		}
+		else if( path.native_entry == Simulation::InputInstanceQuantityPath::DURATION
+			|| path.native_entry == Simulation::InputInstanceQuantityPath::DELAY ){
+			type = ComponentType::NamespaceThing::PROPERTY;
+			dimension = LEMS_Time;
+			return true;
+		}
+		else{ assert(false); return false; }
+	}
+	else{ assert(false); return false; }
+}
+bool Model::GetLemsQuantityPathType(const Network &net, const Simulation::LemsQuantityPath &path, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const {
+	typedef ComponentType::NamespaceThing NamespaceThing;
+	
+	if(path.type == Simulation::LemsQuantityPath::CELL){
+		const Network::Population &population = net.populations.get(path.population);
+		const CellType &_cell_type = cell_types.get(population.component_cell);
+		
+		assert(_cell_type.type == CellType::ARTIFICIAL); // otherwise it would be a segment path or such
+		const auto &cell = _cell_type.artificial;
+		
+		const auto &path_cell = path.cell;
+		
+		if(path_cell.type == Simulation::LemsQuantityPath::CellPath::INPUT){
+			const auto &input = input_sources.get( cell.spike_source_seq );
+			return GetLemsQuantityPathType_InputInstance(path_cell.input, input, type, dimension);
+		}
+		else{
+			// NB all artificial cells should be lemsified atm
+			return GetLemsQuantityPathType_FromLems(path_cell.lems_quantity_path, cell.component, type, dimension);
+		}
+	}
+	else if(path.type == Simulation::LemsQuantityPath::SEGMENT){
+		const Network::Population &population = net.populations.get(path.population);
+		const CellType &_cell_type = cell_types.get(population.component_cell);
+		
+		assert(_cell_type.type == CellType::PHYSICAL);
+		const auto &cell = _cell_type.physical; (void) cell; // TODO
+		
+		typedef Simulation::LemsQuantityPath::SegmentPath SegmentPath;
+		switch(path.segment.type){
+			case SegmentPath::VOLTAGE       : type = NamespaceThing::STATE; dimension = LEMS_Voltage      ; return true;
+			case SegmentPath::CALCIUM_INTRA : type = NamespaceThing::STATE; dimension = LEMS_Concentration; return true; // TODO check again it it's correct
+			case SegmentPath::CALCIUM2_INTRA: type = NamespaceThing::STATE; dimension = LEMS_Concentration; return true;
+			case SegmentPath::CALCIUM_EXTRA : type = NamespaceThing::STATE; dimension = LEMS_Concentration; return true; // FIXME
+			case SegmentPath::CALCIUM2_EXTRA: type = NamespaceThing::STATE; dimension = LEMS_Concentration; return true;
+			default: assert(false); return false;
+		}
+	}
+	else if(path.type == Simulation::LemsQuantityPath::CHANNEL){
+		const Network::Population &population = net.populations.get(path.population);
+		const CellType &_cell_type = cell_types.get(population.component_cell);
+		assert(_cell_type.type == CellType::PHYSICAL);
+		const PhysicalCell &cell = _cell_type.physical;
+		
+		// const Morphology &morph = morphologies.get(cell_type.physical.morphology);
+		const BiophysicalProperties &bioph = biophysics.at(cell.biophysicalProperties);
+		
+		const auto &dist = bioph.membraneProperties.channel_specs.at(path.channel.distribution_seq);
+		const auto &channel = ion_channels.get(dist.ion_channel);
+		// lots TODO here
+		
+		typedef Simulation::LemsQuantityPath::ChannelPath ChannelPath;
+		switch(path.channel.type){
+			// these are, affected by gbar iirc (TODO check if a lems channel can give pure current, probably)
+			case ChannelPath::I        : type = NamespaceThing::DERIVED; dimension = LEMS_Current     ; return true;
+			case ChannelPath::G        : type = NamespaceThing::DERIVED; dimension = LEMS_Conductance; return true; // TODO check again if it's correct
+			case ChannelPath::I_DENSITY: type = NamespaceThing::DERIVED; dimension = LEMS_CurrentDensity; return true;
+			case ChannelPath::G_DENSITY: type = NamespaceThing::DERIVED; dimension = LEMS_Conductivity; return true;
+			// these are about the channel mechanism
+			case ChannelPath::Q        : type = NamespaceThing::STATE  ; dimension = LEMS_Pure; return true; // FIXME that's not always the case!
+			case ChannelPath::SUBQ     : type = NamespaceThing::STATE  ; dimension = LEMS_Pure; return true; // FIXME that's not always the case!
+			case ChannelPath::LEMS     : return GetLemsQuantityPathType_FromLems( path.channel.lems_quantity_path, channel.component, type, dimension);
+			default: assert(false); return false;
+		}
+	}/*
+	else if(path.type == Simulation::LemsQuantityPath::ION_POOL){
+		
+	}
+	else if(path.type == Simulation::LemsQuantityPath::SYNAPSE){
+		
+	}
+	else if(path.type == Simulation::LemsQuantityPath::INPUT){
+		
+	}*/
+	else if(path.type == Simulation::LemsQuantityPath::NETWORK){
+		// not supported yet!
+		return false;
+	}
+	else{
+		printf("path type %d\n", (int) path.type);
+		assert(false);
+		return false;
+	}
+}
 
 //------------------> Debug printing
 
@@ -1233,7 +1522,7 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 			if(!(previous_group_seq < 0)){
 				// cables should not overlap!!
 				
-				// FIXME HERE
+				// FIXME show names!
 				// log.error(eMorph, "segment groups %s and %s should be non-overlapping, yet they overlap on segment %ld", , , morph.lookupNmlId(seg_seq));
 				log.error(eMorph, "segment groups %ld and %ld should be non-overlapping, yet they overlap on segment %ld", group_seq, previous_group_seq, morph.lookupNmlId(seg_seq));
 				// maybe show offending group tags LATER?
@@ -1339,7 +1628,7 @@ bool ParseQuantity(const ImportLogger &log, const pugi::xml_node &eLocation, con
 		}
 	}
 	//unit name not found in list!
-	log.error(eLocation, "unknown %s attribute type %s for %s", attr_name, unit_name, UnitType::NAME );
+	log.error(eLocation, "unknown %s attribute units: %s for %s", attr_name, unit_name, UnitType::NAME );
 	return false;
 	
 }
@@ -1393,7 +1682,7 @@ bool ParseLemsQuantity(const ImportLogger &log, const pugi::xml_node &eLocation,
 	}
 	//then get the scaling factor that applies, compared to native units, for that unit name
 	if(!dimensions.Has(dimension)){
-		log.error(eLocation, "unknown %s attribute units for %s", attr_name, dimensions.Stringify(dimension).c_str() );
+		log.error(eLocation, "there are no specified %s units for attribute %s", dimensions.Stringify(dimension).c_str(), attr_name );
 		return false;
 	}
 	for( auto scale : dimensions.GetUnits(dimension) ){
@@ -1405,7 +1694,7 @@ bool ParseLemsQuantity(const ImportLogger &log, const pugi::xml_node &eLocation,
 		}
 	}
 	//unit name not found in list!
-	log.error(eLocation, "unknown %s attribute type %s for %s", attr_name, unit_name, dimensions.Stringify(dimension).c_str() );
+	log.error(eLocation, "unknown %s attribute units: %s for %s", attr_name, unit_name, dimensions.Stringify(dimension).c_str() );
 	return false;
 	
 }
@@ -1622,7 +1911,7 @@ bool ParseBiophysicalProperties(
 			}
 			else{
 				//the split personality case
-				
+				// TODO actually why would it have to be a split personality?? check implementation in export, basically if there were multiple distributions with the same name then the lems path would be ambiguous, plus there is no reason that variableparameters would result in multiple distributions.
 				for(auto eDistrEl : eDistr.children()){
 					if(strcmp(eDistrEl.name(), "variableParameter") == 0){
 						const auto &eVarParm = eDistrEl;
@@ -1823,7 +2112,7 @@ bool ParseBiophysicalProperties(
 	if(all_segments.Count() > 1){
 		if( !Report_MorphoSpecs("Internal Resistivity", bioph.intracellularProperties.resistivity_specs)) return false;
 	}
-	
+	// XXX check if pools for the same species coincide! What happens then?
 	// TODO verify calcium dependencies of ion channels are met, XXX assume zero concentration of missing for now
 	
 	if(log.debug_printing) bioph.debug_print(morph, ion_species);
@@ -2871,6 +3160,7 @@ bool ParseIonChannel(const ImportLogger &log, const pugi::xml_node &eChannel, co
 	return true;
 }
 
+// merge this ref parsing with LemaQuantityPath processing LATER
 // Fails without writing to log, just returns false
 bool ParseSynapseCellRef(const char *refspec, Int &id){
 	
@@ -3151,6 +3441,8 @@ bool ParseLoggerBase(const ImportLogger &log, const pugi::xml_node &eLogger, Sim
 //The evolving result data of an import in progress
 struct ImportState{
 	
+	// the model itself containing the following -- it is needed for path resolution while parsing the simulation parameters! (could break Simulation out of the model if needed, LATER)
+	Model &model; // aliases with all the following, to avoiding putting "model." all over
 	
 	// hash table for re-process-able XML entities such as detached biophysics;
 	// they make no sense without an associated Morphology
@@ -3391,7 +3683,7 @@ struct ImportState{
 		);
 	}
 	
-	// for explicitly formed continers to pass
+	// for explicitly formed containers to pass
 	template< size_t ParmCount >	
 	bool TryLemsifyComponent ( const ImportLogger &log, const pugi::xml_node &eThing, const char *type_name, const  ParmEntry (&parms)[ParmCount], ComponentInstance &compinst ){
 		return TryLemsifyComponent_WithParmContainer( log, eThing, type_name, parms, compinst );
@@ -3402,8 +3694,6 @@ struct ImportState{
 	bool TryLemsifyComponent ( const ImportLogger &log, const pugi::xml_node &eThing, const char *type_name, const Container &parms, ComponentInstance &compinst ){
 		return TryLemsifyComponent_WithParmContainer( log, eThing, type_name, parms, compinst );
 	}
-	
-	
 	
 	// helpers for LEMS id's
 	// parse according to the definitive specification: the source code
@@ -3422,59 +3712,66 @@ struct ImportState{
 	// <postsynaptic population name>/<instance>/<cell type, redundant>/<segment>/synapses:<synapse type>:<incrementing instance of same type on same segment of same cell>/g 
 	// 	see https://github.com/NeuroML/org.neuroml.export/blob/master/src/main/java/org/neuroml/export/neuron/NeuronWriter.java#L581
 	
-	bool ParseLemsSegmentLocator(const ImportLogger &log, const pugi::xml_node &eOutEl, const char *path_str, const Network &net, Simulation::LemsSegmentLocator &path, int &tokens_consumed) const {
-		
-		
-		auto tokens = string_split(std::string(path_str), "/");
-		
-		if( tokens.size() < 1 ){
-			log.error(eOutEl, "target path must have at least 1 slash-delimited factor");
+	template<typename LogProxy>
+	bool ParseLemsCellLocator(const LogProxy &log, const std::vector<std::string> tokens, const Network &net, Simulation::LemsSegmentLocator &path, int &tokens_consumed) const {
+		// note: tokens are spearted by '/' in the following
+		int pop_token_id = tokens_consumed;
+		if(tokens_consumed >= (int) tokens.size()){
 			return false;
 		}
-		
-		int pop_token_id = 0;
 		const std::string &pop_token = tokens[pop_token_id];
 		std::string cell_instance_string;
-		
-		int segment_token_id = -1;
-		
 		
 		size_t bracketIndex =  pop_token.find_first_of("[");
 		std::string pop_name = pop_token.substr(0,bracketIndex);
 		
 		path.population = net.populations.get_id(pop_name.c_str());
 		if(path.population < 0){
-			log.error(eOutEl, "target population %s not found", pop_name.c_str());
+			log.error("target population %s not found", pop_name.c_str());
 			return false;
 		}
 		const Network::Population &population = net.populations.get(path.population);
 
 		if(pop_name.length() == pop_token.length()){
-			// no bracket
+			// no bracket, use pop/id/... instead
 			if( pop_token_id + 1 >= (int)tokens.size() ){
-				log.error(eOutEl, "not enough factors for cell instance ID");
+				log.error("not enough factors for cell instance ID");
 				return false;
 			}
 			cell_instance_string = tokens[pop_token_id + 1];
-			segment_token_id = pop_token_id + 2;
+			tokens_consumed = pop_token_id + 2;
 		}
 		else{
-			//with bracket
+			//with bracket, pop[id]/...
 			cell_instance_string = pop_token.substr(bracketIndex + 1, pop_token.find_first_of("]") - (bracketIndex + 1));
-			segment_token_id = pop_token_id + 1;
+			tokens_consumed = pop_token_id + 1;
 		}
 		
 		Int cell_instance_id;
 		if( !StrToL(cell_instance_string.c_str(), cell_instance_id) ){
-			log.error(eOutEl, "target instance \"%s\" not a number", cell_instance_string.c_str());
+			log.error("target instance \"%s\" not a number", cell_instance_string.c_str());
 			return false;
 		}
 		path.cell_instance = population.instances.getSequential(cell_instance_id);
 		if(path.cell_instance < 0){
-			log.error(eOutEl, "target instance %s not found in population", cell_instance_string.c_str());
+			log.error("target instance %s not found in population", cell_instance_string.c_str());
 			return false;
 		}
+		return true;
+	}
+	template<typename LogProxy>
+	bool ParseLemsSegmentLocator(const LogProxy &log, const std::vector<std::string> tokens, const Network &net, Simulation::LemsSegmentLocator &path, int &tokens_consumed) const {
 		
+		if( tokens.size() < 1 ){
+			log.error("target path must have at least 1 slash-delimited factor");
+			return false;
+		}
+		if(!( ParseLemsCellLocator(log, tokens, net, path, tokens_consumed) )) return false;
+		
+		// TODO pop might not be set when selecting populations or projections !
+		const Network::Population &population = net.populations.get(path.population);
+		
+		int segment_token_id = tokens_consumed;
 		if(segment_token_id < (int)tokens.size()){
 			
 			const std::string &segment_token = tokens[segment_token_id];
@@ -3507,7 +3804,7 @@ struct ImportState{
 				segment_id = 0;
 			}
 			if( segment_id != 0 ){
-				log.error(eOutEl, "artificial cell only has segment 0");
+				log.error("artificial cell only has segment 0");
 				return false;
 			}
 			
@@ -3523,7 +3820,7 @@ struct ImportState{
 					segment_id = 0;
 				}
 				else{
-					log.warning(eOutEl, "target path needs segment ID, because cell has multiple segments. Setting to implicit default: segment ID = 0");
+					log.warning("target path needs segment ID, because cell has multiple segments. Setting to implicit default: segment ID = 0");
 					// return false;
 					// TODO perhaps stop complaining after warning too many times
 					
@@ -3533,26 +3830,27 @@ struct ImportState{
 			
 			path.segment_seq = morph.segments.getSequential(segment_id);
 			if(path.segment_seq < 0){
-				log.error(eOutEl, "target segment %s not found in cell", tokens[segment_token_id].c_str());
+				log.error("target segment %s not found in cell", tokens[segment_token_id].c_str());
 				return false;
 			}
 		}
 		else{
-			log.error(eOutEl, "internal error: LEMS segment locator: cell type type %d", cell_type.type);
+			log.error("internal error: LEMS segment locator: cell type type %d", cell_type.type);
 			return false;
 		}
 		
 		tokens_consumed = segprop_token_id;
 		return true;
 	}
-	bool ParseLemsQuantityPathInComponent( const ImportLogger &log, const pugi::xml_node &eOutEl, const ComponentInstance &instance, const std::vector<std::string> &tokens, Simulation::LemsInstanceQuantityPath &lems_instance_qty_path, int &tokens_consumed ) const {
+	template<typename LogProxy>
+	bool ParseLemsQuantityPathInComponent(const LogProxy &log, const ComponentInstance &instance, const std::vector<std::string> &tokens, Simulation::LemsInstanceQuantityPath &lems_instance_qty_path, int &tokens_consumed ) const {
 		
 		if( (int)tokens.size() <= tokens_consumed ){
-			log.error( eOutEl, "path needs to specify a property of LEMS component %s", ( tokens.empty() ? "" : tokens[tokens.size() - 1].c_str() ) );
+			log.error("path needs to specify a property of LEMS component %s", ( tokens.empty() ? "" : tokens[tokens.size() - 1].c_str() ) );
 			return false;
 		}
 		if( tokens_consumed + 1 < (int)tokens.size() ){
-			log.error( eOutEl, "LEMS child component quantities not yet supported" );
+			log.error("LEMS child component quantities not yet supported" );
 			return false;
 		}
 		const char *propname = tokens[tokens_consumed].c_str();
@@ -3561,7 +3859,7 @@ struct ImportState{
 		// get comp.type
 		Int comptype_seq = instance.id_seq;
 		if( !component_types.has(comptype_seq) ){
-			log.error(eOutEl, "internal error: LEMS quantity path missing component type %d", (int) instance.id_seq);
+			log.error("internal error: LEMS quantity path missing component type %d", (int) instance.id_seq);
 			return false;
 		}
 		
@@ -3570,75 +3868,67 @@ struct ImportState{
 		Int &namespace_id = lems_instance_qty_path.namespace_thing_seq;
 		namespace_id = comptype.name_space.get_id(propname);
 		if( namespace_id < 0 ){
-			log.error(eOutEl, "%s is not a defined quantity in component type %s", propname, component_types.getName(comptype_seq));
-			return false;
-		}
-		
-		// XXX this is just a limitation in Eden right now
-		const auto &namespace_entry = comptype.name_space.get(namespace_id);
-		
-		if( namespace_entry.type != ComponentType::NamespaceThing::STATE ){
-			log.error(eOutEl, "%s is not an immediate state variable; which is not yet supported in EDEN", propname);
+			log.error("%s is not a defined quantity in component type %s", propname, component_types.getName(comptype_seq));
 			return false;
 		}
 		
 		return true;
 	}
-	bool ParseLemsQuantityPath_InputInstance( const ImportLogger &log, const pugi::xml_node &eOutEl, const InputSource &input, const std::vector<std::string> &tokens, Simulation::InputInstanceQuantityPath &instance_qty_path, int &tokens_consumed ) const {
+	template<typename LogProxy>
+	bool ParseLemsQuantityPath_InputInstance(const LogProxy &log, const InputSource &input, const std::vector<std::string> &tokens, Simulation::InputInstanceQuantityPath &instance_qty_path, int &tokens_consumed ) const {
 		
 		// work only with LEMSified stuff for now
 		if( input.component.ok() ){
 			instance_qty_path.type = Simulation::InputInstanceQuantityPath::LEMS;
-			if( !ParseLemsQuantityPathInComponent(log, eOutEl, input.component, tokens, instance_qty_path.lems_quantity_path, tokens_consumed ) )return false;
+			if( !ParseLemsQuantityPathInComponent(log, input.component, tokens, instance_qty_path.lems_quantity_path, tokens_consumed ) )return false;
 			return true;
 		}
 		else{
-			log.error(eOutEl, "input source type not supported yet");
+			// TODO work with child synapses in input component!
+			log.error("input source type not supported yet");
 			return false;
 		}
 	}
-	bool ParseLemsQuantityPath(const ImportLogger &log, const pugi::xml_node &eOutEl, const char *qty_str, const Network &net, Simulation::LemsQuantityPath &path) const {
+	template<typename LogProxy>
+	bool ParseLemsQuantityPath_ArtificialCell(const LogProxy &log, const ArtificialCell &cell,  const std::vector<std::string> &tokens, Simulation::LemsQuantityPath::CellPath &path_cell, int &tokens_consumed) const {
+		if( cell.type == ArtificialCell::SPIKE_SOURCE ){
+			path_cell.type = Simulation::LemsQuantityPath::CellPath::INPUT;
+			
+			const auto &input = input_sources.get( cell.spike_source_seq );
+			
+			return ParseLemsQuantityPath_InputInstance( log, input, tokens, path_cell.input, tokens_consumed );
+		}
+		else{
+			// work only with LEMSified stuff for now
+			if( cell.component.ok() ){
+				path_cell.type = Simulation::LemsQuantityPath::CellPath::LEMS;
+				return ParseLemsQuantityPathInComponent(log, cell.component, tokens, path_cell.lems_quantity_path, tokens_consumed );
+			}
+			else{
+				log.error("native artificial cell type not supported yet");
+				return false;
+			}
+		}
+	}
+	
+	// NOTE: path is a read+write argument. Specifically, segment_seq is read. If set, only the mechanism distributions that include this segment are valid. If unset (ie negative), the caller is responsible for validating that if selected, a mechanism distribution exists for the segments being considered (for example, when multiple segments are considered, is it an error if some segments are outside the distribution mechanism, or are those without the mechanism simply excluded? It depends).
+	template<typename LogProxy>
+	bool ParseLemsQuantityPath_CellProperty(const LogProxy &log, const CellType &cell_type, const std::vector<std::string> &tokens, Simulation::LemsQuantityPath &path, int &tokens_consumed ) const {
 		
-		int tokens_consumed;
-		if ( !ParseLemsSegmentLocator(log, eOutEl, qty_str, net, path, tokens_consumed) ) return false;
-		
-		auto tokens = string_split(std::string(qty_str), "/");
 		int segprop_token_id = tokens_consumed;
 		
 		// now branch according to property type
 		if(segprop_token_id >= (int)tokens.size()){
-			log.error(eOutEl, "not enough factors for segment property");
+			log.error("not enough factors for cell or segment property");
 			return false;
 		}
 		
 		const std::string &segprop = tokens[segprop_token_id];
 		
-		const Network::Population &population = net.populations.get(path.population);
 		
-		const CellType &cell_type = cell_types.get(population.component_cell);
 		if( cell_type.type == CellType::ARTIFICIAL ){
 			path.type = Simulation::LemsQuantityPath::CELL;
-			const auto &cell = cell_type.artificial;
-			
-			if( cell.type == ArtificialCell::SPIKE_SOURCE ){
-				path.cell.type = Simulation::LemsQuantityPath::CellPath::INPUT;
-				
-				const auto &input = input_sources.get( cell.spike_source_seq );
-				
-				return ParseLemsQuantityPath_InputInstance( log, eOutEl, input, tokens, path.cell.input, tokens_consumed );
-			}
-			else{
-				// work only with LEMSified stuff for now
-				if( cell.component.ok() ){
-					path.cell.type = Simulation::LemsQuantityPath::CellPath::LEMS;
-					return ParseLemsQuantityPathInComponent(log, eOutEl, cell.component, tokens, path.cell.lems_quantity_path, tokens_consumed );
-				}
-				else{
-					log.error(eOutEl, "artificial cell type not supported yet");
-					return false;
-				}
-			}
-			
+			return ParseLemsQuantityPath_ArtificialCell(log, cell_type.artificial, tokens, path.cell, tokens_consumed);
 		}
 		else if(cell_type.type == CellType::PHYSICAL ){
 			
@@ -3668,7 +3958,7 @@ struct ImportState{
 				int biophprop_token_id = segprop_token_id + 1;
 				
 				if(biophprop_token_id >= (int)tokens.size()){
-					log.error(eOutEl, "not enough factors for biophysical property");
+					log.error("not enough factors for biophysical property");
 					return false;
 				}
 				
@@ -3680,7 +3970,7 @@ struct ImportState{
 					int biophproprop_token_id = biophprop_token_id + 1;
 				
 					if(biophproprop_token_id >= (int)tokens.size()){
-						log.error(eOutEl, "not enough factors for biophysical property");
+						log.error("not enough factors for biophysical property");
 						return false;
 					}
 					
@@ -3689,8 +3979,10 @@ struct ImportState{
 					// perhaps it is an ion channel distribution?
 					Int chandist_seq = -1;
 					for( size_t i = 0; i < bioph.membraneProperties.channel_specs.size(); i++ ){
+						// NOTE there should be at most one distribution under the same name, TODO discuss and if it's ok refactor to reflect that!
 						const auto &dist = bioph.membraneProperties.channel_specs.at(i);
-						if( dist.name == bioproprop && dist.toList(morph).has(path.segment_seq)){
+						// if segment_seq is set, select it only if it includes that segment, TODO improve error reporting to "distribution is not present on segment"
+						if( dist.name == bioproprop && ((path.segment_seq < 0) || dist.toList(morph).has(path.segment_seq)) ){
 							chandist_seq = i;
 							break;
 						}
@@ -3704,7 +3996,7 @@ struct ImportState{
 						
 						int iondistprop_token_id = biophproprop_token_id + 1;
 						if(iondistprop_token_id >= (int)tokens.size()){
-							log.error(eOutEl, "not enough factors for ion distribution property");
+							log.error("not enough factors for ion distribution property");
 							return false;
 						}
 						const std::string &iondistprop = tokens[iondistprop_token_id];
@@ -3733,7 +4025,7 @@ struct ImportState{
 							// what channel property is this?
 							int ionchanprop_token_id = iondistprop_token_id + 1;
 							if(ionchanprop_token_id >= (int)tokens.size()){
-								log.error(eOutEl, "not enough factors for ion channel property");
+								log.error("not enough factors for ion channel property");
 								return false;
 							}
 							const std::string &ionchanprop = tokens[ionchanprop_token_id];
@@ -3746,7 +4038,7 @@ struct ImportState{
 								// what channel gate property is this?
 								int gateprop_token_id = ionchanprop_token_id + 1;
 								if(gateprop_token_id >= (int)tokens.size()){
-									log.error(eOutEl, "not enough factors for ion channel gate property");
+									log.error("not enough factors for ion channel gate property");
 									return false;
 								}
 								const std::string &gateprop = tokens[gateprop_token_id];
@@ -3756,7 +4048,7 @@ struct ImportState{
 									return true;
 								}
 								else{
-									log.error(eOutEl, "unknown ion channel gate property %s", gateprop.c_str());
+									log.error("unknown ion channel gate property %s", gateprop.c_str());
 									return false;
 								}
 								
@@ -3764,43 +4056,72 @@ struct ImportState{
 							
 							//otherwise
 							{
-								log.error(eOutEl, "unknown ion channel property %s", ionchanprop.c_str());
+								log.error("unknown ion channel property %s", ionchanprop.c_str());
 								return false;
 							}
 							
 						}
 						else{
-							log.error(eOutEl, "unknown ion channel distribution property %s", iondistprop.c_str());
+							log.error("unknown ion channel distribution property %s", iondistprop.c_str());
 							return false;
 						}
 					}
+					// FIXME access all ion pools this way
 					
 					//otherwise
 					{
-						log.error(eOutEl, "unknown membrane property %s", bioproprop.c_str());
+						log.error("unknown membrane property %s", bioproprop.c_str());
 						return false;
 					}
 					
 				}
 				else{
-					log.error(eOutEl, "unknown biophysical property %s", bioprop.c_str());
+					log.error("unknown biophysical property %s", bioprop.c_str());
 					return false;
 				}
 			}
 			else if(segprop.find("synapses:") == 0){
-				log.error(eOutEl, "synapse outputs not supported yet");
+				log.error("synapse outputs not supported yet");
 				return false;
 			}
 			else{
-				log.error(eOutEl, "unknown segment property %s", segprop.c_str());
+				log.error("unknown segment property %s", segprop.c_str());
 				return false;
 			}
 		}
 		else{
-			log.error(eOutEl, "internal error: LEMS quantity path: cell type type %d", cell_type.type);
+			log.error("internal error: LEMS quantity path: cell type type %d", cell_type.type);
 			return false;
 		}
+	}
+	
+	// TODO consider converting to virtual functions for less code bloat than templates
+	template<typename LogProxy>
+	bool ParseLemsQuantityPath(const LogProxy &log, const char *qty_str, const Network &net, Simulation::LemsQuantityPath &path) const {
+		auto tokens = string_split(std::string(qty_str), "/");
+		assert(tokens.size() > 0);
+		const std::string first_identifier = string_split(tokens[0],"[")[0];
+		const char *sId = first_identifier.c_str();
 		
+		// LATER complain if name is ambiguous
+		Int group_seq = -1;
+		if( (group_seq = net.populations.get_id(sId)) >= 0 ){
+			
+		}
+		else if( (group_seq = net.populations.get_id(sId)) >= 0 ){
+			
+		}
+		
+		int tokens_consumed = 0;
+		if ( !ParseLemsSegmentLocator(log, tokens, net, path, tokens_consumed) ) return false;
+		
+		// if (cell) segment locator is valid, then it is a property of a cell in a population, and the cell_type is valid.
+		const Network::Population &population = net.populations.get(path.population);
+		const CellType &cell_type = cell_types.get(population.component_cell);
+		
+		return ParseLemsQuantityPath_CellProperty(log, cell_type, tokens, path, tokens_consumed );
+		
+		// TODO access projection and input_lists.
 	}
 	bool ParseLemsEventPathInComponent( const ImportLogger &log, const pugi::xml_node &eOutEl, const ComponentInstance &instance, const std::vector<std::string> &tokens, const char *sEventPort, Simulation::LemsInstanceEventPath &liep, int &tokens_consumed) const {
 		
@@ -3869,10 +4190,10 @@ struct ImportState{
 	}
 	bool ParseLemsEventPath(const ImportLogger &log, const pugi::xml_node &eOutEl, const char *comp_path_str, const char *out_eventPort, const Network &net, Simulation::LemsEventPath &path) const {
 		
-		int tokens_consumed;
-		if ( !ParseLemsSegmentLocator(log, eOutEl, comp_path_str, net, path, tokens_consumed) ) return false;
-		
 		auto tokens = string_split(std::string(comp_path_str), "/");
+		int tokens_consumed = 0;
+		if ( !ParseLemsSegmentLocator(LogWithElement{log,eOutEl}, tokens, net, path, tokens_consumed) ) return false;
+		
 		int comp_token_id = tokens_consumed;
 		
 		// now branch according to property type? should be a spike source
@@ -4953,7 +5274,7 @@ struct ImportState{
 					return false;
 				}
 				
-				//and position
+				//and positions
 				if( !parseCompartmentTarget(
 					log, eInp, morphologies, cell_types, net.populations,
 					input_instance.population, input_instance.cell_instance, input_instance.segment, input_instance.fractionAlong
@@ -5800,7 +6121,476 @@ struct ImportState{
 		
 		return true;
 	}
-
+	bool ParseSimulation_CustomSetupFile(const ImportLogger &log, const pugi::xml_node &eSimEl, const Network &net, const char *sRelFilename, Simulation::CustomSetup &custom_init ){
+		// to avoid more complicated coding, load the whole file in memory until it's time for more efficiency (in which case a binary format can be used instead).
+		std::vector< std::vector<std::string> > tokenized_lines;
+		// TODO tokenized_offsets
+		std::vector< int > tokenized_line_number;
+		std::vector< ptrdiff_t > tokenized_line_byte_offset;
+		
+		const char *loading_from_file = log.GetFilenameFromElement(eSimEl);
+		std::string filename_s = GetRelativeFilePath((loading_from_file ? loading_from_file : "."), sRelFilename);
+		const char *filename = filename_s.c_str();
+		
+		std::ifstream fin(filename);
+		// check if opening a file failed
+		if (fin.fail()) {
+			log.error(eSimEl, "could not open file \"%s\": %s", filename, strerror(errno));
+			fin.close();
+			return false;
+		}
+		int source_line = 1;
+		ptrdiff_t byte_offset = 0;
+		for( std::string line; std::getline(fin, line, '\n'); source_line++, byte_offset += line.size()+1){
+			// printf("line: %s\n", line.c_str());
+			// trim whitespace, to be nice; also multiple whitespaces in a row, to reduce friction
+			// nice eh? https://stackoverflow.com/questions/2275160/splitting-a-string-by-whitespace-in-c#comment118452224_2275160
+			std::istringstream streamline(line);
+			std::vector<std::string> tokens{std::istream_iterator<std::string>(streamline), {}};
+			// for (auto token : tokens ){ printf(" %s", token.c_str()); } puts("\n");
+			if( tokens.empty() ) continue; // empty line
+			if( !tokens[0].empty() && tokens[0][0] == '#') continue; // comment line
+			tokenized_lines.push_back(tokens);
+			tokenized_line_number.push_back(source_line);
+			tokenized_line_byte_offset.push_back(byte_offset);
+		}
+		// close the file stream
+		fin.close();
+		
+		auto &statements = custom_init.statements;
+		
+		{
+		const auto &that_log = log;
+		
+		struct LogCustomFile{
+			const ImportLogger &log;
+			const char *filename;
+			const std::vector< ptrdiff_t > &tokenized_line_byte_offset;
+			void warning(int tokenized_lineno, int token, const char *format, ...) const {
+				va_list args; va_start(args, format);
+				log.warning(filename, tokenized_line_byte_offset[tokenized_lineno], format, args);
+				va_end(args);
+			}
+			void error(int tokenized_lineno, int token, const char *format, ...) const {
+				va_list args; va_start(args, format);
+				log.error(filename, tokenized_line_byte_offset[tokenized_lineno], format, args);
+				va_end(args);
+			}
+		} log = {that_log, filename, tokenized_line_byte_offset};
+		
+		struct LogInsideToken{
+			const LogCustomFile &log;
+			int tokenized_lineno, token;
+			// LogWithElement():{}
+			void error(const char *format, ...) const {
+				va_list args; va_start(args, format);
+				log.error(tokenized_lineno, token, format, args);
+				va_end (args);
+			}
+			void warning(const char *format, ...) const {
+				va_list args; va_start(args, format);
+				log.error(tokenized_lineno, token, format, args);
+				va_end (args);
+			}
+		};
+		
+		auto IdListToSeqList = [&log](int lineno, int token, const std::string &targets_list, const auto &container, const char *item_type, const char *container_type, auto &items_seq ){
+			auto ttokens = string_split(targets_list, ",");
+			for( const std::string &ttoken : ttokens){
+				long cell_id = -1, item_seq = -1;
+				if(!( StrToL(ttoken.c_str(), cell_id) && (item_seq = container.getSequential(cell_id)) >= 0 )){
+					log.error(lineno, token, "could not resolve %s with id \"%s\" in %s", item_type, ttoken.c_str(), container_type);
+					return false;
+				}
+				items_seq.push_back(item_seq);
+			}
+			// check if the list has duplicates, that would be ambiguous !
+			// TODO extract items list
+			auto items_sorted = items_seq;
+			std::sort(items_sorted.begin(), items_sorted.end());
+			for(int i = 0; i+1 < (int) items_sorted.size(); i++){
+				if(items_sorted[i] == items_sorted[i+1]){
+					log.error(lineno, token, "%s id \"%s\" is specified more than once", item_type, std::to_string(container.getId(items_sorted[i])).c_str());
+					return false;
+				}
+			}
+			return true;
+		};
+		
+		for(int lineno = 0; (size_t) lineno < tokenized_lines.size();){
+			const auto &line = tokenized_lines[lineno];
+			int lines_to_advance = 1;
+			if(line[0] == "set"){
+				Simulation::CustomSetup::Statement set;
+				// set statement, of what thing?
+				if( line.size() < 3){
+					log.error(lineno, 0, "'set' statement needs at least an item type and locator");
+					return false;
+				}
+				const auto &itemtype = line[1];
+				if(itemtype == "cell"){
+					set.type = Simulation::CustomSetup::Statement::POPULATION;
+					// then get population
+					const char *popname = line[2].c_str();
+					Int &pop_seq = set.group_seq;
+					pop_seq = net.populations.get_id(popname);
+					if(pop_seq < 0){
+						log.error(lineno, 2, "'set cell' statement: population %s not found", popname);
+						return false;
+					}
+					const Network::Population &pop = net.populations.get(pop_seq);
+					const CellType &cell = cell_types.get(pop.component_cell);
+					
+					if( line.size() < 7){
+						log.error(lineno, 2, "'set cell' statement needs targets in population, target segments, target property and value ");
+						return false;
+					}
+					
+					// then get list of targets
+					const std::string targets_list = line[3];
+					auto &items_seq = set.items_seq;
+					items_seq.clear();
+					if(targets_list == "all"){
+						// special case
+					}
+					else{
+						// list of cell ids
+						if(!( IdListToSeqList(lineno, 3, targets_list, pop.instances, "cell", (std::string("population ")+ popname).c_str(), items_seq) )) return false;
+					}
+					
+					// then get lists of segments
+					const std::string segments_list = line[4];
+					set.seggroup_seq = -1;
+					set.segments_seq.clear();
+					if(segments_list == "all"){
+						// special case, NOTE assume that "all" has not been defined as a segment group that is less than *all* segments.
+					}
+					else if( cell.type == CellType::PHYSICAL && morphologies.get(cell.physical.morphology).segment_groups_by_name.count(segments_list.c_str()) > 0 ){
+						set.seggroup_seq = morphologies.get(cell.physical.morphology).segment_groups_by_name.at(segments_list.c_str());
+					}
+					else{
+						if( cell.type != CellType::PHYSICAL ){
+							log.error(lineno, 4, "segment specifier \"%s\" must be \"all\" for point neurons", segments_list);
+							return false;
+						}
+						
+						// list of segment ids
+						if(!( IdListToSeqList(lineno, 3, targets_list, pop.instances, "segment", (std::string("cell type ")+ cell_types.getName(pop.component_cell)).c_str(), items_seq) )) {
+							return false;
+							//log_error(lineno, 4, "segment specifier \"%s\" could not be resolved to a list of segment ID's or a known segment group", segments_list);
+						}
+						
+					}
+					
+					// then resolve property as partial path
+					auto &path = set.path;
+					// set what is known, leave the rest (of the locator) unset
+					Simulation::LemsSegmentLocator &loca = path;
+					loca.population = pop_seq;
+					loca.cell_instance = -1; loca.segment_seq = -1;
+					if(set.seggroup_seq < 0 && set.segments_seq.size() == 1 ) loca.segment_seq = set.segments_seq[0];
+					
+					const std::string &path_term = line[5];
+					auto tokens = string_split(path_term, "/"); int tokens_consumed = 0;
+					LogInsideToken log_proxy = {log, lineno, 5};
+					if(!ParseLemsQuantityPath_CellProperty(log_proxy, cell, tokens, path,tokens_consumed )) return false;
+					// check that the specified segments match the specified distribution; if not, abort. do not restrict 'set' to segments under the selected distribution, because this could become ambiguous futher on (for example, with cable mode).
+					if(path.type == Simulation::LemsQuantityPath::CHANNEL
+					|| path.type == Simulation::LemsQuantityPath::ION_POOL){
+						assert(cell.type == CellType::PHYSICAL);
+						const Morphology &morph = morphologies.get(cell.physical.morphology);
+						const BiophysicalProperties &bioph = biophysics.at(cell.physical.biophysicalProperties);
+						if(set.seggroup_seq >= 0 || set.segments_seq.size() > 1){
+							
+							IdListRle line_segs;
+							if(set.seggroup_seq >= 0){
+								line_segs = morph.segment_groups.at(set.seggroup_seq).list;
+							}
+							else{
+								line_segs = IdListRle(set.segments_seq);
+							}
+							
+							// const char *distname = NULL;
+							IdListRle dist_segs;
+							if( path.type == Simulation::LemsQuantityPath::CHANNEL ){
+								dist_segs = bioph.membraneProperties.channel_specs.at(path.channel.distribution_seq).toList(morph);
+							}
+							else if( path.type == Simulation::LemsQuantityPath::ION_POOL ){
+								if(path.pool.type == Simulation::LemsQuantityPath::IonPoolPath::CONCENTRATION_INTRA){
+									dist_segs = bioph.intracellularProperties.ion_species_specs.at(path.channel.distribution_seq).toList(morph);
+								}
+								else if(path.pool.type == Simulation::LemsQuantityPath::IonPoolPath::CONCENTRATION_EXTRA){
+									dist_segs = bioph.extracellularProperties.ion_species_specs.at(path.channel.distribution_seq).toList(morph);
+								}
+								else{ assert(false); return false; }
+							}
+							else{ assert(false); return false; }
+							
+							IdListRle segs_outside_distribution = dist_segs.Minus(line_segs);
+							if(!( segs_outside_distribution.Count() == 0 )){
+								log.warning(lineno, 5, "the specified distribution is not present in these specified segments: %s", segs_outside_distribution.Stringify().c_str());
+								return false;
+							}
+						}
+						else{
+							// either one segment was selected (thus the check was done)
+							// or 'all' was selected (thus even if the distribution had 0 components, it would set nothing and be fine)
+							// pass
+						}
+					}
+					
+					ComponentType::NamespaceThing::Type path_type; Dimension dimension;
+					bool is_ref = false;
+					if(!model.GetLemsQuantityPathType(net, path, path_type, dimension)) return false;
+					if(path_type == ComponentType::NamespaceThing::STATE
+					|| path_type == ComponentType::NamespaceThing::PROPERTY){
+						// it's ok, they can be set
+					}
+					else if(path_type == ComponentType::NamespaceThing::REQUIREMENT){
+						// can be set only if it's a free, nont structureal requirement
+						if(false){ //VARREQ or REF? i guess, the componenttype would have to be queried otherwise 
+							is_ref = true;
+						}
+						else{
+							log.error(lineno, 5, "Requirement term can only refer to a LEMS VariableRequirement", ComponentType::NamespaceThing::getTypeName(path_type));
+							return false;
+						}
+					}
+					else{
+						log.error(lineno, 5, "term must refer to a State variable, Parameter, Property, or VariableRequirement; not a %s", ComponentType::NamespaceThing::getTypeName(path_type));
+						return false;
+					}
+					
+					auto ParseCheckRef = [this, &net](auto &log, const std::string &value_term, const Dimension &dimension, Simulation::LemsQuantityPath &path_value ){
+						
+						if(!ParseLemsQuantityPath(log, value_term.c_str(), net, path_value)) return false;
+						// check type and dimension
+						ComponentType::NamespaceThing::Type path_value_type; Dimension value_dimension;
+						if(!model.GetLemsQuantityPathType(net, path_value, path_value_type, value_dimension)) return false;
+						if(path_value_type != ComponentType::NamespaceThing::STATE){
+							log.error("value for VariableReference must refer to a state variable");
+						}
+						if( value_dimension != dimension ){
+							log.error("value for VariableReference has dimension %s, but it should have dimension %s like the property being set", dimensions.Stringify(value_dimension), dimensions.Stringify(dimension));
+						}
+						return true;
+					};
+					
+					// then get value
+					const std::string &value_term = line[6];
+					Real value = NAN;
+					Simulation::LemsQuantityPath path_value;
+					if(value_term == "multi"){
+						set.multi_mode = true;
+					}
+					else if(value_term == "cable"){
+						set.cable_mode = true;
+					}
+					else if(value_term == "multicable"){
+						set.multi_mode = true;
+						set.cable_mode = true;
+					}
+					else{
+						// it should be a value
+						if(is_ref){
+							LogInsideToken log_proxy = {log, lineno, 6};
+							if(!ParseCheckRef(log_proxy, value_term, dimension, path_value)) return false;
+						}
+						else{
+							if(!StrToF(value_term.c_str(), value)){
+								log.error(lineno, 6, "could not parse %s as numerical value, 'multi', 'cable' or 'cablemulti'", value_term.c_str());
+							}
+						}
+					}
+					if(set.cable_mode) {
+						if(cell.type != CellType::PHYSICAL){
+							log.error(lineno, 6, "value specifier %s must be used for physical cells, not %s", value_term.c_str(), cell_types.getName(pop.component_cell));
+							return false;
+						}
+						else if(!( morphologies.get(cell.physical.morphology).segment_groups.at(set.seggroup_seq).is_cable)){
+							log.error(lineno, 6, "value specifier %s must be used for a segment group that is a cable; instead it refers to \"%s\"", value_term.c_str(), segments_list.c_str());
+							return false;
+						}
+					}
+					
+					// then if the value is dimensional, get units
+					if(	!is_ref && dimension != Dimension::Unity() ){
+						if( line.size() < 8){
+							log.error(lineno, 7-1, "'set cell' statement needs units for property of dimensionality %s", dimensions.Stringify(dimension).c_str());
+							return false;
+						}
+						// see also ParseLemsQuantity, TODO refer to this logic and perhaps extract it for when validating supplied units
+						const std::string &unit_name = line[7];
+						if(!dimensions.Has(dimension)){
+							log.error(lineno, 7-1, "there are no specified %s units", dimensions.Stringify(dimension).c_str() );
+							return false;
+						}
+						bool units_ok = false;
+						for( auto scale : dimensions.GetUnits(dimension) ){
+							if(unit_name == scale.name){
+								
+								value = scale.ConvertTo( value, dimensions.GetNative(dimension) );
+								//printf("valll %f\n",num);
+								units_ok = true;
+								break;
+							}
+						}
+						if(!units_ok){
+							//unit name not found in list!
+							log.error(lineno, 7-1, "unknown property units: %s for %s", unit_name, dimensions.Stringify(dimension).c_str() );
+							return false;
+						}
+					}
+					// TODO complain if there are more tokens, yet unparsed in the line
+					
+					// then if multi was specified, read this many lines of data
+					auto ReadDataRow_Number = [&log]( int linenono, Int columns_to_read, const auto &line, std::vector<Real> &row){
+						assert((Int) line.size() == 1+columns_to_read);
+						
+						row.resize(columns_to_read);
+						for(int i = 0; i < columns_to_read; i++){
+							const auto &ttoken = line[1+i];
+							if(!StrToF(ttoken.c_str(), row[i])){
+								log.error(linenono, 1+i, " could not parse as number: %s", ttoken.c_str() );
+								return false;
+							}
+						}
+						return true;
+					};
+					auto ReadDataRow_Ref = [&log, &ParseCheckRef]( int linenono, Int columns_to_read, const Dimension &dimension, const auto &line, std::vector<Simulation::LemsQuantityPath> &row){
+						assert((Int) line.size() == 1+columns_to_read);
+						
+						row.resize(columns_to_read);
+						for(int i = 0; i < columns_to_read; i++){
+							const auto &ttoken = line[1+i];
+							LogInsideToken log_proxy = {log, linenono, 1+i};
+							if(!ParseCheckRef(log_proxy, ttoken, dimension, row[i])) return false;
+						}
+						return true;
+					};
+					
+					Int items_to_read = 0;
+					if(set.multi_mode){
+						if(set.items_seq.empty()) items_to_read = (Int) pop.instances.size();
+						else items_to_read = (Int) set.items_seq.size();
+					}
+					printf("items %ld\n", items_to_read);
+					
+					Int lines_to_read = 0, columns_to_read = -1;
+					if(set.cable_mode){
+						columns_to_read = -1;
+						
+						if(set.multi_mode) lines_to_read = 1+items_to_read;
+						else lines_to_read = 1+1; // one for fractionAlong cable, one for values
+					}
+					else if(set.multi_mode){
+						lines_to_read = 1;
+						columns_to_read = items_to_read;
+					}
+					else{
+						// it must be a single value
+						if(false){
+							// TODO refs
+							set.ref_data.resize(1);
+							set.ref_data[0].resize(1);
+							set.ref_data[0][0] = path_value;
+						}
+						else{
+							if( value != value ){
+								log.error(lineno, 6, "internal error: single value %s unset", value_term.c_str());
+								return false;
+							}
+							set.real_data.resize(1);
+							set.real_data[0].resize(1);
+							set.real_data[0][0] = value;
+						}
+					}
+					printf("columns %ld\n", columns_to_read);
+					for(int linenono = lineno + 1; linenono < lineno + 1 + lines_to_read; linenono++){
+						const auto &tokens = tokenized_lines[linenono];
+						assert(tokens.size() > 0);
+						
+						if(!( linenono < (int) tokenized_lines.size() && tokens[0] == "values" )){
+							log.error(linenono-1, 0, "'set' line has only %d 'values' lines following, when it should have %d", linenono , lines_to_read);
+							return false;
+						}
+						
+						std::vector<Real> new_row;
+						
+						// Whatever the type of value, in cable mode the first row must be real data of fractionAlong
+						if(set.cable_mode && linenono == lineno){
+							// the following rows will have as many elements as this index row.
+							columns_to_read = (Int)tokens.size()-1;
+							
+							if(!ReadDataRow_Number(linenono, columns_to_read, tokens, new_row )) return false;
+							// check this line for number of columns to follow.
+							// Also verify that samples are between [0,1] and increasing.
+							
+							assert(new_row.size() > 0);
+							for(int i = 0; i < (int) new_row.size(); i ++ ){
+								auto x = new_row.size();
+								if(!( 0 <= x && x <= 1 )){
+									log.error(linenono, i+1, "fractionAlong sample point %d is not between 0 and 1", i); // add 1 for 'values' token in the start of line
+									return false;
+								}
+								if(i == 0) continue;
+								if(!( new_row[i-1] < x )){
+									log.error(linenono, i+1, "fractionAlong sample point %d is non-increasing", i); // add 1 for 'values' token in the start of line
+									return false;
+								}
+							}
+							
+							set.real_data.push_back(new_row);
+						}
+						else{
+							Int values_provided = (Int)tokens.size() - 1;
+							if(!( values_provided == columns_to_read )){
+								log.error(linenono, std::min(values_provided, columns_to_read)+1-1, " %d values were expected in row, but %d were provided instead", (int)columns_to_read, (int)values_provided );
+								return false;
+							}
+							
+							// printf("df %d %d\n", (int)set.cable_mode, (int)set.multi_mode);
+							if(is_ref){
+								// append ref data
+								std::vector<Simulation::LemsQuantityPath> new_row;
+								if(!ReadDataRow_Ref(linenono, columns_to_read, dimension, tokens, new_row )) return false;
+								set.ref_data.push_back(new_row);
+							}
+							else{
+								// append numerical data
+								if(!ReadDataRow_Number(linenono, columns_to_read, tokens, new_row )) return false;
+								// printf("%zd\n", new_row.size());
+								set.real_data.push_back(new_row);
+							}
+						}
+						// done with values line
+					}
+					lines_to_advance += lines_to_read;
+					
+					// done with 'set cell'
+				}
+				else if(itemtype == "synapse" || itemtype == "input"){
+					log.error(lineno,1, "'set' statement: type %s not supported yet", line[1].c_str());
+					// if multi, check if the projection has uniform ... and support only that for now.
+					return false;
+				}
+				else{
+					log.error(lineno,1, "'set' statement: unknown type %s", line[1].c_str());
+					return false;
+				}
+				// done with 'set'
+				statements.push_back(set);
+			}
+			else{
+				log.error(lineno,0, "unknown statement type %s", line[0].c_str());
+				return false;
+			}
+			lineno += lines_to_advance;
+		}
+		}
+		// done with custom setup file!
+		return true;
+	}
 	bool ParseSimulation(const ImportLogger &log, const pugi::xml_node &eSim){
 		
 		Simulation sim;
@@ -5848,6 +6638,7 @@ struct ImportState{
 			log.error(eSim, "target network %s not found", sNetwork);
 			return false;
 		}
+		const auto &net =  networks.get(sim.target_network);
 		
 		// and child elements like recorders
 		for(auto eSimEl: eSim.children()){
@@ -5894,7 +6685,18 @@ struct ImportState{
 						}
 						// validate quantity right here right now
 						
-						if(!ParseLemsQuantityPath(log, eOutEl, out_quantity, networks.get(sim.target_network), out.quantity)) return false;
+						if(!ParseLemsQuantityPath(LogWithElement{log,eOutEl}, out_quantity, net, out.quantity)) return false;
+						
+						// XXX this is just a limitation in Eden right now
+						ComponentType::NamespaceThing::Type path_type; Dimension dimension;
+						if(!model.GetLemsQuantityPathType(net, out.quantity, path_type, dimension)){
+							log.error(eOutEl, "internal error: could not get path type for %s", out_quantity);
+							return false;
+						}
+						if( path_type != ComponentType::NamespaceThing::STATE ){
+							log.error(eOutEl, "%s is not an immediate state variable; which is not yet supported in EDEN", out_quantity);
+							return false;
+						}
 						
 						daw.output_columns.add(out, outcol_name);
 					}
@@ -5959,7 +6761,7 @@ struct ImportState{
 						}
 						// validate path right here right now
 						
-						if(!ParseLemsEventPath(log, eOutEl, out_select, out_eventPort, networks.get(sim.target_network), out.selection)) return false;
+						if(!ParseLemsEventPath(log, eOutEl, out_select, out_eventPort, net, out.selection)) return false;
 						
 						evw.outputs.add(out, outsel_name);
 					}
@@ -5969,6 +6771,18 @@ struct ImportState{
 				}
 				
 				sim.event_writers.add(evw, outfi_name);
+			}
+			// extensions!
+			else if(strcmp(eSimEl.name(), "EdenCustomSetup") == 0){
+				if(!sim.custom_init.statements.empty()){
+					log.error(eSimEl, "%s already defined previously", eSimEl.name());
+					return false;
+				}
+				log.warning(eSimEl, "%s is an experimental extension; its behaviour may change in the future.", eSimEl.name()); // TODO add hashset of such things to whine once for each type.
+				const char *filename = RequiredAttribute( log, eSimEl, "filename" );
+				if( !filename ) return false;
+				
+				if(!ParseSimulation_CustomSetupFile(log, eSimEl, net, filename, sim.custom_init)) return false;
 			}
 			else{
 				// unknown, let it pass
@@ -7015,6 +7829,7 @@ struct ImportState{
 			ComponentType::OnEvent new_onevent;
 			
 			auto port = RequiredAttribute( log, eOnev, "port" );
+			if( !port ) return false;
 			
 			new_onevent.in_port_seq = new_type.event_inputs.get_id(port);
 			if( new_onevent.in_port_seq < 0 ){
@@ -7201,7 +8016,8 @@ struct ImportState{
 	
 	// the constructor: attach import state to Model being imported
 	ImportState(Model &_model)
-		: dimensions          ( _model.dimensions          )
+		: model               ( _model                     )
+		, dimensions          ( _model.dimensions          )
 		, component_types     ( _model.component_types     )
 		, component_instances ( _model.component_instances )
 		, morphologies        ( _model.morphologies        )
@@ -7503,7 +8319,7 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 				// href needs some preprocessing before matching to core filenames, because people are funny
 				const char *true_ref = href;
 				// don't skip leading slashes, absolute paths must be absolute
-				// skip repeated (./)* later
+				// skip repeated (./)* scanning from start (thus avoiding ../ or other cases)
 				while( *true_ref == '.' && *true_ref == '/' ) true_ref += 2;
 				// don't strip leading backslashes, because they're important on Windows (UNC paths, SMB mounts etc.)
 				// fortunately people haven't spuriously added them yet
@@ -7515,133 +8331,9 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 				else{
 					// there are two cases here, either the path is absolute (in which case it is used)
 					// or the path is relative (in which case it is appended to dirname of the file that contained the <Include> tag)
+					std::string resolved_path = GetRelativeFilePath(file_to_read.path, true_ref);
 					
-					auto PathIsRelativeToCwd = []( const std::string &path ){
-						#if defined _WIN32
-							if( path.size() >= 1 && path[0] == '/' ) return false; // relative to current drive, or new-style absolute path
-							if( path.size() >= 1
-								&& (
-									(path[0] >= 'A' && path[0] <= 'Z')
-									|| (path[0] >= 'a' && path[0] <= 'z')
-								)
-								&& path[1] == ':'
-							) return false; // relative to root, or cwd, of a drive
-							// Does not include CP/M device names such as CON, LPT#, AUX, &c. which are erroneously considered to be files atm; Contact the devs if you need support on this
-							// More details on: https://docs.microsoft.com/en-us/dotnet/standard/io/file-path-formats#identify-the-path
-							return true;
-						#else
-							// basically Unix paths otherwise
-							if( path.size() > 0 && path[0] == '/' ) return false; // is absoute path
-							return true;
-						#endif
-					};
-					
-					std::string resolved_path; // the path to the file to be used, eventually
-					if( PathIsRelativeToCwd(href) ){
-						// the path is relative to the directory of the file including it
-						
-						// generate new path, replacing current name of the file with the new href
-						// contact this code's devs for more safety (not accessing sensitive files), or just run the program in chroot or something
-						auto new_path = file_to_read.path;
-						// find the last slash and replace everything after it with href
-						
-						auto last_slash_pos = new_path.rfind('/');
-						if(last_slash_pos == std::string::npos) last_slash_pos = 0;
-						else last_slash_pos++; //do include the slash
-						
-						#if defined _WIN32
-						// consider the backslash, as well
-						auto last_backslash_pos = new_path.rfind('\\');
-						if(last_backslash_pos == std::string::npos) last_backslash_pos = 0;
-						else last_backslash_pos++; //do include the slash
-						
-						if( last_backslash_pos > last_slash_pos ) last_slash_pos = last_backslash_pos;
-						#endif
-						
-						new_path.resize(last_slash_pos);
-						new_path += true_ref;
-						
-						// and get rid of all ../ nonsense, including symlinks? (probably not including symlinks)
-						// unfortunately, realpath doesn't exist in certain environments, TODO detect and use fallback
-						// const char *sResolved = realpath( new_path, NULL );
-						// if( !sResolved ){
-						// 	perror( ("error resolving path "+new_path).c_str() );
-						// 	goto CLEANUP;
-						// }
-						// std::string resolved_path = sResolved;
-						// free( (void *)sResolved ); sResolved = NULL;
-						
-						auto ResolvePathTextually = [  ]( const std::string &original_path ){
-							
-							auto tokens = string_split(std::string(original_path), "/");
-							#if defined _WIN32
-							// do this for Windows backslashes as well
-							{
-							std::vector<std::string> new_tokens;
-							
-							// For each token, split by slash (may contain backslashes)
-							for( const auto token : tokens ){
-								// For each sub-token, split by backslash
-								for( const auto new_token : string_split( token,  "\\") ){
-									new_tokens.push_back(new_token);
-								}
-							}
-							
-							tokens = new_tokens;
-							}
-							#endif
-							
-							std::vector<std::string> resolved_tokens;
-							for( int i = 0; i < (int)tokens.size(); i++ ){
-								const auto &token = tokens[i];
-								
-								if( token == ".." ){
-									if(
-										!resolved_tokens.empty()
-										&& *resolved_tokens.rbegin() != ".."
-									){
-										// move level up from last folder
-										resolved_tokens.pop_back();
-									}
-									else{
-										// higher than cwd, probably
-										resolved_tokens.push_back(token);
-									}
-								}
-								else if( token == "." ){
-									// skip
-								}
-								else if( token == "" ){
-									if( i == 0 ){
-										// path begins with a slash, keep for the sake of Unix
-										resolved_tokens.push_back(token);
-									}
-									else{
-										// superfluous slashes, skip
-									}
-								}
-								else{
-									resolved_tokens.push_back(token);
-								}
-							}
-							
-							std::string resolved_path;						
-							for( int i = 0; i < (int)resolved_tokens.size(); i++ ){
-								const auto &token = resolved_tokens[i];
-								resolved_path += token;
-								if( i + 1 < (int)resolved_tokens.size() ) resolved_path += "/";
-							}
-							return resolved_path;
-						};
-						resolved_path = ResolvePathTextually( new_path );
-					}
-					else{
-						// the path is not relative to the file including it
-						resolved_path = href;
-					}
-					
-					
-					// TODO keep path, but print non-resolved one, to avoid leaking irrelevant and possibly sensitive absolute path
+					// LATER keep path, but print non-resolved one, to avoid leaking irrelevant and possibly sensitive absolute path?
 					
 					// just an early check that file exists, so that the file that included the missing file can be blamed
 					// don't trust the file to keep on (not) existing when it is actually opened, of course
@@ -7700,7 +8392,7 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 		// printf("Tagified %s\n",sType);
 		auto comptype_id = model.component_types.get_id(sType);
 		// <Component> tag included here
-		// Note that special-use types like <Simulation> and <Network> are handlled separately
+		// Note that special-use types like <Simulation> and <Network> are handled separately
 		if( comptype_id >= 0 || type == "Component" ){
 			tagified_components.insert(type);
 
@@ -7815,6 +8507,8 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 	}
 	
 	//XML exploration end
+	
+	// TODO probe for unresolved refs in all lems (or other?) parts of the model!
 
 	//parsing complete, no errors!
 	ok = true;
