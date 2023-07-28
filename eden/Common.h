@@ -15,6 +15,7 @@
 #undef IN
 #undef OUT
 #undef INOUT
+#undef CONST
 #endif
 
 #ifdef __APPLE__

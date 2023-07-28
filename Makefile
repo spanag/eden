@@ -74,6 +74,13 @@ ifneq (,$(findstring darwin,$(TARGET)))
 	MAYBE_NOT_TARGET_MAC := false
 endif
 
+MAYBE_TARGET_WIN32 ?= false
+MAYBE_NOT_TARGET_WIN32 ?= true
+ifneq (,$(findstring mingw,$(TARGET)))
+	MAYBE_TARGET_WIN32 := true
+	MAYBE_NOT_TARGET_WIN32 := false
+endif
+
 # (internal variable) is a compiler selected?
 COMPILER_SET := ko
 
@@ -139,8 +146,6 @@ CFLAGS_omp :=  ${CFLAGS_omp_${TOOLCHAIN}}
 
 CFLAGS_cpu = ${CFLAGS_omp}
 
-CFLAGS ?= ${CFLAGS_${BUILD}} ${CFLAGS_${PLATFORM}} -I ${SRC_COMMON} -I ${PROJ_BASE}
-
 LIBS ?=  
 # TODO use those flags defined above...
 ifneq (,$(findstring linux,$(TARGET)))
@@ -151,10 +156,16 @@ ifneq (,$(findstring darwin,$(TARGET)))
 	LIBS := $(LIBS) -ldl
 endif
 ifneq (,$(findstring mingw,$(TARGET)))
+	CFLAGS_debug := ${CFLAGS_debug} -Wa,-mbig-obj
+	# https://stackoverflow.com/questions/31907912/gcc-equivalent-of-mss-bigobj
+	
 	LIBS := $(LIBS)
 	EXE_EXTENSION := .exe
 	EXE_EXTENSION_DIST := .exe
 endif
+
+# determine CFLAGS after os specific rules
+CFLAGS ?= ${CFLAGS_${BUILD}} ${CFLAGS_${PLATFORM}} -I ${SRC_COMMON} -I ${PROJ_BASE}
 
 # TODO temporary till targets are better specified in makefile
 ifdef USE_MPI

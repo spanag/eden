@@ -181,7 +181,7 @@
         <inputList id="stimInput2" component="pulseGen3" population="pop0">
             <input id="0" target="../pop0/2/MultiCompCell" segmentId="0" fractionAlong="0.5" destination="synapses"/>
         </inputList>
-        <inputList id="stimInput2" component="pulseGen6" population="pop0">
+        <inputList id="stimInput3" component="pulseGen6" population="pop0">
             <input id="1" target="../pop0/5/MultiCompCell" segmentId="0" fractionAlong="0.5" destination="synapses"/>
         </inputList>
     </network>

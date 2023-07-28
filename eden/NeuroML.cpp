@@ -8,6 +8,7 @@
 #include <iterator>
 #include <sstream>
 #include <fstream>
+#include <numeric>
 
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -264,6 +265,9 @@ struct ImportLogger{
 		
 		va_end (args);
 	}
+	void error(va_list args, const char *filename, const ptrdiff_t file_byte_offset, const char *format) const {
+		_doit(filename, file_byte_offset, format, args);
+	}
 	//same as error, really
 	void warning(const char *filename, const ptrdiff_t file_byte_offset, const char *format, ...) const {
 		va_list args;
@@ -278,6 +282,9 @@ struct ImportLogger{
 		_doit(node, format, args);
 		
 		va_end (args);
+	}
+	void warning(va_list args, const char *filename, const ptrdiff_t file_byte_offset, const char *format) const {
+		_doit(filename, file_byte_offset, format, args);
 	}
 };
 
@@ -327,9 +334,14 @@ template<> const ScaleEntry Scales<Dimensionless>::native = {"units", 0, 1.0};
 template<> const ScaleEntry Scales<Time>::native = {"us", -6, 1.0};
 template<> const ScaleList Scales<Time>::scales = {
 	{"hour", 3600, 1.0}, // some funny people really use this
-	{"s" ,  0, 1.0},
-	{"ms", -3, 1.0},
-	{"us", -6, 1.0}
+	{"s"  ,  0, 1.0},
+	{"ms" , -3, 1.0},
+	{"msec", -3, 1.0}, // a cute alias
+	{"us" , -6, 1.0},
+	{"usec", -6, 1.0}, // a cute alias
+	{"sec",0, 1.0}, // why was this not used
+	{"second",0, 1.0},
+	{"seconds",0, 1.0}
 };
 // TODO validate unit scale conversions in LEMS !!!
 template<> const ScaleEntry Scales<Frequency>::native = {"MHz", +6, 1.0};
@@ -844,6 +856,28 @@ constexpr Int ComponentType::CommonExposures   ::* ComponentType::CommonExposure
 constexpr Int ComponentType::CommonEventInputs ::* ComponentType::CommonEventInputs ::members[];
 constexpr Int ComponentType::CommonEventOutputs::* ComponentType::CommonEventOutputs::members[];
 
+template<typename LogProxy> // HERE ILogProxy
+bool ParseSynapseLocation(const LogProxy &log, Network::Projection::Connection::Type type, const char *sLocation,  Simulation::LemsQuantityPath::SynapsePath::Location &loca){
+	typedef Simulation::LemsQuantityPath::SynapsePath::Location SynLoc;
+	typedef Network::Projection::Connection::Type ConnType;
+	if(     strcmp(sLocation, "post") == 0) loca = SynLoc::POST;
+	else if(strcmp(sLocation, "pre" ) == 0) loca = SynLoc::PRE;
+	else{
+		log.error("unknown synapse location %s", sLocation);
+		return false;
+	}
+	// check if location is appropriate
+	if( (loca == SynLoc::PRE) && !(type == ConnType::ELECTRICAL || type == ConnType::CONTINUOUS) ){
+		log.error("'pre' specifier can only be used for graded synapses", sLocation);
+		return false;
+	}
+	if( (loca == SynLoc::POST) && !(type == ConnType::ELECTRICAL || type == ConnType::CONTINUOUS || type == ConnType::SPIKING) ){
+		log.error("'post' specifier can only be used for event-based or graded synapses", sLocation);
+		return false;
+	}
+	return true;
+}
+
 bool Model::GetLemsQuantityPathType_FromLems(const Simulation::LemsInstanceQuantityPath &path, const ComponentInstance &compinst, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const {
 	if(!compinst.ok()) return false;
 	Int comp_type_seq = compinst.id_seq;
@@ -854,24 +888,80 @@ bool Model::GetLemsQuantityPathType_FromLems(const Simulation::LemsInstanceQuant
 	dimension = comp_type.getNamespaceEntryDimension(namespace_thing_seq);
 	return true;
 }
+bool Model::GetLemsQuantityPathType_SynapticComponent(const Simulation::SynapticComponentQuantityPath &path, const SynapticComponent &syn, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const {
+	typedef SynapticComponent Syn;
+	typedef Simulation::SynapticComponentQuantityPath SynPath;
+	
+	if(path.type == SynPath::LEMS){
+		return GetLemsQuantityPathType_FromLems(path.lems_quantity_path, syn.component, type, dimension);
+	}
+	else if(path.type == SynPath::BLOCK){
+		if(syn.blopla.block_mechanism.type == SynapticComponent::BlockingPlasticSynapse::BlockMechanism::NONE){ assert(false); return false; }
+		// NB they are all lemsified for now
+		return GetLemsQuantityPathType_FromLems(path.block.lems_quantity_path, syn.blopla.block_mechanism.component, type, dimension);
+	}
+	else if(path.type == SynPath::PLASTICITY){
+		if(syn.blopla.plasticity_mechanism.type == SynapticComponent::BlockingPlasticSynapse::PlasticityMechanism::NONE){ assert(false); return false; }
+		// NB they are all lemsified for now
+		return GetLemsQuantityPathType_FromLems(path.plasticity.lems_quantity_path, syn.blopla.plasticity_mechanism.component, type, dimension);
+	}
+	else if(path.type == SynPath::NATIVE){
+		// single exp is not lemsified
+		if( syn.type == Syn::EXP || syn.type == Syn::GAP ){
+			if( path.native_entry == SynPath::GBASE ){
+				type = ComponentType::NamespaceThing::PROPERTY;
+				dimension = LEMS_Conductance;
+				return true;
+			}
+			else if( path.native_entry == SynPath::G ){
+				type = ComponentType::NamespaceThing::STATE;
+				dimension = LEMS_Conductance;
+				return true;
+			}
+			else if( path.native_entry == SynPath::EREV ){
+				type = ComponentType::NamespaceThing::PROPERTY;
+				dimension = LEMS_Voltage;
+				return true;
+			}
+			else if( path.native_entry == SynPath::TAU ){
+				type = ComponentType::NamespaceThing::PROPERTY;
+				dimension = LEMS_Time;
+				return true;
+			}
+			else{ assert(false); return false; }
+		}
+		// LATER double synapses and more!
+		else{ assert(false); return false; }
+	}
+	else{ assert(false); return false; }
+}
 bool Model::GetLemsQuantityPathType_InputInstance(const Simulation::InputInstanceQuantityPath &path, const InputSource &input, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const {
+	typedef Simulation::InputInstanceQuantityPath InpPath;
 	// TODO work with child synapses in input component!
-	if(path.type == Simulation::InputInstanceQuantityPath::LEMS){
+	if(path.type == InpPath::LEMS){
 		return GetLemsQuantityPathType_FromLems(path.lems_quantity_path, input.component, type, dimension);
 	}
-	else if(path.type == Simulation::InputInstanceQuantityPath::NATIVE){
+	else if(path.type == InpPath::SYNAPSE){
+		return GetLemsQuantityPathType_SynapticComponent(path.synapse, synaptic_components.get(input.synapse), type,dimension);
+	}
+	else if(path.type == InpPath::NATIVE){
 		// dc pulse is not lemsified
-		if( path.native_entry == Simulation::InputInstanceQuantityPath::AMPLITUDE ){
-			type = ComponentType::NamespaceThing::PROPERTY;
-			dimension = LEMS_Current;
-			return true;
+		if(input.type == InputSource::Type::PULSE){
+			if( path.native_entry == InpPath::AMPLITUDE ){
+				type = ComponentType::NamespaceThing::PROPERTY;
+				dimension = LEMS_Current;
+				return true;
+			}
+			else if( path.native_entry == InpPath::DURATION
+				|| path.native_entry == InpPath::DELAY ){
+				type = ComponentType::NamespaceThing::PROPERTY;
+				dimension = LEMS_Time;
+				return true;
+			}
+			else{ assert(false); return false; }
 		}
-		else if( path.native_entry == Simulation::InputInstanceQuantityPath::DURATION
-			|| path.native_entry == Simulation::InputInstanceQuantityPath::DELAY ){
-			type = ComponentType::NamespaceThing::PROPERTY;
-			dimension = LEMS_Time;
-			return true;
-		}
+		// FIXME inputs with synapse component!
+		// FIXME spike sources!
 		else{ assert(false); return false; }
 	}
 	else{ assert(false); return false; }
@@ -883,7 +973,7 @@ bool Model::GetLemsQuantityPathType(const Network &net, const Simulation::LemsQu
 		const Network::Population &population = net.populations.get(path.population);
 		const CellType &_cell_type = cell_types.get(population.component_cell);
 		
-		assert(_cell_type.type == CellType::ARTIFICIAL); // otherwise it would be a segment path or such
+		if(_cell_type.type != CellType::ARTIFICIAL){assert(false); return false;} // otherwise it would be a segment path
 		const auto &cell = _cell_type.artificial;
 		
 		const auto &path_cell = path.cell;
@@ -943,13 +1033,26 @@ bool Model::GetLemsQuantityPathType(const Network &net, const Simulation::LemsQu
 	}/*
 	else if(path.type == Simulation::LemsQuantityPath::ION_POOL){
 		
-	}
+	}*/
 	else if(path.type == Simulation::LemsQuantityPath::SYNAPSE){
+		const auto &path_synapse = path.synapse;
+		if(path_synapse.proj_seq < 0) return false;
+		// NB connections in a projection are not guaranteed to use the same component;
+		// LATER constrain them to guarantee this.
+		if(path_synapse.conn_seq < 0) return false;
+		const Network::Projection &proj = net.projections.get(path_synapse.proj_seq);
+		const Network::Projection::Connection &conn = proj.connections.atSeq(path_synapse.conn_seq);
+		Int syn_seq = path_synapse.GetSynSeq(conn);
+		const SynapticComponent &syn = synaptic_components.get(syn_seq);
 		
+		return GetLemsQuantityPathType_SynapticComponent(path_synapse, syn, type, dimension);
 	}
 	else if(path.type == Simulation::LemsQuantityPath::INPUT){
+		const Network::InputList &list = net.input_lists.get(path.input.list_seq);
+		const InputSource &input = input_sources.get(list.component);
 		
-	}*/
+		return GetLemsQuantityPathType_InputInstance(path.input, input, type, dimension);
+	}
 	else if(path.type == Simulation::LemsQuantityPath::NETWORK){
 		// not supported yet!
 		return false;
@@ -1628,7 +1731,9 @@ bool ParseQuantity(const ImportLogger &log, const pugi::xml_node &eLocation, con
 		}
 	}
 	//unit name not found in list!
-	log.error(eLocation, "unknown %s attribute units: %s for %s", attr_name, unit_name, UnitType::NAME );
+	std::string known_list;
+	for( auto scale : Scales<UnitType>::scales ) known_list += " ", known_list += scale.name;
+	log.error(eLocation, "unknown %s attribute units: %s for %s (supported:%s)", attr_name, unit_name, UnitType::NAME, known_list.c_str() );
 	return false;
 	
 }
@@ -1694,7 +1799,8 @@ bool ParseLemsQuantity(const ImportLogger &log, const pugi::xml_node &eLocation,
 		}
 	}
 	//unit name not found in list!
-	log.error(eLocation, "unknown %s attribute units: %s for %s", attr_name, unit_name, dimensions.Stringify(dimension).c_str() );
+	std::string known_list; for( auto scale : dimensions.GetUnits(dimension) ) known_list += " ", known_list += scale.name;
+	log.error(eLocation, "unknown %s attribute units: %s for %s (supported:%s)", attr_name, unit_name, dimensions.Stringify(dimension).c_str(), known_list.c_str() );
 	return false;
 	
 }
@@ -3271,7 +3377,7 @@ bool parseCompartmentTarget(const ImportLogger &log, const pugi::xml_node &eTarg
 	else if( cell_type.type == CellType::ARTIFICIAL ){
 		// point neurons, they have only one segment, with id 0
 		if( segId == 0 ) segment_seq = 0;
-		else segment_seq = -1;
+		else return false;// segment_seq = -1;
 	}
 	else{
 		log.error(eTarget, "internal error: compartment target: cell type %d", cell_type.type);
@@ -3712,55 +3818,59 @@ struct ImportState{
 	// <postsynaptic population name>/<instance>/<cell type, redundant>/<segment>/synapses:<synapse type>:<incrementing instance of same type on same segment of same cell>/g 
 	// 	see https://github.com/NeuroML/org.neuroml.export/blob/master/src/main/java/org/neuroml/export/neuron/NeuronWriter.java#L581
 	
-	template<typename LogProxy>
-	bool ParseLemsCellLocator(const LogProxy &log, const std::vector<std::string> tokens, const Network &net, Simulation::LemsSegmentLocator &path, int &tokens_consumed) const {
+	template<typename LogProxy, typename GroupCollection, typename Get_Seq>
+	bool ParseLemsGroupLocator(const LogProxy &log, const std::vector<std::string> tokens, const char *group_type_name, const GroupCollection &group_collection, const Get_Seq &GetSeq, Int &group_seq, Int &instance_seq, Int &tokens_consumed) const {
 		// note: tokens are spearted by '/' in the following
-		int pop_token_id = tokens_consumed;
+		Int pop_token_id = tokens_consumed;
 		if(tokens_consumed >= (int) tokens.size()){
 			return false;
 		}
 		const std::string &pop_token = tokens[pop_token_id];
-		std::string cell_instance_string;
+		std::string instance_string;
 		
 		size_t bracketIndex =  pop_token.find_first_of("[");
 		std::string pop_name = pop_token.substr(0,bracketIndex);
 		
-		path.population = net.populations.get_id(pop_name.c_str());
-		if(path.population < 0){
-			log.error("target population %s not found", pop_name.c_str());
+		group_seq = group_collection.get_id(pop_name.c_str());
+		if(group_seq < 0){
+			log.error("target %s %s not found", group_type_name, pop_name.c_str());
 			return false;
 		}
-		const Network::Population &population = net.populations.get(path.population);
+		const auto &group = group_collection.get(group_seq);
 
 		if(pop_name.length() == pop_token.length()){
 			// no bracket, use pop/id/... instead
 			if( pop_token_id + 1 >= (int)tokens.size() ){
-				log.error("not enough factors for cell instance ID");
+				log.error("not enough factors for instance ID");
 				return false;
 			}
-			cell_instance_string = tokens[pop_token_id + 1];
+			instance_string = tokens[pop_token_id + 1];
 			tokens_consumed = pop_token_id + 2;
 		}
 		else{
 			//with bracket, pop[id]/...
-			cell_instance_string = pop_token.substr(bracketIndex + 1, pop_token.find_first_of("]") - (bracketIndex + 1));
+			instance_string = pop_token.substr(bracketIndex + 1, pop_token.find_first_of("]") - (bracketIndex + 1));
 			tokens_consumed = pop_token_id + 1;
 		}
 		
-		Int cell_instance_id;
-		if( !StrToL(cell_instance_string.c_str(), cell_instance_id) ){
-			log.error("target instance \"%s\" not a number", cell_instance_string.c_str());
+		Int instance_id;
+		if( !StrToL(instance_string.c_str(), instance_id) ){
+			log.error("target instance \"%s\" not an integer number", instance_string.c_str());
 			return false;
 		}
-		path.cell_instance = population.instances.getSequential(cell_instance_id);
-		if(path.cell_instance < 0){
-			log.error("target instance %s not found in population", cell_instance_string.c_str());
+		instance_seq = GetSeq(group, instance_id);
+		if(instance_seq < 0){
+			log.error("target instance %s not found in %s", instance_string.c_str(), pop_name.c_str());
 			return false;
 		}
 		return true;
+	}// HERE ILogProxy?
+	template<typename LogProxy>
+	bool ParseLemsCellLocator(const LogProxy &log, const std::vector<std::string> tokens, const Network &net, Simulation::LemsSegmentLocator &path, Int &tokens_consumed) const {
+		return ParseLemsGroupLocator(log, tokens, "population", net.populations, [](const Network::Population &group, Int id){return group.instances.getSequential(id);}, path.population, path.cell_instance, tokens_consumed);
 	}
 	template<typename LogProxy>
-	bool ParseLemsSegmentLocator(const LogProxy &log, const std::vector<std::string> tokens, const Network &net, Simulation::LemsSegmentLocator &path, int &tokens_consumed) const {
+	bool ParseLemsSegmentLocator(const LogProxy &log, const std::vector<std::string> tokens, const Network &net, Simulation::LemsSegmentLocator &path, Int &tokens_consumed) const {
 		
 		if( tokens.size() < 1 ){
 			log.error("target path must have at least 1 slash-delimited factor");
@@ -3783,9 +3893,32 @@ struct ImportState{
 			
 		}
 		int segprop_token_id = -1;
-		
+		auto MatchesFractionalSegmentId = [](const char *sId){
+			int dots_counted = 0;
+			for(const char *s = sId; *s; s++){
+				char c = *s;
+				if(isdigit(c)) ; // continue
+				else if(c == '.') dots_counted++;
+				else return false;
+			}
+			return dots_counted <= 1;
+		};
+		auto GetFractionalSegmentId = [&MatchesFractionalSegmentId](const char *sId, Int &segment_id, Real &fractionAlong){
+			if(!MatchesFractionalSegmentId(sId)) return false;
+			auto dot = strchr(sId,'.');
+			if(dot){
+				if(!StrToL(sId, segment_id, false)) return false; // allow stopping at dot
+				if(!( StrToF(dot, fractionAlong) && 0 <= fractionAlong && fractionAlong <= 1 )) return false;
+			}
+			else{
+				if(!StrToL(sId, segment_id)) return false;
+				fractionAlong = 0.5; // when not mentioned
+			}
+			return true;
+		};
 		Int segment_id = -1;
-		if(!( segment_token_id < (int)tokens.size() && StrToL(tokens[segment_token_id].c_str(), segment_id) )){
+		// if(!( segment_token_id < (int)tokens.size() && StrToL(tokens[segment_token_id].c_str(), segment_id) )){
+		if(!( segment_token_id < (int)tokens.size() && GetFractionalSegmentId(tokens[segment_token_id].c_str(), segment_id, path.fractionAlong) )){
 			// could be a single compartment cell, or an artificial cell
 			segment_id = -1; //set it to missing
 			// this token is a property of the single compartment cell, ignore
@@ -3809,6 +3942,7 @@ struct ImportState{
 			}
 			
 			path.segment_seq = 0;
+			path.fractionAlong = 0.5; // for good measure
 		}
 		else if(cell_type.type == CellType::PHYSICAL ){
 			
@@ -3820,7 +3954,10 @@ struct ImportState{
 					segment_id = 0;
 				}
 				else{
-					log.warning("target path needs segment ID, because cell has multiple segments. Setting to implicit default: segment ID = 0");
+					std::string complaint = "target path needs segment ID, because cell has multiple segments. Setting to implicit default: segment ID = 0";
+					// add diagnostic, may be useful? 
+					if( 0 <= segprop_token_id && segprop_token_id < (int)tokens.size() ) complaint += "(path following cell id was \""+tokens[segment_token_id]+"\")";
+					log.warning("%s", complaint.c_str());
 					// return false;
 					// TODO perhaps stop complaining after warning too many times
 					
@@ -3843,7 +3980,7 @@ struct ImportState{
 		return true;
 	}
 	template<typename LogProxy>
-	bool ParseLemsQuantityPathInComponent(const LogProxy &log, const ComponentInstance &instance, const std::vector<std::string> &tokens, Simulation::LemsInstanceQuantityPath &lems_instance_qty_path, int &tokens_consumed ) const {
+	bool ParseLemsQuantityPathInComponent(const LogProxy &log, const ComponentInstance &instance, const std::vector<std::string> &tokens, Simulation::LemsInstanceQuantityPath &lems_instance_qty_path, Int &tokens_consumed ) const {
 		
 		if( (int)tokens.size() <= tokens_consumed ){
 			log.error("path needs to specify a property of LEMS component %s", ( tokens.empty() ? "" : tokens[tokens.size() - 1].c_str() ) );
@@ -3868,29 +4005,187 @@ struct ImportState{
 		Int &namespace_id = lems_instance_qty_path.namespace_thing_seq;
 		namespace_id = comptype.name_space.get_id(propname);
 		if( namespace_id < 0 ){
-			log.error("%s is not a defined quantity in component type %s", propname, component_types.getName(comptype_seq));
+			log.error("%s is not a define d quantity in component type %s", propname, component_types.getName(comptype_seq));
 			return false;
 		}
 		
 		return true;
 	}
 	template<typename LogProxy>
-	bool ParseLemsQuantityPath_InputInstance(const LogProxy &log, const InputSource &input, const std::vector<std::string> &tokens, Simulation::InputInstanceQuantityPath &instance_qty_path, int &tokens_consumed ) const {
+	bool ParseLemsQuantityPath_SynapticComponent(const LogProxy &log, const SynapticComponent &syn, const std::vector<std::string> &tokens, Simulation::SynapticComponentQuantityPath &path, Int &tokens_consumed ) const {
+		typedef SynapticComponent Syn;
+		typedef Simulation::SynapticComponentQuantityPath SynPath;
+		int mainprop_token_id = tokens_consumed;
 		
-		// work only with LEMSified stuff for now
-		if( input.component.ok() ){
-			instance_qty_path.type = Simulation::InputInstanceQuantityPath::LEMS;
-			if( !ParseLemsQuantityPathInComponent(log, input.component, tokens, instance_qty_path.lems_quantity_path, tokens_consumed ) )return false;
+		// now branch according to property type
+		if(mainprop_token_id >= (Int)tokens.size()){
+			log.error("not enough factors for synaptic component property");
+			return false;
+		}
+		
+		const std::string &mainprop = tokens[mainprop_token_id];
+		
+		// TODO weight?
+		// work with LEMSified stuff as a priority
+		if( syn.type != Syn::BLOCKING_PLASTIC && syn.component.ok() ){
+			path.type = SynPath::LEMS;
+			if( !ParseLemsQuantityPathInComponent(log, syn.component, tokens, path.lems_quantity_path, tokens_consumed ) ) return false;
 			return true;
 		}
+		else if( syn.type == Syn::BLOCKING_PLASTIC ){
+			// LATER children will be supported...
+			// TODO can they be a multitude?
+			if(mainprop == "blockMechanisms[0]"){
+				typedef Syn::BlockingPlasticSynapse::BlockMechanism Blo;
+				const Blo &blo = syn.blopla.block_mechanism;
+				if(blo.type == Blo::Type::NONE){
+					log.error("%s is not present on this component", mainprop.c_str());
+					return false;
+				}
+				tokens_consumed++;
+				path.type = SynPath::BLOCK;
+				
+				if(!(tokens_consumed+1 <= (Int)tokens.size())){
+					log.error("incomplete path for %s", mainprop.c_str());
+					return false;
+				}
+				
+				assert(blo.component.ok());
+				path.block.type = SynPath::Block::LEMS;
+				return ParseLemsQuantityPathInComponent(log, blo.component, tokens, path.block.lems_quantity_path, tokens_consumed );
+			}
+			else if(mainprop == "plasticityMechanisms[0]"){
+				typedef Syn::BlockingPlasticSynapse::PlasticityMechanism Pla;
+				const Pla &pla = syn.blopla.plasticity_mechanism;
+				if(pla.type == Pla::Type::NONE){
+					log.error("%s is not present on this component", mainprop.c_str());
+					return false;
+				}
+				tokens_consumed++;
+				path.type = SynPath::PLASTICITY;
+				
+				if(!(tokens_consumed+1 <= (Int)tokens.size())){
+					log.error("incomplete path for %s", mainprop.c_str());
+					return false;
+				}
+				
+				assert(pla.component.ok());
+				path.plasticity.type = SynPath::Plasticity::LEMS;
+				return ParseLemsQuantityPathInComponent(log, pla.component, tokens, path.plasticity.lems_quantity_path, tokens_consumed );
+			}
+			else{
+				// check for the main, synaptic component which happens to be lemsified
+				return ParseLemsQuantityPathInComponent(log, syn.component, tokens, path.lems_quantity_path, tokens_consumed );
+			} 
+		}
+		
+		// otherwise it's a native, or complicated, type.
+		path.type = SynPath::NATIVE;
+		
+		tokens_consumed++; // note: this token will be used in the following, unshift or refactor if necessary later
+		auto &native_entry = path.native_entry;
+		typedef SynPath::NativeEntry Nat;
+		
+		// is it a terminal property? (to avoid repeated checks in the following)
+		if(tokens_consumed == (Int)tokens.size()){
+			if(     mainprop == "gbase"      ){native_entry = Nat::GBASE; return true; }
+			else if(mainprop == "conductance"){native_entry = Nat::GBASE; return true; }
+			else if(mainprop == "erev"       ){native_entry = Nat::EREV ; return true; }
+			else if(mainprop == "tauDecay"        ){native_entry = Nat::TAU  ; return true; }
+			else if(mainprop == "g"          ){native_entry = Nat::G    ; return true; }
+			else{
+				log.error("unknown leaf property %s", mainprop.c_str()); // LATER log in token possibly in attribute
+				return false;
+			}
+		}
 		else{
-			// TODO work with child synapses in input component!
+			log.error("unknown non-leaf property %s", mainprop.c_str());
+			return false;
+		}
+		
+		if( syn.type == Syn::EXP || syn.type == Syn::GAP ){
+			if(( syn.type == Syn::EXP && !( native_entry == Nat::GBASE || native_entry == Nat::EREV || native_entry == Nat::TAU || native_entry == Nat::G ) )
+			|| ( syn.type == Syn::GAP && !( native_entry == Nat::GBASE ) )
+			){
+				log.error("property %s does not match synaptic component type", mainprop.c_str()); return false;
+			}
+			return true; // all checks passed
+		}
+		// LATER composite?
+		else{
+			log.error("synaptic component type not supported yet");
+			return false;
+		}
+	}
+	template<typename LogProxy>
+	bool ParseLemsQuantityPath_InputInstance(const LogProxy &log, const InputSource &input, const std::vector<std::string> &tokens, Simulation::InputInstanceQuantityPath &path, Int &tokens_consumed ) const {
+		typedef InputSource::Type InpType;
+		typedef Simulation::InputInstanceQuantityPath InpPath;
+		// TODO weight?
+		int mainprop_token_id = tokens_consumed;
+		
+		// now branch according to property type
+		if(mainprop_token_id >= (Int)tokens.size()){
+			log.error("not enough factors for input property");
+			return false;
+		}
+		
+		const std::string &mainprop = tokens[mainprop_token_id];
+		
+		// const bool is_native = ( input.type == InpType::PULSE );
+		const bool has_synapse = (
+			input.type == InpType::TIMED_SYNAPTIC
+			|| input.type == InpType::POISSON_SYNAPSE
+			|| input.type == InpType::POISSON_SYNAPSE_TRANSIENT
+		);
+		
+		// synapse containing stuff are more than just lemsified
+		if( has_synapse && mainprop == "synapse" ){
+			tokens_consumed++;
+			path.type = InpPath::SYNAPSE;
+			return ParseLemsQuantityPath_SynapticComponent(log, synaptic_components.get(input.synapse), tokens, path.synapse, tokens_consumed);
+		}
+		
+		// work with simple LEMSified stuff as a priority
+		if( input.component.ok() ){
+			path.type = InpPath::LEMS;
+			if( !ParseLemsQuantityPathInComponent(log, input.component, tokens, path.lems_quantity_path, tokens_consumed ) ) return false;
+			return true;
+		}
+		
+		// otherwise it's a native, or complicated, type.
+		path.type = InpPath::NATIVE;
+		tokens_consumed++; // note: this token will be used in the following, unshift or refactor if necessary later
+		
+		if(input.type == InpType::PULSE){
+			// is it a terminal property? (to avoid repeated checks in the following)
+			if(tokens_consumed == (Int)tokens.size()){
+				if(     mainprop == "amplitude"){ path.native_entry = InpPath::AMPLITUDE; return true; }
+				else if(mainprop == "duration" ){ path.native_entry = InpPath::DURATION ; return true; }
+				else if(mainprop == "delay"    ){ path.native_entry = InpPath::DELAY    ; return true; }
+				else{
+					log.error("unknown leaf property %s", mainprop.c_str()); // LATER log in token possibly in attribute
+					return false;
+				}
+			}
+			else{
+				log.error("unknown non-leaf property %s", mainprop.c_str());
+				return false;
+			}
+		}
+		else if(input.type == InpType::TIMED_SYNAPTIC){
+			// LATER if ever support customization of spike times. Though the number of spikes wouldn't easily change this way, so it's not so useful anyway.
+			log.error("timedSynapticInput paths not supported yet");
+			return false;
+		}
+		else{
+			// shouldn't happen for now, all types are checked for at this point
 			log.error("input source type not supported yet");
 			return false;
 		}
 	}
 	template<typename LogProxy>
-	bool ParseLemsQuantityPath_ArtificialCell(const LogProxy &log, const ArtificialCell &cell,  const std::vector<std::string> &tokens, Simulation::LemsQuantityPath::CellPath &path_cell, int &tokens_consumed) const {
+	bool ParseLemsQuantityPath_ArtificialCell(const LogProxy &log, const ArtificialCell &cell,  const std::vector<std::string> &tokens, Simulation::LemsQuantityPath::CellPath &path_cell, Int &tokens_consumed) const {
 		if( cell.type == ArtificialCell::SPIKE_SOURCE ){
 			path_cell.type = Simulation::LemsQuantityPath::CellPath::INPUT;
 			
@@ -3913,12 +4208,12 @@ struct ImportState{
 	
 	// NOTE: path is a read+write argument. Specifically, segment_seq is read. If set, only the mechanism distributions that include this segment are valid. If unset (ie negative), the caller is responsible for validating that if selected, a mechanism distribution exists for the segments being considered (for example, when multiple segments are considered, is it an error if some segments are outside the distribution mechanism, or are those without the mechanism simply excluded? It depends).
 	template<typename LogProxy>
-	bool ParseLemsQuantityPath_CellProperty(const LogProxy &log, const CellType &cell_type, const std::vector<std::string> &tokens, Simulation::LemsQuantityPath &path, int &tokens_consumed ) const {
+	bool ParseLemsQuantityPath_CellProperty(const LogProxy &log, const CellType &cell_type, const std::vector<std::string> &tokens, Simulation::LemsQuantityPath &path, Int &tokens_consumed ) const {
 		
 		int segprop_token_id = tokens_consumed;
 		
 		// now branch according to property type
-		if(segprop_token_id >= (int)tokens.size()){
+		if(segprop_token_id >= (Int)tokens.size()){
 			log.error("not enough factors for cell or segment property");
 			return false;
 		}
@@ -3931,6 +4226,8 @@ struct ImportState{
 			return ParseLemsQuantityPath_ArtificialCell(log, cell_type.artificial, tokens, path.cell, tokens_consumed);
 		}
 		else if(cell_type.type == CellType::PHYSICAL ){
+			// use the token
+			tokens_consumed++;
 			
 			const PhysicalCell &cell = cell_type.physical;
 			const Morphology &morph = morphologies.get(cell.morphology);
@@ -4102,28 +4399,71 @@ struct ImportState{
 		assert(tokens.size() > 0);
 		const std::string first_identifier = string_split(tokens[0],"[")[0];
 		const char *sId = first_identifier.c_str();
+		Int tokens_consumed = 0;
 		
 		// LATER complain if name is ambiguous
 		Int group_seq = -1;
 		if( (group_seq = net.populations.get_id(sId)) >= 0 ){
 			
-		}
-		else if( (group_seq = net.populations.get_id(sId)) >= 0 ){
+			if ( !ParseLemsSegmentLocator(log, tokens, net, path, tokens_consumed) ) return false;
 			
+			// if (cell) segment locator is valid, then it is a property of a cell in a population, and the cell_type is valid.
+			const Network::Population &population = net.populations.get(path.population);
+			const CellType &cell_type = cell_types.get(population.component_cell);
+			
+			return ParseLemsQuantityPath_CellProperty(log, cell_type, tokens, path, tokens_consumed );
+		}
+		else if( (group_seq = net.input_lists.get_id(sId)) >= 0 ){
+			// access inputs in an ordered way, it is experimental though
+			path.type = Simulation::LemsQuantityPath::INPUT;
+			const Network::InputList &list = net.input_lists.get(group_seq);
+			const InputSource &input = input_sources.get(list.component);
+			// const Int pop_seq = list.population;
+			// [](const Network::InputList &group, Int id){return ( 0 <= id && id < (Int)group.input_instances_seq.size() ) ? id : -1 ;}
+			path.input.list_seq = group_seq;
+			if ( !ParseLemsGroupLocator(log, tokens, "inputList", net.input_lists, [](const Network::InputList &group, Int id){return group.input_instances_seq.getSequential(id);}, path.input.list_seq, path.input.inst_seq, tokens_consumed) ) return false;
+			
+			// TODO check for weight, delay here maybe?
+			return ParseLemsQuantityPath_InputInstance(log, input, tokens, path.input, tokens_consumed);
+		}
+		else if( (group_seq = net.projections.get_id(sId)) >= 0 ){
+			path.type = Simulation::LemsQuantityPath::SYNAPSE;
+			const Network::Projection &proj = net.projections.get(group_seq);
+			
+			if(!ParseLemsGroupLocator(log, tokens, "projection", net.projections, [](const Network::Projection &group, Int id){return group.connections.getSequential(id);}, path.synapse.proj_seq, path.synapse.conn_seq, tokens_consumed)) return false;
+			
+			// now branch according to property type
+			if(!(tokens_consumed+2 <= (Int)tokens.size())){
+				log.error("incomplete path for projection element");
+				return false;
+			}
+			
+			const Network::Projection::Connection &conn = proj.connections.contents[path.synapse.conn_seq];
+			// check for pre, post
+			if(!ParseSynapseLocation(log, conn.type, tokens[tokens_consumed].c_str(), path.synapse.location)) return false;
+			tokens_consumed++;
+			
+			Int syn_seq = path.synapse.GetSynSeq(conn);
+			const SynapticComponent &syn = synaptic_components.get(syn_seq);
+			// TODO check for weight, delay here maybe?
+			
+			return ParseLemsQuantityPath_SynapticComponent(log, syn, tokens, path.synapse, tokens_consumed);
+			// FIXME record a synapse to make sure it works
+		}
+		// parse them for upcoming refs
+		// and get type!
+		// FIXME fractionAlong for transmission !
+		// TODO flesh this out fully, with special cases, ions, and such.
+		// TODO make a reverse toString() for lemsquantitypaths.
+		// path locations: parse, gettype, print, to tabloc.
+		else{
+			log.error("unknown top level identifier \"%s\"", sId);
+			return false;
 		}
 		
-		int tokens_consumed = 0;
-		if ( !ParseLemsSegmentLocator(log, tokens, net, path, tokens_consumed) ) return false;
-		
-		// if (cell) segment locator is valid, then it is a property of a cell in a population, and the cell_type is valid.
-		const Network::Population &population = net.populations.get(path.population);
-		const CellType &cell_type = cell_types.get(population.component_cell);
-		
-		return ParseLemsQuantityPath_CellProperty(log, cell_type, tokens, path, tokens_consumed );
-		
-		// TODO access projection and input_lists.
+		// TODO access projections and input_lists.
 	}
-	bool ParseLemsEventPathInComponent( const ImportLogger &log, const pugi::xml_node &eOutEl, const ComponentInstance &instance, const std::vector<std::string> &tokens, const char *sEventPort, Simulation::LemsInstanceEventPath &liep, int &tokens_consumed) const {
+	bool ParseLemsEventPathInComponent( const ImportLogger &log, const pugi::xml_node &eOutEl, const ComponentInstance &instance, const std::vector<std::string> &tokens, const char *sEventPort, Simulation::LemsInstanceEventPath &liep, Int &tokens_consumed) const {
 		
 		if( tokens_consumed < (int)tokens.size() ){
 			log.error( eOutEl, "LEMS child component event outputs not yet supported" );
@@ -4176,7 +4516,7 @@ struct ImportState{
 			return false;
 		}
 	}
-	bool ParseLemsEventPath_InputInstance( const ImportLogger &log, const pugi::xml_node &eOutEl, const InputSource &input, const std::vector<std::string> &tokens, const char *sEventPort, Simulation::InputInstanceEventPath &instance_event_path, int &tokens_consumed ) const {
+	bool ParseLemsEventPath_InputInstance( const ImportLogger &log, const pugi::xml_node &eOutEl, const InputSource &input, const std::vector<std::string> &tokens, const char *sEventPort, Simulation::InputInstanceEventPath &instance_event_path, Int &tokens_consumed ) const {
 		
 		// work only with LEMSified stuff for now
 		if( input.component.ok() ){
@@ -4191,10 +4531,10 @@ struct ImportState{
 	bool ParseLemsEventPath(const ImportLogger &log, const pugi::xml_node &eOutEl, const char *comp_path_str, const char *out_eventPort, const Network &net, Simulation::LemsEventPath &path) const {
 		
 		auto tokens = string_split(std::string(comp_path_str), "/");
-		int tokens_consumed = 0;
+		Int tokens_consumed = 0;
 		if ( !ParseLemsSegmentLocator(LogWithElement{log,eOutEl}, tokens, net, path, tokens_consumed) ) return false;
 		
-		int comp_token_id = tokens_consumed;
+		Int comp_token_id = tokens_consumed;
 		
 		// now branch according to property type? should be a spike source
 		if( comp_token_id < (int)tokens.size() ){
@@ -4233,7 +4573,7 @@ struct ImportState{
 		}
 		else if(cell_type.type == CellType::PHYSICAL ){
 			
-			if( comp_token_id == (int)tokens.size() ){
+			if( comp_token_id == (Int)tokens.size() ){
 				// right on the segment
 				// TODO check if Vthreshold is defined for that segment
 				
@@ -5293,33 +5633,48 @@ struct ImportState{
 			else if(strcmp(eNetEl.name(), "inputList") == 0){
 				const auto &eInp = eNetEl;
 				
-				Network::Input input_instance;
+				auto list_name = RequiredNmlId(log, eInp);
+				if(!list_name) return false;
+				if(net.input_lists.has(list_name)){
+					log.error(eInp, "inputList %s already defined", list_name);
+					return false;
+				}
+				
+				Network::InputList list;
 				
 				//get component
 				auto inpName = eInp.attribute("component").value();
-				input_instance.component_type = input_sources.get_id(inpName);
-				if(input_instance.component_type < 0){
+				list.component = input_sources.get_id(inpName);
+				if(list.component < 0){
 					log.error(eInp, "input type %s not found", inpName);
 					return false;
 				}
 				
 				auto popName = eInp.attribute("population").value();
-				input_instance.population = net.populations.get_id(popName);
-				if(input_instance.population < 0){
+				list.population = net.populations.get_id(popName);
+				if(list.population < 0){
 					log.error(eInp, "input target population %s not found", popName);
 					return false;
 				}
 				
 				// and check signature compatibility
-				Int cell_type_seq = net.populations.get(input_instance.population).component_cell;
-				const InputSource &input_source = input_sources.get(input_instance.component_type); // keep specific inpName, just in case
+				Int cell_type_seq = net.populations.get(list.population).component_cell;
+				const InputSource &input_source = input_sources.get(list.component); // keep specific inpName, just in case
 				
 				if( !CheckInputComponentWithCellType( log, eInp, input_source, inpName, cell_type_seq ) ) return false; 
 				
 				// TODO verify weights are handled properly
-				
 				for(const auto &eInpEl : eInp.children()){
 					if( strcmp(eInpEl.name(), "input") == 0 || strcmp(eInpEl.name(), "inputW") == 0 ){
+						
+						Network::Input input_instance;
+						input_instance.component_type = list.component, input_instance.population = list.population;
+						Int instance_id;
+						
+						if(!(StrToL(eInpEl.attribute("id").value(), instance_id) && instance_id >= 0)){
+							log.error(eInpEl, "%s requires a non-negative integer id", eInpEl.name());
+							return false;
+						}
 						
 						if( !parseCompartmentTarget(log, eInpEl, morphologies, cell_types, net.populations,
 							input_instance.population, input_instance.cell_instance, input_instance.segment, input_instance.fractionAlong, true) ) return false;
@@ -5328,13 +5683,14 @@ struct ImportState{
 							if( !ParseQuantity<Dimensionless>(log, eInpEl, "weight", input_instance.weight) ) return false;
 						}
 						
+						list.input_instances_seq.add((Int) net.inputs.size(), instance_id);
 						net.inputs.push_back(input_instance); // yay!
 					}
 					else{
 						// unknown, ignore
 					}
 				}
-				
+				net.input_lists.add(list, list_name);
 			}
 			else{
 				// unknown, ignore
@@ -5466,7 +5822,7 @@ struct ImportState{
 					else if( strcmp( sElmType, "voltageConcDepBlockMechanism" ) == 0 ){
 						
 						if( has_block_mechanism ){
-							log.error(eSynElm, "block mechanism already defined" );
+							log.error(eSynElm, "block mechanism already defined" ); // support multiple LATER if the need arises
 							return false;
 						}
 						
@@ -6008,7 +6364,7 @@ struct ImportState{
 				return false;
 			}
 			
-			// now do a devious trick, refactor LATER
+			// now do a devious trick, refactor much LATER if ever
 			// along with the LEMS component, attach a mapping to the LEMS version
 			// also initialize the id_seq to show it's missing
 			inp.component.clear();
@@ -6132,7 +6488,7 @@ struct ImportState{
 		std::string filename_s = GetRelativeFilePath((loading_from_file ? loading_from_file : "."), sRelFilename);
 		const char *filename = filename_s.c_str();
 		
-		std::ifstream fin(filename);
+		std::ifstream fin(filename, std::ios::binary);
 		// check if opening a file failed
 		if (fin.fail()) {
 			log.error(eSimEl, "could not open file \"%s\": %s", filename, strerror(errno));
@@ -6166,35 +6522,42 @@ struct ImportState{
 			const ImportLogger &log;
 			const char *filename;
 			const std::vector< ptrdiff_t > &tokenized_line_byte_offset;
-			void warning(int tokenized_lineno, int token, const char *format, ...) const {
+			void warning(Int tokenized_lineno, Int token, const char *format, ...) const {
 				va_list args; va_start(args, format);
-				log.warning(filename, tokenized_line_byte_offset[tokenized_lineno], format, args);
+				log.warning(args, filename, tokenized_line_byte_offset[tokenized_lineno], format);
 				va_end(args);
 			}
-			void error(int tokenized_lineno, int token, const char *format, ...) const {
+			void error(Int tokenized_lineno, Int token, const char *format, ...) const {
 				va_list args; va_start(args, format);
-				log.error(filename, tokenized_line_byte_offset[tokenized_lineno], format, args);
+				log.error(args, filename, tokenized_line_byte_offset[tokenized_lineno], format);
 				va_end(args);
+			}
+			void warning(va_list args, Int tokenized_lineno, Int token, const char *format) const {
+				log.warning(args, filename, tokenized_line_byte_offset[tokenized_lineno], format);
+			}
+			void error(va_list args, Int tokenized_lineno, Int token, const char *format) const {
+				log.error(args, filename, tokenized_line_byte_offset[tokenized_lineno], format);
 			}
 		} log = {that_log, filename, tokenized_line_byte_offset};
 		
 		struct LogInsideToken{
 			const LogCustomFile &log;
-			int tokenized_lineno, token;
+			Int tokenized_lineno, token;
 			// LogWithElement():{}
 			void error(const char *format, ...) const {
 				va_list args; va_start(args, format);
-				log.error(tokenized_lineno, token, format, args);
+				log.error(args, tokenized_lineno, token, format);
 				va_end (args);
 			}
 			void warning(const char *format, ...) const {
 				va_list args; va_start(args, format);
-				log.error(tokenized_lineno, token, format, args);
+				log.warning(args, tokenized_lineno, token, format);
 				va_end (args);
 			}
 		};
 		
-		auto IdListToSeqList = [&log](int lineno, int token, const std::string &targets_list, const auto &container, const char *item_type, const char *container_type, auto &items_seq ){
+		// when container is a CollectionWithIds or implements the same interface for getSequential, getId
+		auto IdListToSeqList = [&log](Int lineno, Int token, const std::string &targets_list, const auto &container, const char *item_type, const char *container_type, auto &items_seq ){
 			auto ttokens = string_split(targets_list, ",");
 			for( const std::string &ttoken : ttokens){
 				long cell_id = -1, item_seq = -1;
@@ -6208,18 +6571,267 @@ struct ImportState{
 			// TODO extract items list
 			auto items_sorted = items_seq;
 			std::sort(items_sorted.begin(), items_sorted.end());
-			for(int i = 0; i+1 < (int) items_sorted.size(); i++){
+			for(Int i = 0; i+1 < (Int) items_sorted.size(); i++){
 				if(items_sorted[i] == items_sorted[i+1]){
 					log.error(lineno, token, "%s id \"%s\" is specified more than once", item_type, std::to_string(container.getId(items_sorted[i])).c_str());
 					return false;
 				}
 			}
+			// TODO check if set is empty, i guess?
+			return true;
+		};
+		// when container is a std::vector
+		auto SeqListToSeqList = [&IdListToSeqList](Int lineno, Int token, const std::string &targets_list, const auto &container, const char *item_type, const char *container_type, auto &items_seq ){
+			struct LikeACollectionWithIds{
+				decltype(container) &_container;
+				Int getSequential(Int id) const {
+					if( 0 <= id && id <= (Int)_container.size()) return id;
+					else return -1;
+				}
+				Int getId(Int id) const { return id; }
+			} confaker = {container};
+			return IdListToSeqList(lineno, token, targets_list, confaker, item_type, container_type, items_seq);
+		};
+		(void) SeqListToSeqList; // in case direct-mapped vectors appear LATER
+		
+		auto ParseCheckRef = [this, &net](const auto &log, const std::string &value_term, const Dimension &dimension, Simulation::LemsQuantityPath &path_value ){
+						
+			if(!ParseLemsQuantityPath(log, value_term.c_str(), net, path_value)) return false;
+			// check type and dimension
+			ComponentType::NamespaceThing::Type path_value_type; Dimension value_dimension;
+			if(!model.GetLemsQuantityPathType(net, path_value, path_value_type, value_dimension)) return false;
+			if(path_value_type != ComponentType::NamespaceThing::STATE){
+				log.error("value for VariableReference must refer to a state variable");
+			}
+			if( value_dimension != dimension ){
+				log.error("value for VariableReference has dimension %s, but it should have dimension %s like the property being set", dimensions.Stringify(value_dimension), dimensions.Stringify(dimension));
+			}
 			return true;
 		};
 		
-		for(int lineno = 0; (size_t) lineno < tokenized_lines.size();){
+		auto MustBeSettable = [](const auto &log, ComponentType::NamespaceThing::Type &path_type, bool &is_ref){
+			is_ref = false;
+			if(path_type == ComponentType::NamespaceThing::STATE
+			|| path_type == ComponentType::NamespaceThing::PROPERTY){
+				// it's ok, they can be set
+			}
+			else if(path_type == ComponentType::NamespaceThing::REQUIREMENT){
+				// can be set only if it's a free, nont structureal requirement
+				if(false){ //VARREQ or REF? i guess, the componenttype would have to be queried otherwise 
+					is_ref = true;
+				}
+				else{
+					log.error("%s term can only refer to a LEMS VariableRequirement", ComponentType::NamespaceThing::getTypeName(path_type));
+					return false;
+				}
+			}
+			else{
+				log.error("term must refer to a State variable, Parameter, Property, or VariableRequirement; not a %s", ComponentType::NamespaceThing::getTypeName(path_type));
+				return false;
+			}
+			return true;
+		};
+					
+		auto ParseToken_ValueSpecifier = [this, &ParseCheckRef](const auto &log, Int lineno, const std::vector<std::string> &line, const Dimension &dimension, bool is_ref, Simulation::CustomSetup::Statement &set, Real &value, LemsUnit &real_value_units, Simulation::LemsQuantityPath &path_value, Int &tokens_consumed){
+			
+			Int value_token = tokens_consumed;
+			const std::string &value_term = line[value_token];
+			tokens_consumed++;
+			
+			if(value_term == "multi"){
+				set.multi_mode = true;
+			}
+			else if(value_term == "cable"){
+				set.cable_mode = true;
+			}
+			else if(value_term == "multicable"){
+				set.multi_mode = true;
+				set.cable_mode = true;
+			}
+			else{
+				// it should be a value
+				if(is_ref){
+					LogInsideToken log_proxy = {log, lineno, value_token};
+					if(!ParseCheckRef(log_proxy, value_term, dimension, path_value)) return false;
+				}
+				else{
+					if(!StrToF(value_term.c_str(), value)){
+						log.error(lineno, value_token, "could not parse %s as numerical value, 'multi', 'cable' or 'cablemulti'", value_term.c_str());
+					}
+				}
+			}
+			
+			// then if the value is dimensional, get units
+			if(	!is_ref && dimension != Dimension::Unity() ){
+				Int units_token = tokens_consumed;
+				if(!( units_token < (Int)line.size() )){
+					log.error(lineno, value_token, "statement needs units for property of dimensionality %s", dimensions.Stringify(dimension).c_str());
+					return false;
+				}
+				const std::string &unit_name = line[units_token];
+				tokens_consumed++;
+				
+				// see also ParseLemsQuantity, LATER refer to this logic and perhaps extract it for when validating supplied units
+				if(!dimensions.Has(dimension)){
+					log.error(lineno, units_token, "there are no specified %s units", dimensions.Stringify(dimension).c_str() );
+					return false;
+				}
+				bool units_ok = false;
+				for( auto scale : dimensions.GetUnits(dimension) ){
+					if(unit_name == scale.name){
+						real_value_units = scale;
+						value = scale.ConvertTo( value, dimensions.GetNative(dimension) ); // adjust units right away, if it's a single value.  If it's multi, ajust as the values rows are being read. 
+						units_ok = true;
+						break;
+					}
+				}
+				if(!units_ok){
+					//unit name not found in list!
+					std::string known_list; for( auto scale : dimensions.GetUnits(dimension) ) known_list += " ", known_list += scale.name;
+					log.error(lineno, units_token, "unknown property units: %s for %s (supported:%s)", unit_name.c_str(), dimensions.Stringify(dimension).c_str(), known_list.c_str() );
+					return false;
+				}
+			}
+			
+			// done
+			return true;
+		};
+		
+		// read this many lines (or use value or path_value if inline) into the set statement, according to its data flags
+		auto ParseSetData = [&ParseCheckRef, &tokenized_lines, this]( 
+			const auto &log, Int lineno, const Int all_instances_count, 
+			const Real &value, const Simulation::LemsQuantityPath &path_value, const ScaleEntry &real_value_units, const Dimension &dimension, const bool &is_ref, 
+			Simulation::CustomSetup::Statement &set, Int &lines_to_advance 
+		){
+			// then if multi was specified, read this many lines of data
+			auto ReadDataRow_Number = [&log]( Int linenono, Int columns_to_read, const auto &line, std::vector<Real> &row){
+				assert((Int)line.size() == 1+columns_to_read);
+				
+				row.resize(columns_to_read);
+				for(Int i = 0; i < columns_to_read; i++){
+					const auto &ttoken = line[1+i];
+					if(!StrToF(ttoken.c_str(), row[i])){
+						log.error(linenono, 1+i, " could not parse as number: %s", ttoken.c_str() );
+						return false;
+					}
+				}
+				return true;
+			};
+			auto ReadDataRow_Ref = [&log, &ParseCheckRef]( Int linenono, Int columns_to_read, const Dimension &dimension, const auto &line, std::vector<Simulation::LemsQuantityPath> &row){
+				assert((Int)line.size() == 1+columns_to_read);
+				
+				row.resize(columns_to_read);
+				for(Int i = 0; i < columns_to_read; i++){
+					const auto &ttoken = line[1+i];
+					LogInsideToken log_proxy = {log, linenono, 1+i};
+					if(!ParseCheckRef(log_proxy, ttoken, dimension, row[i])) return false;
+				}
+				return true;
+			};
+			
+			Int items_to_read = 0;
+			if(set.multi_mode){
+				if(set.items_seq.empty()) items_to_read = all_instances_count;
+				else items_to_read = (Int) set.items_seq.size();
+			}
+			
+			Int lines_to_read = 0, columns_to_read = -1;
+			if(set.cable_mode){
+				columns_to_read = -1;
+				
+				if(set.multi_mode) lines_to_read = 1+items_to_read;
+				else lines_to_read = 1+1; // one for fractionAlong cable, one for values
+			}
+			else if(set.multi_mode){
+				lines_to_read = 1;
+				columns_to_read = items_to_read;
+			}
+			else{
+				// it must be a single value
+				if(false){
+					// TODO refs
+					set.ref_data.resize(1);
+					set.ref_data[0].resize(1);
+					set.ref_data[0][0] = path_value;
+				}
+				else{
+					if( value != value ){
+						log.error(lineno, 6, "internal error: single value %s unset");
+						return false;
+					}
+					set.real_data.resize(1);
+					set.real_data[0].resize(1);
+					set.real_data[0][0] = value;
+				}
+			}
+			// printf("columns %ld\n", columns_to_read);
+			for(Int linenono = lineno + 1; linenono < lineno + 1 + lines_to_read; linenono++){
+				if(!( linenono < (Int) tokenized_lines.size() && !tokenized_lines[linenono].empty() && tokenized_lines[linenono][0] == "values" )){
+					log.error(std::min(linenono-1, (Int) (tokenized_lines.size() - 1)), 0, "'set' line has only %lld 'values' lines following, when it should have %lld", (long long) (linenono - (lineno + 1)), (long long)lines_to_read);
+					return false;
+				}
+				
+				const auto &tokens = tokenized_lines[linenono];
+				assert(tokens.size() > 0);
+				
+				std::vector<Real> new_row;
+				
+				// Whatever the type of value, in cable mode the first row must be real data of fractionAlong
+				if(set.cable_mode && linenono == lineno){
+					// the following rows will have as many elements as this index row.
+					columns_to_read = (Int)tokens.size()-1;
+					
+					if(!ReadDataRow_Number(linenono, columns_to_read, tokens, new_row )) return false;
+					// check this line for number of columns to follow.
+					// Also verify that samples are between [0,1] and increasing.
+					
+					assert(new_row.size() > 0);
+					for(Int i = 0; i < (Int) new_row.size(); i ++ ){
+						auto x = new_row.size();
+						if(!( 0 <= x && x <= 1 )){
+							log.error(linenono, i+1, "fractionAlong sample point %d is not between 0 and 1", i); // add 1 for 'values' token in the start of line
+							return false;
+						}
+						if(i == 0) continue;
+						if(!( new_row[i-1] < x )){
+							log.error(linenono, i+1, "fractionAlong sample point %d is non-increasing", i); // add 1 for 'values' token in the start of line
+							return false;
+						}
+					}
+					
+					set.real_data.push_back(new_row);
+				}
+				else{
+					Int values_provided = (Int)tokens.size() - 1;
+					if(!( values_provided == columns_to_read )){
+						log.error(linenono, std::min(values_provided, columns_to_read)+1-1, " %ld values were expected in row, but %ld were provided instead", columns_to_read, values_provided );
+						return false;
+					}
+					
+					// printf("df %d %d\n", (int)set.cable_mode, (int)set.multi_mode);
+					if(is_ref){
+						// append ref data
+						std::vector<Simulation::LemsQuantityPath> new_row;
+						if(!ReadDataRow_Ref(linenono, columns_to_read, dimension, tokens, new_row )) return false;
+						set.ref_data.push_back(new_row);
+					}
+					else{
+						// append numerical data
+						if(!ReadDataRow_Number(linenono, columns_to_read, tokens, new_row )) return false;
+						// adjust scale from specified units to engine units
+						for(auto &value : new_row) value = real_value_units.ConvertTo( value, dimensions.GetNative(dimension) );
+						set.real_data.push_back(new_row);
+					}
+				}
+				// done with values line
+			}
+			lines_to_advance += lines_to_read;
+			return true;
+		};
+		
+		for(Int lineno = 0; (size_t) lineno < tokenized_lines.size();){
 			const auto &line = tokenized_lines[lineno];
-			int lines_to_advance = 1;
+			Int lines_to_advance = 1;
 			if(line[0] == "set"){
 				Simulation::CustomSetup::Statement set;
 				// set statement, of what thing?
@@ -6228,6 +6840,7 @@ struct ImportState{
 					return false;
 				}
 				const auto &itemtype = line[1];
+				// printf("set! %s|\n", itemtype.c_str());
 				if(itemtype == "cell"){
 					set.type = Simulation::CustomSetup::Statement::POPULATION;
 					// then get population
@@ -6242,12 +6855,12 @@ struct ImportState{
 					const CellType &cell = cell_types.get(pop.component_cell);
 					
 					if( line.size() < 7){
-						log.error(lineno, 2, "'set cell' statement needs targets in population, target segments, target property and value ");
+						log.error(lineno, 2, "'set cell' statement needs targets in population, target segments, target property and value");
 						return false;
 					}
 					
 					// then get list of targets
-					const std::string targets_list = line[3];
+					const std::string &targets_list = line[3];
 					auto &items_seq = set.items_seq;
 					items_seq.clear();
 					if(targets_list == "all"){
@@ -6275,9 +6888,9 @@ struct ImportState{
 						}
 						
 						// list of segment ids
-						if(!( IdListToSeqList(lineno, 3, targets_list, pop.instances, "segment", (std::string("cell type ")+ cell_types.getName(pop.component_cell)).c_str(), items_seq) )) {
+						if(!( IdListToSeqList(lineno, 3, segments_list, pop.instances, "segment", (std::string("cell type ")+ cell_types.getName(pop.component_cell)).c_str(), items_seq) )) {
+							log.error(lineno, 4, "segment specifier \"%s\" could not be resolved to a list of segment ID's or a known segment group", segments_list);
 							return false;
-							//log_error(lineno, 4, "segment specifier \"%s\" could not be resolved to a list of segment ID's or a known segment group", segments_list);
 						}
 						
 					}
@@ -6291,10 +6904,14 @@ struct ImportState{
 					if(set.seggroup_seq < 0 && set.segments_seq.size() == 1 ) loca.segment_seq = set.segments_seq[0];
 					
 					const std::string &path_term = line[5];
-					auto tokens = string_split(path_term, "/"); int tokens_consumed = 0;
+					{
+					auto tokens = string_split(path_term, "/"); Int tokens_consumed = 0;
 					LogInsideToken log_proxy = {log, lineno, 5};
-					if(!ParseLemsQuantityPath_CellProperty(log_proxy, cell, tokens, path,tokens_consumed )) return false;
+					if(!ParseLemsQuantityPath_CellProperty(log_proxy, cell, tokens, path, tokens_consumed )) return false;
+					}
 					// check that the specified segments match the specified distribution; if not, abort. do not restrict 'set' to segments under the selected distribution, because this could become ambiguous futher on (for example, with cable mode).
+					// XXX allow segments either standalone or cables, but not both on the same statement!
+					// TODO allow fractionAlong in segments for finer control and less indirection than cable ...?
 					if(path.type == Simulation::LemsQuantityPath::CHANNEL
 					|| path.type == Simulation::LemsQuantityPath::ION_POOL){
 						assert(cell.type == CellType::PHYSICAL);
@@ -6338,241 +6955,215 @@ struct ImportState{
 							// pass
 						}
 					}
-					
-					ComponentType::NamespaceThing::Type path_type; Dimension dimension;
-					bool is_ref = false;
+					// and check if the path is indeed settable
+					ComponentType::NamespaceThing::Type path_type; Dimension dimension; bool is_ref;
 					if(!model.GetLemsQuantityPathType(net, path, path_type, dimension)) return false;
-					if(path_type == ComponentType::NamespaceThing::STATE
-					|| path_type == ComponentType::NamespaceThing::PROPERTY){
-						// it's ok, they can be set
-					}
-					else if(path_type == ComponentType::NamespaceThing::REQUIREMENT){
-						// can be set only if it's a free, nont structureal requirement
-						if(false){ //VARREQ or REF? i guess, the componenttype would have to be queried otherwise 
-							is_ref = true;
-						}
-						else{
-							log.error(lineno, 5, "Requirement term can only refer to a LEMS VariableRequirement", ComponentType::NamespaceThing::getTypeName(path_type));
-							return false;
-						}
-					}
-					else{
-						log.error(lineno, 5, "term must refer to a State variable, Parameter, Property, or VariableRequirement; not a %s", ComponentType::NamespaceThing::getTypeName(path_type));
-						return false;
-					}
-					
-					auto ParseCheckRef = [this, &net](auto &log, const std::string &value_term, const Dimension &dimension, Simulation::LemsQuantityPath &path_value ){
-						
-						if(!ParseLemsQuantityPath(log, value_term.c_str(), net, path_value)) return false;
-						// check type and dimension
-						ComponentType::NamespaceThing::Type path_value_type; Dimension value_dimension;
-						if(!model.GetLemsQuantityPathType(net, path_value, path_value_type, value_dimension)) return false;
-						if(path_value_type != ComponentType::NamespaceThing::STATE){
-							log.error("value for VariableReference must refer to a state variable");
-						}
-						if( value_dimension != dimension ){
-							log.error("value for VariableReference has dimension %s, but it should have dimension %s like the property being set", dimensions.Stringify(value_dimension), dimensions.Stringify(dimension));
-						}
-						return true;
-					};
+					if(!MustBeSettable(LogInsideToken{log, lineno, 5}, path_type, is_ref)) return false;
 					
 					// then get value
-					const std::string &value_term = line[6];
-					Real value = NAN;
-					Simulation::LemsQuantityPath path_value;
-					if(value_term == "multi"){
-						set.multi_mode = true;
-					}
-					else if(value_term == "cable"){
-						set.cable_mode = true;
-					}
-					else if(value_term == "multicable"){
-						set.multi_mode = true;
-						set.cable_mode = true;
-					}
-					else{
-						// it should be a value
-						if(is_ref){
-							LogInsideToken log_proxy = {log, lineno, 6};
-							if(!ParseCheckRef(log_proxy, value_term, dimension, path_value)) return false;
-						}
-						else{
-							if(!StrToF(value_term.c_str(), value)){
-								log.error(lineno, 6, "could not parse %s as numerical value, 'multi', 'cable' or 'cablemulti'", value_term.c_str());
-							}
-						}
-					}
+					Real value = NAN; LemsUnit real_value_units = dimensions.GetNative(Dimension::Unity()); Simulation::LemsQuantityPath path_value; // one of these is used, according to is_ref
+					Int tokens_consumed_this_far = 6;
+					Int tokens_consumed = tokens_consumed_this_far;
+					if(!ParseToken_ValueSpecifier(log, lineno, line, dimension, is_ref, set, value, real_value_units, path_value, tokens_consumed)) return false;
+					
 					if(set.cable_mode) {
 						if(cell.type != CellType::PHYSICAL){
-							log.error(lineno, 6, "value specifier %s must be used for physical cells, not %s", value_term.c_str(), cell_types.getName(pop.component_cell));
+							log.error(lineno, tokens_consumed_this_far, "value specifier %s must be used for physical cells, not %s", line[tokens_consumed_this_far].c_str(), cell_types.getName(pop.component_cell));
 							return false;
 						}
 						else if(!( morphologies.get(cell.physical.morphology).segment_groups.at(set.seggroup_seq).is_cable)){
-							log.error(lineno, 6, "value specifier %s must be used for a segment group that is a cable; instead it refers to \"%s\"", value_term.c_str(), segments_list.c_str());
+							log.error(lineno, tokens_consumed_this_far, "value specifier %s must be used for a segment group that is a cable; instead it refers to \"%s\"", line[tokens_consumed_this_far].c_str(), segments_list.c_str());
 							return false;
 						}
 					}
 					
-					// then if the value is dimensional, get units
-					if(	!is_ref && dimension != Dimension::Unity() ){
-						if( line.size() < 8){
-							log.error(lineno, 7-1, "'set cell' statement needs units for property of dimensionality %s", dimensions.Stringify(dimension).c_str());
-							return false;
-						}
-						// see also ParseLemsQuantity, TODO refer to this logic and perhaps extract it for when validating supplied units
-						const std::string &unit_name = line[7];
-						if(!dimensions.Has(dimension)){
-							log.error(lineno, 7-1, "there are no specified %s units", dimensions.Stringify(dimension).c_str() );
-							return false;
-						}
-						bool units_ok = false;
-						for( auto scale : dimensions.GetUnits(dimension) ){
-							if(unit_name == scale.name){
-								
-								value = scale.ConvertTo( value, dimensions.GetNative(dimension) );
-								//printf("valll %f\n",num);
-								units_ok = true;
-								break;
-							}
-						}
-						if(!units_ok){
-							//unit name not found in list!
-							log.error(lineno, 7-1, "unknown property units: %s for %s", unit_name, dimensions.Stringify(dimension).c_str() );
-							return false;
-						}
+					if(tokens_consumed < (Int)line.size()){
+						// TODO complain if there are more tokens, yet unparsed in the line
 					}
-					// TODO complain if there are more tokens, yet unparsed in the line
 					
-					// then if multi was specified, read this many lines of data
-					auto ReadDataRow_Number = [&log]( int linenono, Int columns_to_read, const auto &line, std::vector<Real> &row){
-						assert((Int) line.size() == 1+columns_to_read);
-						
-						row.resize(columns_to_read);
-						for(int i = 0; i < columns_to_read; i++){
-							const auto &ttoken = line[1+i];
-							if(!StrToF(ttoken.c_str(), row[i])){
-								log.error(linenono, 1+i, " could not parse as number: %s", ttoken.c_str() );
-								return false;
-							}
-						}
-						return true;
-					};
-					auto ReadDataRow_Ref = [&log, &ParseCheckRef]( int linenono, Int columns_to_read, const Dimension &dimension, const auto &line, std::vector<Simulation::LemsQuantityPath> &row){
-						assert((Int) line.size() == 1+columns_to_read);
-						
-						row.resize(columns_to_read);
-						for(int i = 0; i < columns_to_read; i++){
-							const auto &ttoken = line[1+i];
-							LogInsideToken log_proxy = {log, linenono, 1+i};
-							if(!ParseCheckRef(log_proxy, ttoken, dimension, row[i])) return false;
-						}
-						return true;
-					};
-					
-					Int items_to_read = 0;
-					if(set.multi_mode){
-						if(set.items_seq.empty()) items_to_read = (Int) pop.instances.size();
-						else items_to_read = (Int) set.items_seq.size();
-					}
-					printf("items %ld\n", items_to_read);
-					
-					Int lines_to_read = 0, columns_to_read = -1;
-					if(set.cable_mode){
-						columns_to_read = -1;
-						
-						if(set.multi_mode) lines_to_read = 1+items_to_read;
-						else lines_to_read = 1+1; // one for fractionAlong cable, one for values
-					}
-					else if(set.multi_mode){
-						lines_to_read = 1;
-						columns_to_read = items_to_read;
-					}
-					else{
-						// it must be a single value
-						if(false){
-							// TODO refs
-							set.ref_data.resize(1);
-							set.ref_data[0].resize(1);
-							set.ref_data[0][0] = path_value;
-						}
-						else{
-							if( value != value ){
-								log.error(lineno, 6, "internal error: single value %s unset", value_term.c_str());
-								return false;
-							}
-							set.real_data.resize(1);
-							set.real_data[0].resize(1);
-							set.real_data[0][0] = value;
-						}
-					}
-					printf("columns %ld\n", columns_to_read);
-					for(int linenono = lineno + 1; linenono < lineno + 1 + lines_to_read; linenono++){
-						const auto &tokens = tokenized_lines[linenono];
-						assert(tokens.size() > 0);
-						
-						if(!( linenono < (int) tokenized_lines.size() && tokens[0] == "values" )){
-							log.error(linenono-1, 0, "'set' line has only %d 'values' lines following, when it should have %d", linenono , lines_to_read);
-							return false;
-						}
-						
-						std::vector<Real> new_row;
-						
-						// Whatever the type of value, in cable mode the first row must be real data of fractionAlong
-						if(set.cable_mode && linenono == lineno){
-							// the following rows will have as many elements as this index row.
-							columns_to_read = (Int)tokens.size()-1;
-							
-							if(!ReadDataRow_Number(linenono, columns_to_read, tokens, new_row )) return false;
-							// check this line for number of columns to follow.
-							// Also verify that samples are between [0,1] and increasing.
-							
-							assert(new_row.size() > 0);
-							for(int i = 0; i < (int) new_row.size(); i ++ ){
-								auto x = new_row.size();
-								if(!( 0 <= x && x <= 1 )){
-									log.error(linenono, i+1, "fractionAlong sample point %d is not between 0 and 1", i); // add 1 for 'values' token in the start of line
-									return false;
-								}
-								if(i == 0) continue;
-								if(!( new_row[i-1] < x )){
-									log.error(linenono, i+1, "fractionAlong sample point %d is non-increasing", i); // add 1 for 'values' token in the start of line
-									return false;
-								}
-							}
-							
-							set.real_data.push_back(new_row);
-						}
-						else{
-							Int values_provided = (Int)tokens.size() - 1;
-							if(!( values_provided == columns_to_read )){
-								log.error(linenono, std::min(values_provided, columns_to_read)+1-1, " %d values were expected in row, but %d were provided instead", (int)columns_to_read, (int)values_provided );
-								return false;
-							}
-							
-							// printf("df %d %d\n", (int)set.cable_mode, (int)set.multi_mode);
-							if(is_ref){
-								// append ref data
-								std::vector<Simulation::LemsQuantityPath> new_row;
-								if(!ReadDataRow_Ref(linenono, columns_to_read, dimension, tokens, new_row )) return false;
-								set.ref_data.push_back(new_row);
-							}
-							else{
-								// append numerical data
-								if(!ReadDataRow_Number(linenono, columns_to_read, tokens, new_row )) return false;
-								// printf("%zd\n", new_row.size());
-								set.real_data.push_back(new_row);
-							}
-						}
-						// done with values line
-					}
-					lines_to_advance += lines_to_read;
+					if(!ParseSetData(log, lineno, (Int)pop.instances.size(), value, path_value, real_value_units, dimension, is_ref, set, lines_to_advance)) return false;
 					
 					// done with 'set cell'
 				}
-				else if(itemtype == "synapse" || itemtype == "input"){
-					log.error(lineno,1, "'set' statement: type %s not supported yet", line[1].c_str());
+				else if(itemtype == "input"){
+					set.type = Simulation::CustomSetup::Statement::INPUT_LIST;
+					// then get list
+					const char *groupname = line[2].c_str();
+					Int &group_seq = set.group_seq;
+					group_seq = net.input_lists.get_id(groupname);
+					if(group_seq < 0){
+						log.error(lineno, 2, "'set input' statement: input list %s not found", groupname);
+						return false;
+					}
+					const Network::InputList &list = net.input_lists.get(group_seq);
+					const InputSource &input = input_sources.get(list.component);
+					const Int pop_seq = list.population;
+					// const Network::Population &pop = net.populations.get(pop_seq);
+					// const CellType &cell = cell_types.get(pop.component_cell);
+					
+					if( line.size() < 6){
+						log.error(lineno, 2, "'set input' statement needs targets in list, target property and value");
+						return false;
+					}
+					
+					// then get list of targets
+					const std::string &targets_list = line[3];
+					auto &items_seq = set.items_seq;
+					items_seq.clear();
+					if(targets_list == "all"){
+						// special case
+					}
+					else{
+						// list of input instances seq
+						if(!( IdListToSeqList(lineno, 3, targets_list, list.input_instances_seq, "instance", (std::string("input list ")+ groupname).c_str(), items_seq) )) return false;
+					}
+					// then resolve property as partial path
+					auto &path = set.path;
+					// set what is known, leave the rest (of the locator) unset
+					Simulation::LemsSegmentLocator &loca = path;
+					loca.population = pop_seq;
+					loca.cell_instance = -1; loca.segment_seq = -1; // note: they shouldn't be used anyway for attachments...
+					
+					path.type = Simulation::LemsQuantityPath::INPUT;
+					path.input.list_seq = group_seq;
+					path.input.inst_seq = -1;
+					
+					const std::string &path_term = line[4];
+					{
+					auto tokens = string_split(path_term, "/"); Int tokens_consumed = 0;
+					if(!ParseLemsQuantityPath_InputInstance(LogInsideToken{log, lineno, 4}, input, tokens, path.input, tokens_consumed )) return false;
+					}
+					// and check if the path is indeed settable
+					ComponentType::NamespaceThing::Type path_type; Dimension dimension; bool is_ref;
+					if(!model.GetLemsQuantityPathType_InputInstance(path.input, input, path_type, dimension)) return false;
+					if(!MustBeSettable(LogInsideToken{log, lineno, 4}, path_type, is_ref)) return false;
+					
+					// then get value
+					Real value = NAN; LemsUnit real_value_units = dimensions.GetNative(Dimension::Unity()); Simulation::LemsQuantityPath path_value; // one of these is used, according to is_ref
+					Int tokens_consumed_this_far = 5;
+					Int tokens_consumed = tokens_consumed_this_far;
+					if(!ParseToken_ValueSpecifier(log, lineno, line, dimension, is_ref, set, value, real_value_units, path_value, tokens_consumed)) return false;
+
+					if(set.cable_mode){ // or multi_segment_mode TODO
+						log.error(lineno, tokens_consumed_this_far, "value specifier %s must be used for physical cells, not input source %s", line[tokens_consumed_this_far].c_str(), input_sources.getName(list.component));
+						return false;
+					} 
+					
+					if(tokens_consumed < (Int)line.size()){
+						// TODO complain if there are more tokens, yet unparsed in the line
+					}
+					
+					if(!ParseSetData(log, lineno, (Int)list.input_instances_seq.size(), value, path_value, real_value_units, dimension, is_ref, set, lines_to_advance)) return false;
+					printf("data!\n");
+				}
+				else if(itemtype == "synapse"){
+					set.type = Simulation::CustomSetup::Statement::PROJECTION;
+					// then get projection
+					const char *groupname = line[2].c_str();
+					Int &group_seq = set.group_seq;
+					group_seq = net.projections.get_id(groupname);
+					if(group_seq < 0){
+						log.error(lineno, 2, "'set synapse' statement: projection %s not found", groupname);
+						return false;
+					}
+					const Network::Projection &proj = net.projections.get(group_seq);
+					
+					if( line.size() < 7){
+						log.error(lineno, 2, "'set synapse' statement needs targets in list, target location (pre or post), target property and value");
+						return false;
+					}
+					
+					// then get list of targets
+					const std::string &targets_list = line[3];
+					auto &items_seq = set.items_seq;
+					items_seq.clear();
+					if(targets_list == "all"){
+						// special case
+						// NB: suspend the assumption that 'all' is represented by an empty set of items_seq,
+						// to run some checks for all mentioned instances
+						// and restore the set to empty, after that.
+						items_seq.resize(proj.connections.size()); std::iota(items_seq.begin(), items_seq.end(), 0);
+					}
+					else{
+						// list of cell ids
+						if(!( IdListToSeqList(lineno, 3, targets_list, proj.connections, "connection", (std::string("projection ")+ groupname).c_str(), items_seq) )) return false;
+					}
+					// now it gets tricky because the syncomps are not yet necessarily the same for all connections, TODO
+					// with some help from the parser, though, we can get the identical syn component if it is the same across the connection list.
 					// if multi, check if the projection has uniform ... and support only that for now.
-					return false;
+					if(!(items_seq.size() > 0)){
+						log.error(lineno, 2, "item set is empty");
+						return false;
+					}
+					typedef Network::Projection::Connection::Type ConnType;
+					ConnType type; Int preComponent = -1; Int postComponent = -1;
+					const Network::Projection::Connection &conn_exemplar = proj.connections.atSeq(items_seq[0]); 
+					for( Int i = 0; i < (Int)items_seq.size(); i++){
+						const auto &conn = proj.connections.atSeq(items_seq[i]);
+						
+						auto t = conn.type; Int pre = -1, post = -1;
+						switch(t){
+							case ConnType::SPIKING : pre = -1; post = conn.synapse; break;
+							case ConnType::ELECTRICAL : pre = conn.synapse; post = conn.synapse; break;
+							case ConnType::CONTINUOUS : pre = conn.continuous.preComponent; post = conn.continuous.postComponent; break;
+							default: assert(false); return false;
+						}
+						if(i == 0){
+							type = t; preComponent = pre; postComponent = post;
+							continue;
+						}
+						else{
+							if(!( type == t && preComponent == pre && postComponent == post )){
+								log.error(lineno, 2, "target set contains different connection types");
+								return false;
+							}
+						}
+					}
+					if(targets_list == "all"){
+						// NB: restore the assumption that an empty set stands for "all"
+						items_seq.clear();
+					}
+					
+					// then resolve property as partial path
+					auto &path = set.path;
+					// don't fill any part of segment locator, since synapses bridge pairs of cells...
+					path.type = Simulation::LemsQuantityPath::SYNAPSE;
+					path.synapse.proj_seq = group_seq;
+					path.synapse.conn_seq = -1;
+					// get location from token
+					// TODO add 'both' as special case
+					const std::string &location_term = line[4];
+					if(!ParseSynapseLocation(LogInsideToken{log, lineno, 4}, conn_exemplar.type, location_term.c_str(), path.synapse.location)) return false;
+					
+					Int syn_seq = path.synapse.GetSynSeq(conn_exemplar);
+					const SynapticComponent &syn = synaptic_components.get(syn_seq);
+					path.synapse.conn_seq = -1;
+					const std::string &path_term = line[5];
+					{
+					auto tokens = string_split(path_term, "/"); Int tokens_consumed = 0;
+					if(!ParseLemsQuantityPath_SynapticComponent(LogInsideToken{log, lineno, 5}, syn, tokens, path.synapse, tokens_consumed )) return false;
+					}
+					// and check if the path is indeed settable
+					ComponentType::NamespaceThing::Type path_type; Dimension dimension; bool is_ref;
+					if(!model.GetLemsQuantityPathType_SynapticComponent(path.synapse, syn, path_type, dimension)) return false;
+					if(!MustBeSettable(LogInsideToken{log, lineno, 5}, path_type, is_ref)) return false;
+					
+					// then get value
+					Real value = NAN; LemsUnit real_value_units = dimensions.GetNative(Dimension::Unity()); Simulation::LemsQuantityPath path_value; // one of these is used, according to is_ref
+					Int tokens_consumed_this_far = 6;
+					Int tokens_consumed = tokens_consumed_this_far;
+					if(!ParseToken_ValueSpecifier(log, lineno, line, dimension, is_ref, set, value, real_value_units, path_value, tokens_consumed)) return false;
+					
+					if(set.cable_mode){ // or multi_segment_mode TODO
+						log.error(lineno, tokens_consumed_this_far, "value specifier %s must be used for physical cells, not synaptic component %s", line[tokens_consumed_this_far].c_str(), synaptic_components.getName(syn_seq));
+						return false;
+					} 
+					
+					if(tokens_consumed < (Int)line.size()){
+						// TODO complain if there are more tokens, yet unparsed in the line
+					}
+					
+					if(!ParseSetData(log, lineno, (Int)proj.connections.size(), value, path_value, real_value_units, dimension, is_ref, set, lines_to_advance)) return false;
 				}
 				else{
 					log.error(lineno,1, "'set' statement: unknown type %s", line[1].c_str());
@@ -7115,6 +7706,7 @@ struct ImportState{
 			AddVoltageRequirement( new_type );
 			AddSpikeIn( new_type );
 		}
+		// TODO baseSynapseDL !
 		else if( strcmp(extends, "baseConductanceBasedSynapse") == 0 ){
 			new_type.extends = ComponentType::SYNAPTIC_COMPONENT;
 			

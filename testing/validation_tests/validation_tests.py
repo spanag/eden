@@ -18,6 +18,8 @@ tests = [
         ["popC/0/izTonicBursting/v" , "pop0[2]/v", "exact"],
         ["popD/0/izPhasicBursting/v", "pop0[3]/v", "exact"],
         ["popE/0/izMixedMode/v"     , "pop0[4]/v", "exact"],
+        ["popp[0]/0/v"              , "popp[2]/0/v", "exact"],
+        ["popp[1]/0/v"              , "popp[3]/0/v", "exact"],
     ]
 },
 {

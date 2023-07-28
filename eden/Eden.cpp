@@ -238,6 +238,40 @@ static Real DistancePt3d(
 	return GeomHelp::Length( to.x - from.x, to.y - from.y, to.z - from.z );
 }
 
+bool GetCellLocationFromPath( const Network &net, const Simulation::LemsQuantityPath &path, Simulation::LemsSegmentLocator &loca ){
+	typedef Simulation::LemsQuantityPath Path;
+	
+	if( path.type == Path::CELL
+	|| path.type == Path::SEGMENT 
+	|| path.type == Path::CHANNEL
+	|| path.type == Path::ION_POOL
+	){
+		loca = (Simulation::LemsSegmentLocator) path;
+	}
+	else if( path.type == Path::INPUT ){
+		Int inp_seq = net.input_lists.get(path.input.list_seq).input_instances_seq.atSeq(path.input.inst_seq);
+		const auto &inp = net.inputs[inp_seq];
+		loca = {.population = inp.population, .cell_instance = inp.cell_instance, .segment_seq = inp.segment, .fractionAlong = inp.fractionAlong};
+	}
+	else if( path.type == Path::SYNAPSE ){
+		const auto &proj = net.projections.get(path.synapse.proj_seq);
+		const auto &conn = proj.connections.atSeq(path.synapse.conn_seq);
+		if(      path.synapse.location == Path::SynapsePath::Location::PRE  ){
+			loca = Simulation::LemsSegmentLocator(proj.presynapticPopulation , conn.preCell , conn.preSegment , conn.preFractionAlong );
+		}
+		else if( path.synapse.location == Path::SynapsePath::Location::POST ){
+			loca = {proj.postsynapticPopulation, conn.postCell, conn.postSegment, conn.postFractionAlong};
+		}
+		else{ assert(false); return false; }
+	}
+	else{
+		assert(false); // for now i guess
+		return false;
+	}
+	// printf("%ld %ld %ld %f \n \n",loca.population,loca.cell_instance,loca.segment_seq,loca.fractionAlong);
+	return loca.ok();
+}
+
 // MPI context, just a few globals like world size, rank etc.
 #ifdef USE_MPI
 struct MpiContext{
@@ -708,13 +742,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// if a native type
 				size_t Table_Erev;
 				size_t Table_Gbase;
-				size_t Table_Gbase2;
+				// size_t Table_Gbase2;
 				
 				size_t Table_Tau;
-				size_t Table_Tau2;
-				size_t Table_Tau3;
+				// size_t Table_Tau2;
+				// size_t Table_Tau3;
 				
-				size_t Table_Ibase;
+				// size_t Table_Ibase;
 			
 			// and states
 			
@@ -723,7 +757,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			// if a native type
 				size_t Table_Grel;
-				size_t Table_Grel2;
+				// size_t Table_Grel2;
 			
 			
 			// constants and states, if a LEMS component
@@ -738,16 +772,16 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				Table_Delay = -1;
 				
 				Table_Gbase = -1;
-				Table_Gbase2 = -1;
+				// Table_Gbase2 = -1;
 				Table_Tau = -1;
-				Table_Tau2 = -1;
-				Table_Tau3 = -1;
-				Table_Ibase = -1;
+				// Table_Tau2 = -1;
+				// Table_Tau3 = -1;
+				// Table_Ibase = -1;
 				
 				Table_Trig = -1;
 				Table_NextSpike = -1;
 				Table_Grel = -1;
-				Table_Grel2 = -1;
+				// Table_Grel2 = -1;
 			}
 			
 		};
@@ -762,11 +796,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			size_t Table_Duration;
 			size_t Table_Delay; // could also be called 'start time'
-			size_t Table_Period;
+			// size_t Table_Period;
 			
-			size_t Table_Phase;
-			size_t Table_Istart;
-			size_t Table_Iend;
+			// size_t Table_Phase;
+			// size_t Table_Istart;
+			// size_t Table_Iend;
 			
 			// if a spike list
 			size_t Table_SpikeListTimes; // merged between instances, split by NaN sentinels
@@ -1181,6 +1215,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	std::vector<CellInternalSignature> cell_sigs;
 	// Allocate empty signatures for neuron types, and start filling them in in multiple pases
 	cell_sigs.resize(cell_types.contents.size());
+	// LATER if this runs too slow, refactor to a more efficient data structure
+	std::unordered_map<Int, Int> input_seq_to_idid_instance;
+	
+	std::unordered_map< Int, std::unordered_map<Int, Int> > conn_seq_to_idid_instance_pre, conn_seq_to_idid_instance_post;
+	// TODO encapsulate in NetworkImplementation
 	
 	//------------------>  Determine just how neurons are discretised. This will aid in determining which synapses are located on which compartments.
 	printf("Analyzing cell morphologies...\n");
@@ -3137,9 +3176,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					const auto &blopla_type = model.component_types.get(blopla_inst.id_seq);
 					auto &blopla_subsig = synimpl.synapse_component;
 					
-					
 					blopla_subsig = DescribeLems::AllocateSignature(model.dimensions, blopla_type, blopla_inst, &AppendMulti, for_what + " Component LEMS");
-					
 					
 					// fuse dynamics of three LEMS elements, as below:
 					//code += DescribeLemsInline.TableLoop( tab, for_what, blopla_subsig );
@@ -3367,8 +3404,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// Simple not-so-scalable solution:
 			// scan everything, don't use lazy triggering
 			ccde   += tab+"for(long long instance = 0; instance < Instances; instance++){\n";
-			
-			
 			
 			std::string syn_internal_code;
 			if( !DescribeGenericSynapseInternals( tab, for_what, require_line, expose_line, id_id, synimpl, AppendMulti, DescribeLemsInline, syn_internal_code ) ) return false;
@@ -3650,7 +3685,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			std::string &ccde
 		){
 			char tmps[1000];
-			CellInternalSignature::InputImplementation inpimpl;
+			// CellInternalSignature::InputImplementation inpimpl; HERE ???
 			
 			ptrdiff_t Index_RngSeed = rng_impl.Index_RngSeed = AppendSingle.Constant( 0, for_what+" Cell RNG Seed" );
 			
@@ -6391,6 +6426,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				}
 				else{
 					// no other native, only LEMSified implementations for now
+					// LATER if ever, artificial cells which are input sources containing synapses
+					// NB: right now the frontend supports only pure lems components, or native spike list, as cells. Hence syn inputs are excluded.
 					if( input.component.ok() ){
 						const ComponentInstance &comp_inst = input.component;
 						ccde += tab+"{\n";
@@ -6485,7 +6522,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						ccde += tab+"spike_out_flag |= Lems_eventout_spike;\n";
 					}
 					
-					// if( !ImplementInternalLemsDynamics( cell.component, aig, ccde ) ) return false;
 				}
 				else{
 					printf("Unknown native artificial cell type\n");
@@ -6844,6 +6880,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// would do more checking, if it wasn't internally used
 			return true;
 		}
+		
+		// XXX merge with LemsSegmentLocator !!
+		static PointOnCellLocator from(const Simulation::LemsSegmentLocator &loca){
+			return PointOnCellLocator{loca.population, loca.cell_instance, loca.segment_seq, loca.fractionAlong};
+		}
 	};
 	
 	#ifdef USE_MPI
@@ -6963,7 +7004,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	std::map< Int, work_t > neuron_gid_to_workitem;
 	
 	// similar to PointOnCellLocator
-	// TODO refactor better
+	// XXX refactor better
 	struct CellLocator_PopInst {
 		Int pop_seq;
 		Int inst_seq;
@@ -7027,9 +7068,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		return ret;
 	};
 	
-	auto LocateNodeForPath = [&GetRemoteNode_FromPopInst]( const Simulation::LemsQuantityPath &path, int &node ){
-		if( path.RefersToCell() ){
-			Int nodecode = GetRemoteNode_FromPopInst(path.population, path.cell_instance);
+	auto LocateNodeForPath = [&net, &GetRemoteNode_FromPopInst]( const Simulation::LemsQuantityPath &path, int &node ){
+		Simulation::LemsSegmentLocator loca;
+		if( GetCellLocationFromPath(net, path, loca) ){
+			Int nodecode = GetRemoteNode_FromPopInst(loca.population, loca.cell_instance);
 			if(nodecode == ~0xABadD00d) return false;
 			node = (Int) nodecode; return true;
 		}
@@ -7196,7 +7238,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					for( auto spike : input.spikes ) times.push_back( spike.time_of_occurrence );
 					times.push_back( FLT_MAX ); // sentinel value
 				}
-				
+				// else it's a simple lems component, without internal (non syn or inp related) tables to fill in
 			}
 		}
 		
@@ -7385,10 +7427,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				if( syn.blopla.plasticity_mechanism.type != SynapticComponent::BlockingPlasticSynapse::PlasticityMechanism::NONE ){	
 					DescribeLems_AppendTableEntry( work_unit, syn.blopla.plasticity_mechanism.component, synimpl.plasticity_component );
 				}
-				
-				DescribeLems_AppendTableEntry( work_unit, syn.component, synimpl.synapse_component );
 			}
-			else if( syn.component.ok() ){
+			
+			if( syn.component.ok() ){
 				DescribeLems_AppendTableEntry( work_unit, syn.component, synimpl.synapse_component );
 			}
 			else{
@@ -7539,7 +7580,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// TODO something about the LEMS weight property, or ignore it if LEMS does so
 		float weight = inp.weight;
 		if( !std::isfinite(weight) ) weight = 1;
-		tab_cf32[ off_cf32 + inpimp.Table_Weight ].push_back(weight);
+		// NB use this as the only reliable counter (until weights get elided LATER). TODO implement an instance counter per id_id instead.
+		RawTables::Table_F32 &weights = tab_cf32[ off_cf32 + inpimp.Table_Weight ];
+		input_seq_to_idid_instance[inp_seq] = (Int) weights.size();
+		weights.push_back(weight);
 		
 		// helpers
 		auto PopulateSpikeList = [ &tab_cf32, &off_cf32, &tab_si64, &off_si64 ]( const auto &spike_list, auto &inpimp ){
@@ -7641,7 +7685,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		const auto &prepop = net.populations.get(proj.presynapticPopulation);
 		const auto &postpop = net.populations.get(proj.postsynapticPopulation);
 		
-		// get Cell type/Compartment instance. TODO remove.
+		// get Cell type/Compartment instance. TODO remove?
 		const auto &presig = cell_sigs[prepop.component_cell];
 		const auto &postsig = cell_sigs[postpop.component_cell];
 		
@@ -7657,8 +7701,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			const PointOnCellLocator &peer_loc,
 			work_t work_unit, const CellInternalSignature &sig, Int mine_cell_type_seq,
 			work_t peer_work_unit,const CellInternalSignature &peer_sig, Int peer_cell_type_seq,
-			RawTables &tabs
+			Int &new_instance_seq, RawTables &tabs
 		){
+			new_instance_seq = -1;
 			// TODO perhaps early exit if local work item is remote
 			// branch for whole cell or compartment LATER
 			
@@ -7684,18 +7729,21 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			const CellInternalSignature::SynapticComponentImplementation &synimpl = synimps.at(id_id);
 			
 			// also add weight
-			auto AddWeight = [ &tabs ]( work_t work_unit, const auto &synimpl, Real weight ){
+			auto AddWeight = [ &tabs ]( work_t work_unit, const auto &synimpl, Real weight, Int &new_instance_seq ){
 				if( work_unit < 0 ){
 					return true; // not on this node
 				}
 				const auto off_cf32 = tabs.global_table_const_f32_index[work_unit];
 				auto      &tab_cf32 = tabs.global_tables_const_f32_arrays;
+				auto &weights = tab_cf32[ off_cf32 + synimpl.Table_Weight ];
 				
-				tab_cf32[ off_cf32 + synimpl.Table_Weight ].push_back(weight);
+				new_instance_seq = (Int) weights.size(); // TODO move to dedicated variable! along with cell_sigs, could be called netimpl
+				
+				weights.push_back(weight);
 				return true;
 			};
-			bool uses_weight = true; // might be elided LATER
-			if( uses_weight ) AddWeight( work_unit, synimpl, weight );
+			bool uses_weight = true; // might be elided LATER, be careful to maintain the per instance cross references
+			if( uses_weight ) AddWeight( work_unit, synimpl, weight, new_instance_seq );
 			
 			if( needs_Vpeer ){
 				
@@ -7872,7 +7920,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			// printf("Connection %zd of %zd \n", conn_seq, proj.connections.contents.size() ); fflush(stdout);
 			
-			const PointOnCellLocator pre_loc  = { proj.presynapticPopulation , conn.preCell , conn.preSegment , conn.preFractionAlong  };
+			const PointOnCellLocator pre_loc  = { proj.presynapticPopulation , conn.preCell , conn.preSegment , conn.preFractionAlong  }; // XXX refactor into GetPre or sth
 			const PointOnCellLocator post_loc = { proj.postsynapticPopulation, conn.postCell, conn.postSegment, conn.postFractionAlong };
 			
 			//get work unit from type/population/instance. TODO replace with something better, using work_unit only when applicable. (eg split cell)
@@ -7904,7 +7952,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					post_loc, pre_loc,
 					work_unit_post, postsig, postpop.component_cell,
 					work_unit_pre , presig , prepop.component_cell ,
-					tabs
+					conn_seq_to_idid_instance_post[proj_seq][conn_seq], tabs
 				) ) return false;
 			}
 			else if(conn.type == Network::Projection::Connection::ELECTRICAL){
@@ -7918,14 +7966,14 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					post_loc, pre_loc,
 					work_unit_post, postsig, postpop.component_cell,
 					work_unit_pre , presig , prepop.component_cell ,
-					tabs
+					conn_seq_to_idid_instance_pre [proj_seq][conn_seq], tabs
 				) ) return false;
 				if( !AppendSynapticComponentEntries(
 					syn, conn.synapse, conn,
 					pre_loc, post_loc,
 					work_unit_pre , presig , prepop.component_cell ,
 					work_unit_post, postsig, postpop.component_cell,
-					tabs
+					conn_seq_to_idid_instance_post[proj_seq][conn_seq], tabs
 				) ) return false;	
 			}
 			else if(conn.type == Network::Projection::Connection::CONTINUOUS){
@@ -7938,14 +7986,14 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					post_loc, pre_loc,
 					work_unit_post, postsig, postpop.component_cell,
 					work_unit_pre , presig , prepop.component_cell ,
-					tabs
+					conn_seq_to_idid_instance_pre [proj_seq][conn_seq], tabs
 				) ) return false;
 				if( !AppendSynapticComponentEntries(
 					syn_pre , conn.continuous.preComponent , conn,
 					pre_loc, post_loc,
 					work_unit_pre , presig , prepop.component_cell ,
 					work_unit_post, postsig, postpop.component_cell,
-					tabs
+					conn_seq_to_idid_instance_post[proj_seq][conn_seq], tabs
 				) ) return false;
 			}
 			else{
@@ -7978,8 +8026,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	};
 	
 	auto LocateEntryFromPath = [&]( const Simulation::LemsQuantityPath &path, RawTablesLocator &tabloc, const auto &log_error = printf ){
+		typedef Simulation::LemsQuantityPath::SynapsePath SynPath;
+		typedef Simulation::InputInstanceQuantityPath InpPath;
+		typedef RawTablesLocator::VariableType VariaType;
+		typedef RawTablesLocator::FormatType FormaType;
 		
-		auto LocateSubentryFromComponentPath = [&component_types](const auto &log_error, const ComponentInstance &compinst, const CellInternalSignature::ComponentSubSignature &compsubsig, const Simulation:: LemsInstanceQuantityPath &lemspath, RawTablesLocator::VariableType &varia_type, RawTablesLocator::FormatType &forma_type, int &subentry){
+		auto LocateSubentryFromComponentPath = [&component_types](const auto &log_error, const ComponentInstance &compinst, const CellInternalSignature::ComponentSubSignature &compsubsig, const Simulation:: LemsInstanceQuantityPath &lemspath, RawTablesLocator::VariableType &varia_type, RawTablesLocator::FormatType &forma_type, auto &subentry){
 			
 			Int comp_type_seq = compinst.id_seq;
 		
@@ -8034,22 +8086,22 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// keep the entry, offset the table
 				if(tabloc.forma_type == RawTablesLocator::FormatType::F32){
 					if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
-						tabloc.table = tabs.global_table_state_f32_index[work_unit];
+						tabloc.table += tabs.global_table_state_f32_index[work_unit];
 						return true;
 					}
 					else if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
-						tabloc.table = tabs.global_table_const_f32_index[work_unit];
+						tabloc.table += tabs.global_table_const_f32_index[work_unit];
 						return true;
 					}
 					else{ assert(false); return false; }
 				}
 				else if(tabloc.forma_type == RawTablesLocator::FormatType::I64){
 					if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
-						tabloc.table = tabs.global_table_state_i64_index[work_unit];
+						tabloc.table += tabs.global_table_state_i64_index[work_unit];
 						return true;
 					}
 					else if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
-						tabloc.table = tabs.global_table_const_i64_index[work_unit];
+						tabloc.table += tabs.global_table_const_i64_index[work_unit];
 						return true;
 					}
 					else{ assert(false); return false; }
@@ -8059,19 +8111,20 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			else{ assert(false); return false; }
 		};
 		
-		if( path.RefersToCell() ){
+		Simulation::LemsSegmentLocator loca;
+		if( GetCellLocationFromPath(net, path, loca) ){
 			
-			const auto &pop = net.populations.get(path.population);
+			const auto &pop = net.populations.get(loca.population);
 			const auto &cell_type = cell_types.get(pop.component_cell);
 			
 			// get work item for this neuron here, or perhaps further on when compartments are work items
 			
 			#ifdef USE_MPI
-			work_t work_unit = WorkUnitOrNode( path.population, path.cell_instance );
+			work_t work_unit = WorkUnitOrNode( loca.population, loca.cell_instance );
 			if( work_unit < 0 ) return false; // TODO return node name or leave it to the caller? where should the domain decomposition be checked
 			// TODO leave the check to the caller?
 			#else
-			work_t work_unit = workunit_per_cell_per_population[path.population][path.cell_instance];
+			work_t work_unit = workunit_per_cell_per_population[loca.population][loca.cell_instance];
 			if( work_unit < 0 ) return false; // TODO check the indices as well!
 			#endif
 			
@@ -8088,19 +8141,64 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// This is moved in this scope tentatively, to avoid copy pasting deeper in
 			int32_t comp_seq = -1;
 			if( cell_type.type == CellType::PHYSICAL ){
-				if( path.segment_seq >= 0 ){
-					comp_seq = GetCompSeqForCell(cell_type, sig, path.segment_seq, 0.5); // NB: LEMS refs lack fractionAlong for now
+				if( loca.segment_seq >= 0 ){
+					comp_seq = GetCompSeqForCell(cell_type, sig, loca.segment_seq, loca.fractionAlong); // NB: LEMS refs lack fractionAlong for now HERE
 					// TODO add fractionAlong to path
+					if(comp_seq < 0){
+						log_error("internal error: could not resolve on segment path");// should not happen as of now, guard for when this case happens LATER
+						return false;
+					}
 				}
 				else{
-					log_error("internal error: missing segment # on segment path");// should not happen as of now, guard for when this case happens LATER
+					log_error("internal error: missing segment # on resolved locator");// should not happen as of now, guard for when this case happens LATER
 					return false;
 				}
 			}
 			
-			switch(path.type){
-			case Simulation::LemsQuantityPath::Type::SEGMENT: {
+			auto LocateSubentry_SynapticComponent = [&LocateSubentryFromComponentPath](const auto &log_error, const SynapticComponent &syn, const CellInternalSignature::SynapticComponentImplementation &synimp, const Simulation::SynapticComponentQuantityPath &path, RawTablesLocator::VariableType &varia_type, RawTablesLocator::FormatType &forma_type, auto &subentry){
+				if(path.type == SynPath::LEMS){
+					return LocateSubentryFromComponentPath(log_error, syn.component, synimp.synapse_component, path.lems_quantity_path, varia_type, forma_type, subentry);
+				}
+				else if(path.type == SynPath::BLOCK){
+					// NB they are all lemsified for now
+					return LocateSubentryFromComponentPath(log_error, syn.blopla.block_mechanism.component, synimp.block_component, path.block.lems_quantity_path, varia_type, forma_type, subentry);
+				}
+				else if(path.type == SynPath::PLASTICITY){
+					// NB they are all lemsified for now
+					return LocateSubentryFromComponentPath(log_error, syn.blopla.plasticity_mechanism.component, synimp.plasticity_component, path.plasticity.lems_quantity_path, varia_type, forma_type, subentry);
+				}
+				else{
+					switch(path.native_entry){
+						case SynPath::GBASE: varia_type = VariaType::CONST; forma_type = FormaType::F32; subentry = synimp.Table_Gbase; return true;
+						case SynPath::G    : varia_type = VariaType::STATE; forma_type = FormaType::F32; subentry = synimp.Table_Grel ; return true;
+						case SynPath::EREV : varia_type = VariaType::CONST; forma_type = FormaType::F32; subentry = synimp.Table_Erev ; return true;
+						case SynPath::TAU  : varia_type = VariaType::CONST; forma_type = FormaType::F32; subentry = synimp.Table_Tau  ; return true;
+						default: assert(false); return false;
+					}
+				}
+			};
+			
+			auto LocateSubentry_InputSource = [&synaptic_components, &LocateSubentry_SynapticComponent, &LocateSubentryFromComponentPath](const auto &log_error, const InputSource &source, const CellInternalSignature::InputImplementation &inpimp, const Simulation::InputInstanceQuantityPath &path, RawTablesLocator::VariableType &varia_type, RawTablesLocator::FormatType &forma_type, auto &subentry){
 				
+				if(path.type == InpPath::LEMS){
+					return LocateSubentryFromComponentPath(log_error, source.component, inpimp.component, path.lems_quantity_path, varia_type, forma_type, subentry);
+				}
+				else if(path.type == InpPath::SYNAPSE){
+					return LocateSubentry_SynapticComponent(log_error, synaptic_components.get(source.synapse), inpimp.synimpl, path.synapse, varia_type, forma_type, subentry);
+				}
+				else{ // native
+					switch(path.native_entry){
+						case InpPath::AMPLITUDE: varia_type = VariaType::CONST; forma_type = FormaType::F32; subentry = inpimp.Table_Imax    ; return true;
+						case InpPath::DURATION : varia_type = VariaType::CONST; forma_type = FormaType::F32; subentry = inpimp.Table_Duration; return true;
+						case InpPath::DELAY    : varia_type = VariaType::CONST; forma_type = FormaType::F32; subentry = inpimp.Table_Delay   ; return true;
+						default: assert(false); return false;
+					}
+				}
+			};
+			typedef Simulation::LemsQuantityPath Path;
+			switch(path.type){
+			case Path::Type::SEGMENT: {
+				typedef Path::SegmentPath SegPath;
 				if(!MustBePhysicalCell(log_error, cell_type)) return false;
 				
 				const PhysicalCell &cell = cell_type.physical;
@@ -8113,8 +8211,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				switch(path.segment.type){
 					
-					case Simulation::LemsQuantityPath::SegmentPath::Type::VOLTAGE: {
-						// printf("daw volt cell %ld seg %ld comp %d\n", (Int)path.cell_instance, (Int)path.segment_seq, (int) comp_seq );
+					case SegPath::Type::VOLTAGE: {
+						// printf("daw volt cell %ld seg %ld comp %d\n", (Int)loca.cell_instance, (Int)loca.segment_seq, (int) comp_seq );
 						tabloc.layou_type = RawTablesLocator::LayoutType::FLAT;
 						tabloc.varia_type = RawTablesLocator::VariableType::STATE;
 						tabloc.forma_type = RawTablesLocator::FormatType::F32;
@@ -8127,8 +8225,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						// printf("\n\n\n record %zd \n\n\n", global_idx_V);
 						break;
 					}
-					case Simulation::LemsQuantityPath::SegmentPath::Type::CALCIUM_INTRA:
-					case Simulation::LemsQuantityPath::SegmentPath::Type::CALCIUM2_INTRA:
+					case SegPath::Type::CALCIUM_INTRA:
+					case SegPath::Type::CALCIUM2_INTRA:
 					{
 						tabloc.layou_type = RawTablesLocator::LayoutType::FLAT;
 						tabloc.varia_type = RawTablesLocator::VariableType::STATE;
@@ -8139,7 +8237,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						
 						Int Ca_seq = bioph.Ca_species_seq;
 						const char *sCalcium = "calcium";
-						if( path.segment.type == Simulation::LemsQuantityPath::SegmentPath::Type::CALCIUM2_INTRA ){
+						if( path.segment.type == SegPath::Type::CALCIUM2_INTRA ){
 							Ca_seq = bioph.Ca2_species_seq;
 							sCalcium = "calcium2";
 						} 
@@ -8212,7 +8310,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				break;
 			}
 			
-			case Simulation::LemsQuantityPath::Type::CHANNEL: {
+			case Path::Type::CHANNEL: {
 				
 				if(!MustBePhysicalCell(log_error, cell_type)) return false;
 				auto &pig = sig.physical_cell;
@@ -8249,37 +8347,119 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				break;
 			}
 			
-			case Simulation::LemsQuantityPath::Type::SYNAPSE:{
-				printf("not supported yet : synapse path");
-				return false;
-			}
-			case Simulation::LemsQuantityPath::Type::INPUT:{
-				printf("not supported yet : input path");
-				return false;
-			}
-			case Simulation::LemsQuantityPath::Type::CELL:{
+			case Path::Type::SYNAPSE:{
+				Int proj_seq = path.synapse.proj_seq;
+				const Network::Projection &proj = net.projections.get(proj_seq);
+				Int conn_seq = path.synapse.conn_seq;
+				const Network::Projection::Connection &conn = proj.connections.atSeq(conn_seq);
+				// get syncomp type
+				Int syn_seq = path.synapse.GetSynSeq(conn);
+				assert(syn_seq >= 0);
+				const SynapticComponent &syn = synaptic_components.get(syn_seq);
 				
-				if(!MustBeArtificialCell(log_error, cell_type)) return false;
-				auto &aig = sig.artificial_cell;
-				// FIXME what if it is an input??
-				if( !cell_type.artificial.component.ok() ){
-					log_error("internal error: lems quantity path for artificial cell: none native");
+				const auto &imps = GetCompartmentSynapseImplementations(PointOnCellLocator::from(loca));
+				Int id_id = GetSynapseIdId( syn_seq );
+				if( !imps.count(id_id) ){
+					printf("Internal error: LocateEntryFromPath: No synapse implementation for id_id %ld\n", id_id);
+					return false;
+				}
+				const CellInternalSignature::SynapticComponentImplementation &imp = imps.at(id_id);
+				Int idid_instance = -1;
+				if(path.synapse.location == SynPath::Location::PRE) idid_instance = conn_seq_to_idid_instance_pre[proj_seq][conn_seq];
+				else idid_instance = conn_seq_to_idid_instance_post[proj_seq][conn_seq];
+				if(idid_instance < 0){
+					printf("Internal error: synapse %lld %lld idid %d instance missing\n", (long long)proj_seq, (long long)conn_seq, (int)id_id);
 					return false;
 				}
 				
+				tabloc.layou_type = RawTablesLocator::LayoutType::TABLE; // we know this for all attached inputs
+				auto &subentry = tabloc.table;
+				tabloc.entry = idid_instance; // for every syn comp so far, this is accurate.
+				if(!LocateSubentry_SynapticComponent(log_error, syn, imp, path.synapse, tabloc.varia_type, tabloc.forma_type, subentry)) return false;
+				
+				// printf("subentry %s\n", tabloc.Stringify().c_str());
+				
+				if(!MapCellWorkitemSubentryToLocation(log_error, tabs, work_unit, tabloc)) return false;
+				
+				break;
+			}
+			case Path::Type::INPUT:{
+				Int inp_seq = net.input_lists.get(path.input.list_seq).input_instances_seq.atSeq(path.input.inst_seq);
+				const auto &inp = net.inputs[inp_seq];
+				// printf("input cell %ld seq %ld\n", (Int)inp.cell_instance, (Int)inp.segment );
+				const auto &source = input_sources.get(inp.component_type);
+						
+				const auto &inpimps = GetCompartmentInputImplementations(sig, pop.component_cell, loca.segment_seq, loca.fractionAlong);
+				// get Input type
+				Int id_id = GetInputIdId( inp.component_type );
+				if( !inpimps.count(id_id) ){
+					printf("Internal error: LocateEntryFromPath: No input implementation for id_id %ld\n", id_id);
+					return false;
+				}
+				const CellInternalSignature::InputImplementation &inpimp = inpimps.at(id_id);
+				Int idid_instance = input_seq_to_idid_instance[inp_seq];
+				if(idid_instance < 0){
+					printf("Internal error: input %lld idid %d instance missing\n", (long long)inp_seq, (int)id_id);
+					return false;
+				}
+				
+				tabloc.layou_type = RawTablesLocator::LayoutType::TABLE; // we know this for all attached inputs
+				auto &subentry = tabloc.table;
+				tabloc.entry = idid_instance; // for everything except spike lists (that aren't that meaningful to access, they must remain sorted), this is accurate.
+				if(!LocateSubentry_InputSource(log_error, source, inpimp, path.input, tabloc.varia_type, tabloc.forma_type, subentry)) return false;
+				
+				// printf("subentry %s\n", tabloc.Stringify().c_str());
+				
+				if(!MapCellWorkitemSubentryToLocation(log_error, tabs, work_unit, tabloc)) return false;
+		
+				break;
+			}
+			case Path::Type::CELL:{
+				
+				if(!MustBeArtificialCell(log_error, cell_type)) return false;
+				auto &aig = sig.artificial_cell;
+				
 				tabloc.layou_type = RawTablesLocator::LayoutType::FLAT; tabloc.entry = -1; // we know this for all artificial cells
 				tabloc.table = -1;
-				if(!LocateSubentryFromComponentPath(log_error, cell_type.artificial.component, aig.component, path.cell.lems_quantity_path, tabloc.varia_type, tabloc.forma_type, tabloc.entry)) return false;
 				
-				printf("blocc %s\n", tabloc.Stringify().c_str());
+				if(path.cell.type == Path::CellPath::Type::INPUT){
+					Int source_seq = cell_type.artificial.spike_source_seq;
+					const InputSource &source = input_sources.get(source_seq);
+					const auto &basepath = path;
+					const InpPath &path = basepath.cell.input;
+					
+					// NOTE: only inputs that don't generate current are allowed to be artificial cells, which rules out synapse children
+					// and also the only non lemsified input source atm
+					if(path.type == InpPath::SYNAPSE){
+						log_error("internal error: lems quantity path for artificial cell that's actually an input source: refers to synapse child");
+						return false;
+					}
+					if(!(path.type == InpPath::LEMS)){
+						log_error("internal error: lems quantity path for artificial cell that's actually an input source: refers to non lems");
+						return false;
+					}
+					
+					if( !source.component.ok() ){
+						log_error("internal error: lems quantity path for artificial cell that's actually an input source: none native");
+						return false;
+					}
+					if(!LocateSubentryFromComponentPath(log_error, source.component, aig.component, path.lems_quantity_path, tabloc.varia_type, tabloc.forma_type, tabloc.entry)) return false;
+				}
+				else{
+					if( !cell_type.artificial.component.ok() ){
+						log_error("internal error: lems quantity path for artificial cell: none native");
+						return false;
+					}
+					if(!LocateSubentryFromComponentPath(log_error, cell_type.artificial.component, aig.component, path.cell.lems_quantity_path, tabloc.varia_type, tabloc.forma_type, tabloc.entry)) return false;
+				}
 				
-				// TODO in physical cells, remember the offsets for deduplicated compartments! pig.comp_implementations wait... isn;t that done by calcium already?
+				// TODO in physical cells, remember the offsets for deduplicated compartments! pig.comp_implementations wait... isn't that done by calcium already?
 				if(!MapCellWorkitemSubentryToLocation(log_error, tabs, work_unit, tabloc)) return false;
 				
 				break;
 			}
 			
-			case Simulation::LemsQuantityPath::Type::ION_POOL: // TODO
+			case Path::Type::ION_POOL: // TODO
 			default: {
 				log_error("not supported yet : cell-based path type %d", path.type);
 				return false;
@@ -8385,10 +8565,49 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	// Now apply customsetup parameter override statements (if not done early on)
 	
 	const auto &statements = sim.custom_init.statements;
-	// FIXME call them verbs or statements
+	if(!statements.empty()) printf("Aplying customizations...\n");
+	
 	for( Int statement_seq = 0; statement_seq < (int)statements.size(); statement_seq++ ){
 		const Simulation::CustomSetup::Statement &set = statements[statement_seq];
-		printf("stmt %d\n", (int)statement_seq);
+		// printf("stmt %d\n", (int)statement_seq);
+		struct LogSetStmtInsideGroup{
+			Int statement_seq; Int instance_seq; std::string item_type;
+			void operator()(const char *format, ...) const {
+				va_list args; va_start(args, format);
+				std::string prefix = "Setup statement "+accurate_string(statement_seq)+", "+item_type+": "; // NOTE allow no printf % to be injected here!
+				vprintf((prefix+format).c_str(), args);
+				va_end(args);
+			}
+		};
+		
+		auto SetRowColToTabLoc = [&LocateEntryFromPath](const auto &log_error, const Simulation::CustomSetup::Statement &set, Int row, Int col, const RawTablesLocator &tabloc, RawTables &tabs){
+			if(false){ // VARREQ REF? VariableReference
+				const Simulation::LemsQuantityPath &ref_path = set.ref_data[row][col];
+				RawTablesLocator ref_tabloc;
+				if(!LocateEntryFromPath(ref_path, ref_tabloc, log_error)){
+					// TODO add varref dependency to mpi list!
+					return false;
+				}
+				else{
+					if(!( ref_tabloc.varia_type == RawTablesLocator::VariableType::STATE 
+					&& ref_tabloc.forma_type == RawTablesLocator::FormatType::F32 )){
+						log_error("error: path ref  non state float type not supported yet");
+						return false; // allow and check for more possibilities if ever needed, LATER
+					}
+					
+					tabs.GetSingleI64(tabloc) = GetEncodedTableEntryId(tabloc.table, tabloc.entry);
+				}
+			}
+			else{
+				// float value
+				// printf("rowcol %lld %lld %zd\n", (long long)row, (long long)col, set.real_data.size());
+				Real val = set.real_data[row][col];
+				// printf("val %f\n", val);
+				tabs.GetSingleF32(tabloc) = val;
+			}
+			return true;
+		};
+			
 		if(set.type == Simulation::CustomSetup::Statement::POPULATION){
 			
 			Int pop_seq = set.group_seq;
@@ -8399,30 +8618,23 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			if(items_seq.empty()){ items_seq.resize(pop.instances.size()); std::iota(items_seq.begin(), items_seq.end(), 0); } // special case: the whole population
 			for(int item_i = 0; item_i < (int)items_seq.size(); item_i++ ){
 				Int instance_seq = items_seq[item_i];
-				printf("item %d %d\n", (int)item_i, (int)instance_seq);
-				struct LogSetStmtInsidePopulation{
-					Int statement_seq; Int instance_seq;
-					void operator()(const char *format, ...) const {
-						va_list args; va_start(args, format);
-						std::string prefix = "Setup statement "+accurate_string(statement_seq)+", "+std::string("cell")+": "; // NOTE allow no printf % to be injected here!
-						vprintf((prefix+format).c_str(), args);
-						va_end(args);
-					}
-				} log_error = {statement_seq, instance_seq};
+				// printf("item %d %d\n", (int)item_i, (int)instance_seq);
+				LogSetStmtInsideGroup log_error = {statement_seq, instance_seq, "cell"};
 				
 				
 				Simulation::LemsQuantityPath path = set.path;
-				path.population = pop_seq;
-				path.cell_instance = instance_seq;
+				Simulation::LemsSegmentLocator &loca = path;
+				loca.population = pop_seq;
+				loca.cell_instance = instance_seq;
 				// get work item for this neuron here, or perhaps further on when compartments are work items
 				
 				#ifdef USE_MPI
-				work_t work_unit = WorkUnitOrNode( path.population, path.cell_instance );
+				work_t work_unit = WorkUnitOrNode( loca.population, loca.cell_instance );
 				if( work_unit < 0 ){
 					continue; // another node will initialize this cell
 				}
 				#else
-				// work_t work_unit = workunit_per_cell_per_population[path.population][path.cell_instance];
+				// work_t work_unit = workunit_per_cell_per_population[loca.population][loca.cell_instance];
 				#endif
 				
 				// get sig for said neuron, to properly manipulate the work item
@@ -8432,6 +8644,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				if(path.type == Simulation::LemsQuantityPath::Type::CELL){
 					if(cell_type.type == CellType::ARTIFICIAL){
+						loca.segment_seq = 0; loca.fractionAlong = 0.5;
 						if(!LocateEntryFromPath(path, tabloc, log_error)) return false;
 					}
 					else{
@@ -8450,7 +8663,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					// ref_data
 					log_error("error: pop path type not supported yet %d", (int)path.type); return false;
 				}
-				printf("set %s\n", tabloc.Stringify().c_str());
+				// printf("set %s\n", tabloc.Stringify().c_str());
 				int row, col;
 				if(set.cable_mode){
 					col = 0; row = (false) ? 0 : 1;// TODO displace, or leave empty?? it would be simpler to skip the first line?
@@ -8461,38 +8674,99 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				else{
 					row = 0;
 					if(set.multi_mode) col = item_i; else col = 0;
-					
-					if(false){ // VARREQ REF? VariableReference
-						const Simulation::LemsQuantityPath &ref_path = set.ref_data[row][col];
-						RawTablesLocator ref_tabloc;
-						if(!LocateEntryFromPath(ref_path, ref_tabloc, log_error)){
-							// TODO add varref dependency to mpi list!
-							return false;
-						}
-						else{
-							if(!( ref_tabloc.varia_type == RawTablesLocator::VariableType::STATE 
-							&& ref_tabloc.forma_type == RawTablesLocator::FormatType::F32 )){
-								log_error("error: path ref  non state float type not supported yet");
-								return false; // allow and check for more possibilities if ever needed, LATER
-							}
-							
-							tabs.GetSingleI64(tabloc) = GetEncodedTableEntryId(tabloc.table, tabloc.entry);
-						}
-					}
-					else{
-						// float value
-						printf("rowcol %d %d %zd\n", row, col, set.real_data.size());
-						Real val = set.real_data[row][col];
-						printf("val %f\n", val);
-						tabs.GetSingleF32(tabloc) = val;
-					}
+					if(!SetRowColToTabLoc(log_error, set, row, col, tabloc, tabs)) return false;
 				}
 				// done setting item
 			}
 			// done setting on items
 		}
+		else if(set.type == Simulation::CustomSetup::Statement::INPUT_LIST){
+			Int list_seq = set.group_seq;
+			const auto &list = net.input_lists.get(list_seq);
+			// const InputSource &source = input_sources.get(list.component);
+			
+			auto items_seq = set.items_seq;
+			if(items_seq.empty()){ items_seq.resize(list.input_instances_seq.size()); std::iota(items_seq.begin(), items_seq.end(), 0); } // special case: the whole group
+			
+			for(int item_i = 0; item_i < (int)items_seq.size(); item_i++ ){
+				Int instance_seq = items_seq[item_i];
+				// printf("item %d %d\n", (int)item_i, (int)instance_seq);
+				LogSetStmtInsideGroup log_error = {statement_seq, instance_seq, "input"};
+				
+				Simulation::LemsQuantityPath path = set.path;
+				path.input.list_seq = list_seq;
+				path.input.inst_seq = instance_seq;
+				
+				Simulation::LemsSegmentLocator loca;
+				if(!GetCellLocationFromPath(net, path, loca)){
+					log_error("error: could not locate cell"); return false;
+					return false;
+				}
+				#ifdef USE_MPI
+				work_t work_unit = WorkUnitOrNode( loca.population, loca.cell_instance );
+				if( work_unit < 0 ){
+					continue; // another node will initialize this cell
+				}
+				#endif
+				
+				RawTablesLocator tabloc;
+				if(!LocateEntryFromPath(path, tabloc, log_error)) return false;
+				// printf("set %s\n", tabloc.Stringify().c_str());
+				
+				int row, col;
+				if(set.cable_mode) return false; // for multiseg also
+				row = 0;
+				if(set.multi_mode) col = item_i; else col = 0;
+				
+				if(!SetRowColToTabLoc(log_error, set, row, col, tabloc, tabs)) return false;
+			}
+		}
+		else if(set.type == Simulation::CustomSetup::Statement::PROJECTION){
+			Int proj_seq = set.group_seq;
+			const auto &proj = net.projections.get(proj_seq);
+			// get syncomp type
+			// Int syn_seq = path.synapse.GetSynSeq(conn);
+			// assert(syn_seq >= 0);HERE
+			// const SynapticComponent &syn = synaptic_components.get(syn_seq);
+			
+			auto items_seq = set.items_seq;
+			if(items_seq.empty()){ items_seq.resize(proj.connections.size()); std::iota(items_seq.begin(), items_seq.end(), 0); } // special case: the whole group
+			
+			for(int item_i = 0; item_i < (int)items_seq.size(); item_i++ ){
+				Int instance_seq = items_seq[item_i];
+				// printf("item %d %d\n", (int)item_i, (int)instance_seq);
+				LogSetStmtInsideGroup log_error = {statement_seq, instance_seq, "connection"};
+				
+				Simulation::LemsQuantityPath path = set.path;
+				path.synapse.proj_seq = proj_seq;
+				path.synapse.conn_seq = instance_seq;
+				
+				// after debugging, move to if_mpi
+				Simulation::LemsSegmentLocator loca;
+				if(!GetCellLocationFromPath(net, path, loca)){
+					log_error("error: could not locate cell"); return false;
+					return false;
+				}
+				#ifdef USE_MPI
+				work_t work_unit = WorkUnitOrNode( loca.population, loca.cell_instance );
+				if( work_unit < 0 ){
+					continue; // another node will initialize this cell
+				}
+				#endif
+				
+				RawTablesLocator tabloc;
+				if(!LocateEntryFromPath(path, tabloc, log_error)) return false;
+				// printf("set %s\n", tabloc.Stringify().c_str());
+				int row, col;
+				if(set.cable_mode) return false; // for multiseg also
+				row = 0;
+				if(set.multi_mode) col = item_i; else col = 0;
+				
+				if(!SetRowColToTabLoc(log_error, set, row, col, tabloc, tabs)) return false;
+			}
+		}
 		else{
-			printf("set type %d not supported yet\n", (int)set.type);
+			printf("internal error: set type %d not supported\n", (int)set.type);
 			return false;
 		}
 		// done with statements

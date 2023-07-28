@@ -24,6 +24,15 @@
             <resistivity value="1 kohm_cm"/>   
         </intracellularProperties>
     </biophysicalProperties>
+    <cell id="PassiveCell" biophysicalProperties="bioPhys_Passive">
+        <morphology>
+			<segment id="0" name="soma">
+                <proximal x="0" y="0" z="0" diameter="17.841242"/> <!-- Gives a convenient surface area of 1000.0 sq.um -->
+                <distal x="0" y="0" z="0" diameter="17.841242"/>
+            </segment>
+        </morphology>
+    </cell>
+    
     
     <!-- (A) tonic spiking -->
     <izhikevichCell id="izTonicSpiking" v0 = "-70mV" thresh = "30mV" a ="0.02" b = "0.2" c = "-65" d = "6"/>
@@ -42,7 +51,8 @@
     
     <!-- TODO omit the varying parameters, put them as properties! -->
     <izhikevichCell id="izGeneric" v0 = "-70mV" thresh = "30mV" a ="0.02" b = "0.2" c = "-65" d = "6"/>
-    <pulseGeneratorDL id="iDlGeneric" delay="10ms" duration="100ms" amplitude="10" />
+    
+    <pulseGeneratorDL id="iDlGeneric" delay="10ms" duration="9ms" amplitude="14" />
 
     <pulseGeneratorDL id="iA" delay="10ms" duration="90ms" amplitude="14" />
     <pulseGeneratorDL id="iB" delay="20ms" duration="180ms" amplitude="0.5" />
@@ -52,8 +62,23 @@
         
     <pulseGenerator id="pulseGen1" delay="10ms" duration="8ms" amplitude="0.2nA"/>
     
+    <spikeGenerator id="Inp_spikeGenerator" period="40 ms"/>
+    <expOneSynapse id="Syn_ExpFast" gbase="10nS" erev="+50mV" tauDecay="0.5ms"/>
+    <expOneSynapse id="Syn_ExpSlow" gbase="10nS" erev="+50mV" tauDecay="5.0ms"/>
+    <expOneSynapse id="Syn_ExpWild" gbase="10nS" erev="-50mV" tauDecay="500ms"/>
+    
+    
     <network id="EdenTestNetwork">
     
+        
+        <!--
+            Compare the population shown on https://github.com/OpenSourceBrain/IzhikevichModel/blob/master/NeuroML2/LEMS_FiveCells.xml
+            of explicitly unique cells and inputs, with a population of generic Izh cells and pulse inputs, where each parameter is customised per instance, to match the original network.
+            
+            Also compare the effect of a sinple synapse on a simple cell with a customised alternative, to test the customisation machinery for synapses.
+            LATER check setting a timedSynapticInput likewise.
+        -->
+        
         <population id="popA" component="izTonicSpiking" type="populationList" size="1">
             <instance id="0">
                 <location x="0" y="0" z="0"/>
@@ -82,30 +107,13 @@
         
         <population id="pop0" component="izGeneric" size="5" />
         
-        <inputList id="IIputA" component="iA" population="pop0">
-            <input id="0" target="pop0[0]" destination="synapses"/>
-        </inputList>
-        <inputList id="IIputB" component="iB" population="pop0">
-            <input id="0" target="pop0[1]" destination="synapses"/>
-        </inputList>
-        <inputList id="IIputC" component="iC" population="pop0">
-            <input id="0" target="pop0[2]" destination="synapses"/>
-        </inputList>
-        <inputList id="IIputD" component="iD" population="pop0">
-            <input id="0" target="pop0[3]" destination="synapses"/>
-        </inputList>
-        <inputList id="IIputE" component="iE" population="pop0">
-            <input id="0" target="pop0[4]" destination="synapses"/>
-        </inputList>
         
         <inputList id="InputA" component="iA" population="popA">
             <input id="0" target="../popA/0/izTonicSpiking" destination="synapses"/>
         </inputList>
-        
         <inputList id="InputB" component="iB" population="popB">
             <input id="0" target="../popB/0/izPhasicSpiking" destination="synapses"/>
         </inputList>
-        
         <inputList id="InputC" component="iC" population="popC">
             <input id="0" target="../popC/0/izTonicBursting" destination="synapses"/>
         </inputList>
@@ -116,9 +124,27 @@
             <input id="0" target="../popE/0/izMixedMode" destination="synapses"/>
         </inputList>
         
-        <!-- <inputList id="Input0" component="iDlGeneric" population="pop0">
-            <input id="0" target="../pop0[0]" destination="synapses"/>
-        </inputList> -->
+        <inputList id="Input0" component="iDlGeneric" population="pop0">
+            <input id="0" target="pop0[0]" destination="synapses"/>
+            <input id="1" target="pop0[1]" destination="synapses"/>
+            <input id="2" target="pop0[2]" destination="synapses"/>
+            <input id="3" target="pop0[3]" destination="synapses"/>
+            <input id="4" target="pop0[4]" destination="synapses"/>
+        </inputList>
+        
+        
+        <population id="popp" component="PassiveCell" size="4" />
+        <population id="pops" component="Inp_spikeGenerator" size="1" />
+        <projection id="ToPopp_ExpSlow" presynapticPopulation="pops" postsynapticPopulation="popp" synapse="Syn_ExpSlow">
+			<connection id="0" preCellId="0" postCellId="0" preSegmentId="0" postSegmentId="0"/>
+		</projection>
+        <projection id="ToPopp_ExpFast" presynapticPopulation="pops" postsynapticPopulation="popp" synapse="Syn_ExpFast">
+			<connection id="0" preCellId="0" postCellId="1" preSegmentId="0" postSegmentId="0"/>
+		</projection>
+        <projection id="ToPopp_ExpWild" presynapticPopulation="pops" postsynapticPopulation="popp" synapse="Syn_ExpWild">
+			<connection id="0" preCellId="0" postCellId="2" preSegmentId="0" postSegmentId="0"/>
+			<connection id="1" preCellId="0" postCellId="3" preSegmentId="0" postSegmentId="0"/>
+		</projection>
         
     </network>
     
@@ -136,6 +162,11 @@
             <OutputColumn id="izC" quantity="popC/0/izTonicBursting/v" />
             <OutputColumn id="izD" quantity="popD/0/izPhasicBursting/v" />
             <OutputColumn id="izE" quantity="popE/0/izMixedMode/v" />
+            
+            <OutputColumn id="ip0" quantity="popp[0]/0/v" />
+            <OutputColumn id="ip1" quantity="popp[1]/0/v" />
+            <OutputColumn id="ip2" quantity="popp[2]/0/v" />
+            <OutputColumn id="ip3" quantity="popp[3]/0/v" />
 			
 		</OutputFile>
         
@@ -143,8 +174,11 @@
         <EdenCustomSetup filename="./EdenTest_Extension_CustomSetup.txt">
         </EdenCustomSetup>
     </Simulation>
+    
+    
+    
+    
     <!-- Specify which component to run -->
     <Target component="sim1"/>
     
 </neuroml>
-

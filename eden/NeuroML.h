@@ -14,6 +14,16 @@
 
 // set up a namespace LATER
 
+// for some error reporting in the API
+struct ILogProxy{
+	virtual void error(const char *format, ...) const = 0;
+	virtual void warning(const char *format, ...) const = 0;
+};
+struct NullLogProxy : public ILogProxy{
+	void error(const char *format, ...) const {}
+	void warning(const char *format, ...) const {}
+};
+
 //for NeuroML float and integer values
 typedef float Real;
 typedef long Int;
@@ -1287,7 +1297,7 @@ struct SynapticComponent{
 			
 			PlasticityMechanism(){ type = NONE; }
 		};
-		
+		// TODO could there be multiple of those in a row?
 		BlockMechanism block_mechanism;
 		PlasticityMechanism plasticity_mechanism;
 		
@@ -2032,6 +2042,8 @@ struct Network{
 	struct Projection{
 		
 		struct Connection{
+			// TODO abolish different syn types among instances if they were never meant to be !
+			
 			enum Type{
 				SPIKING,    // made up of a directional spike connection, affecting postsynaptic cell only
 				ELECTRICAL, // made up of a bidirectional voltage-based component, affecting both cells
@@ -2059,11 +2071,11 @@ struct Network{
 		Int presynapticPopulation;
 		Int postsynapticPopulation;
 		
-		CollectionWithIds<Connection> connections;
+		CollectionWithIds<Connection> connections; 
 	};
 	
 	struct Input{
-		// the component
+		// the component (out of input types)
 		Int component_type;
 		
 		// and the target 
@@ -2071,16 +2083,27 @@ struct Network{
 		Int cell_instance;
 		Int segment;
 		Real fractionAlong;
+		// TODO reuse SegmentLocator?
 		
 		Real weight; // NaN if missing
 		Input(){ weight = NAN; }
+	};
+	struct InputList{
+		Int component;
+		Int population;
+		CollectionWithIds<Int> input_instances_seq;
 	};
 	
 	Real temperature;
 	
 	CollectionWithNames<Population> populations;
 	CollectionWithNames<Projection> projections;
-	std::vector<Input> inputs;
+	
+	std::vector<Input> inputs; // all of them, whether in an inputList or sprinkled around as explicitinput, in order of appearance
+	// TODO separate the explicitInput for a cleaner internal model
+	// TODO add reverse index as well, for better debugging
+	CollectionWithNames<InputList> input_lists;
+	
 };
 
 // A NeuroML simulation, targeting a specific network
@@ -2095,8 +2118,8 @@ struct Simulation{
 		Int cell_instance;
 		
 		Int segment_seq; // XXX explain what happens to this if it's a synapse or sth else
-		// TODO move this to segment-based
-		// Note that fractionAlong is missing ! Assume 0.5 (in the middle of the segment)
+		// TODO move this to segment-based -- or not?
+		Real fractionAlong; // Note that fractionAlong is officially missing ! Assume 0.5 (in the middle of the segment)
 		// TODO add extension to the parser for "seg.fractionAlong" format
 		
 		// default invalid values, just in case
@@ -2104,6 +2127,11 @@ struct Simulation{
 			population = -1;
 			cell_instance = -1;
 			segment_seq = -1;
+			fractionAlong  = NAN;
+		}
+		LemsSegmentLocator(Int p, Int c, Int s, Real f):population(p), cell_instance(c), segment_seq(s), fractionAlong(f){}
+		bool ok() const{
+			return ( population >= 0 && cell_instance >= 0 && segment_seq >= 0 && 0 <= fractionAlong && fractionAlong <= 1 );
 		}
 	};
 	
@@ -2117,19 +2145,59 @@ struct Simulation{
 		LemsInstanceQuantityPath lems_quantity_path;
 	};
 	
+	struct SynapticComponentQuantityPath : public MayBeLemsInstanceQuantity{
+		struct Block : public MayBeLemsInstanceQuantity{
+			enum Type{
+				NONE,
+				LEMS // only lemsified exist for now
+			}type;	
+		};
+		struct Plasticity : public MayBeLemsInstanceQuantity{
+			enum Type{
+				NONE,
+				LEMS // only lemsified exist for now
+			}type;	
+		};
+		
+		enum Type{
+			NONE,
+			NATIVE,
+			BLOCK, // for such children
+			PLASTICITY,
+			LEMS // for a(n immediate) LEMS component
+		}type;
+		
+		enum NativeEntry{
+			GBASE,
+			EREV,
+			TAU, // later add more if needed, for now the rest are lemsified
+			G,
+			 // common for all, might be added later
+			// WEIGHT,
+			// DELAY
+		}native_entry;
+		
+		Block block;
+		Plasticity plasticity;
+		
+		// nothing else to add, for now
+	};
+	
 	struct InputInstanceQuantityPath : public MayBeLemsInstanceQuantity{
 		enum Type{
 			NONE,
 			NATIVE,
+			SYNAPSE,
 			LEMS // for a LEMS component
 		}type;
 		
-		enum{
+		enum NativeEntry{
 			AMPLITUDE,
 			DURATION,
 			DELAY
 		}native_entry;
 		
+		SynapticComponentQuantityPath synapse;// for synapse containing inputs
 		// nothing else to add, for now
 	};
 	
@@ -2205,16 +2273,25 @@ struct Simulation{
 			Int ion_type_seq; // TODO 
 		};
 		
-		struct SynapsePath : public MayBeLemsInstanceQuantity{
-			enum Type{
-				NONE,
-				I,
-				G, // for conductance-based synapses only
-				LEMS
-			}type;
+		struct SynapsePath : public SynapticComponentQuantityPath{
+			enum Location{
+				PRE, // for general graded synapses
+				POST // for chemical synapses and general graded synapses
+				// NOTE: "both" would be ambiguous here... let's keep the paths specific
+			}location;
 			
-			Int synapse_type_seq;
-			Int instance_index_seq; // serial number of synapses of the same type on the same post-synaptic segment on the same post-synaptic cell
+			Int proj_seq; // projection in the network
+			Int conn_seq; // connection in the list
+			
+			// just for convenience tracing down the path...? 
+			// TODO canonize in Model, if that useful...?
+			Int GetSynSeq(const Network::Projection::Connection &conn) const {
+				if(conn.type == Network::Projection::Connection::CONTINUOUS){
+					if ( location == Simulation::LemsQuantityPath::SynapsePath::Location::PRE ) return conn.continuous.preComponent;
+					else return conn.continuous.postComponent;
+				}
+				else return conn.synapse;
+			}
 		};
 		
 		// LemsSegmentLocator is not used for these!
@@ -2222,6 +2299,7 @@ struct Simulation{
 			
 			Int list_seq; // list in the network
 			Int inst_seq; // instance in the list
+			// LATER handle explicit connections if needed
 		};
 		
 		Type type;
@@ -2236,11 +2314,13 @@ struct Simulation{
 		};
 		
 		// in the wider sense that it refers to something attached to a specific cell
+		// TODO refactor in the face of synapses which connect two cells ... ?
+		// TODO remove, this concept makes sense only for the current version of Eden I guess ...? move to aux tooling of Model?
 		bool RefersToCell() const {
 			if(
 				type == CELL
 				|| type == SEGMENT || type == CHANNEL || type == ION_POOL
-				|| type == SYNAPSE //|| type == INPUT
+				|| type == SYNAPSE || type == INPUT
 			) return true;
 			else return false;
 		
@@ -2367,7 +2447,7 @@ struct Simulation{
 			// use this object for its parts really - not the whole of it, be careful! TODO explain
 			Simulation::LemsQuantityPath path;
 			
-			std::vector<std::vector<Real> > real_data; // in engine units; one or many rows. If cable mode is set, the first row is fractionAlong sample points
+			std::vector<std::vector<Real> > real_data; // in engine units; one or many rows. If cable mode is set, the first row is fractionAlongCable sample points
 			std::vector<std::vector<Simulation::LemsQuantityPath> > ref_data; // for 'reference' values.
 			
 			Statement(){
@@ -2435,6 +2515,7 @@ struct Model{
 	Int target_simulation;
 	
 	bool GetLemsQuantityPathType_FromLems(const Simulation::LemsInstanceQuantityPath &path, const ComponentInstance &compinst, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const ;
+	bool GetLemsQuantityPathType_SynapticComponent(const Simulation::SynapticComponentQuantityPath &path, const SynapticComponent &syn, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const;
 	bool GetLemsQuantityPathType_InputInstance(const Simulation::InputInstanceQuantityPath &path, const InputSource &input, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const;
 	bool GetLemsQuantityPathType(const Network &net, const Simulation::LemsQuantityPath &path, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const;
 	

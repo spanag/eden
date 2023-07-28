@@ -16,8 +16,26 @@ set cell pop0 2 all c -50
 set cell pop0 all all d multi
 values 6 6 2 0.05 4
 
-# synapse, set ref to something...
+
+# input instance customisation
+set input Input0 0 amplitude 14
+set input Input0 1,2,3,4 amplitude multi
+values 0.5 15 0.6 10
+
+set input Input0 all delay 20 ms
+set input Input0 0 delay 10 ms
+set input Input0 2,4 delay multi ms
+values 22 16 
+
+set input Input0 all duration multi sec
+values .09 .18 .198 0.180 144e-3
+
+
+# per synapse customization
+set synapse ToPopp_ExpWild all post erev 0.05 V
+set synapse ToPopp_ExpWild all post tauDecay multi msec
+values 5 0.5
+
+# set ref to something...
 
 # split izh population...
-
-# 
