@@ -18,6 +18,7 @@
 struct ILogProxy{
 	virtual void error(const char *format, ...) const = 0;
 	virtual void warning(const char *format, ...) const = 0;
+	virtual ~ILogProxy(){}
 };
 struct NullLogProxy : public ILogProxy{
 	void error(const char *format, ...) const {}
@@ -1634,7 +1635,7 @@ struct SpeciesAcrossSegOrSegGroup : public AcrossSegOrSegGroup{
 struct ChannelDistribution : public AcrossSegOrSegGroup{
 	
 	// TODO this should be an unique identifier!
-	const char * name; 
+	const char *name; 
 	
 	//These are standard for all channel distributions
 	Int ion_species;
@@ -2316,15 +2317,15 @@ struct Simulation{
 		// in the wider sense that it refers to something attached to a specific cell
 		// TODO refactor in the face of synapses which connect two cells ... ?
 		// TODO remove, this concept makes sense only for the current version of Eden I guess ...? move to aux tooling of Model?
-		bool RefersToCell() const {
-			if(
-				type == CELL
-				|| type == SEGMENT || type == CHANNEL || type == ION_POOL
-				|| type == SYNAPSE || type == INPUT
-			) return true;
-			else return false;
+		// bool RefersToCell() const {
+		// 	if(
+		// 		type == CELL
+		// 		|| type == SEGMENT || type == CHANNEL || type == ION_POOL
+		// 		|| type == SYNAPSE || type == INPUT
+		// 	) return true;
+		// 	else return false;
 		
-		}
+		// }
 		LemsQuantityPath(){
 			type = NONE;
 		}
@@ -2519,6 +2520,19 @@ struct Model{
 	bool GetLemsQuantityPathType_InputInstance(const Simulation::InputInstanceQuantityPath &path, const InputSource &input, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const;
 	bool GetLemsQuantityPathType(const Network &net, const Simulation::LemsQuantityPath &path, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const;
 	
+	bool LemsQuantityPathToString(const ComponentInstance &inst, const Simulation::LemsInstanceQuantityPath &path, std::string &ret) const;
+	bool LemsQuantityPathToString(const SynapticComponent &syn, const Simulation::SynapticComponentQuantityPath &path, std::string &ret) const;
+	bool LemsQuantityPathToString(const InputSource &input, const Simulation::InputInstanceQuantityPath &path, std::string &ret) const;
+	bool LemsQuantityPathToString(const ArtificialCell &cell, const Simulation::LemsQuantityPath::CellPath &path, std::string &ret) const;
+	bool LemsQuantityPathToString(const Network &net, const Simulation::LemsQuantityPath &path, std::string &ret) const;
+	
+	bool ParseLemsSegmentLocator(const ILogProxy &log, const std::vector<std::string> tokens, const Network &net, Simulation::LemsSegmentLocator &path, Int &tokens_consumed) const;
+	bool ParseLemsQuantityPathInComponent(const ILogProxy &log, const ComponentInstance &instance, const std::vector<std::string> &tokens, Simulation::LemsInstanceQuantityPath &lems_instance_qty_path, Int &tokens_consumed ) const;
+	bool ParseLemsQuantityPath_SynapticComponent(const ILogProxy &log, const SynapticComponent &syn, const std::vector<std::string> &tokens, Simulation::SynapticComponentQuantityPath &path, Int &tokens_consumed ) const;
+	bool ParseLemsQuantityPath_InputInstance(const ILogProxy &log, const InputSource &input, const std::vector<std::string> &tokens, Simulation::InputInstanceQuantityPath &path, Int &tokens_consumed ) const;
+	bool ParseLemsQuantityPath_ArtificialCell(const ILogProxy &log, const ArtificialCell &cell,  const std::vector<std::string> &tokens, Simulation::LemsQuantityPath::CellPath &path_cell, Int &tokens_consumed) const;
+	bool ParseLemsQuantityPath_CellProperty(const ILogProxy &log, const CellType &cell_type, const std::vector<std::string> &tokens, Simulation::LemsQuantityPath &path, Int &tokens_consumed ) const;
+	bool ParseLemsQuantityPath(const ILogProxy &log, const char *qty_str, const Network &net, Simulation::LemsQuantityPath &path) const;
 	
 	Model(){ target_simulation = -1; }
 };

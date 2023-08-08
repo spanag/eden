@@ -115,6 +115,24 @@ public:
 };
 
 
+// do not use default accuracy when converting numerics to alpha !
+// expicitly specify what the alpha is used for
+template< typename T, typename = typename std::enable_if< std::is_integral<T>::value >::type >
+std::string accurate_string( T val ){
+	return std::to_string( val );
+}
+// https://stackoverflow.com/questions/5985068/how-can-i-hide-defined-but-not-used-warnings-in-gcc
+static inline std::string accurate_string( float val ){
+	char tmps[100];
+	sprintf(tmps, "%.9g", val);
+	return tmps;
+}
+static inline std::string accurate_string( double val ){
+	char tmps[100];
+	sprintf(tmps, "%.17g", val);
+	return tmps;
+}
+
 // Tokenize a string, as with String.split() in string-capable languages
 std::vector<std::string> string_split(const std::string& str, const std::string& delim);
 

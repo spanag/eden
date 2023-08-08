@@ -288,10 +288,10 @@ struct ImportLogger{
 	}
 };
 
-struct LogWithElement{
+struct LogWithElement : public ILogProxy{
 	const ImportLogger &log;
 	const pugi::xml_node &eLement;
-	// LogWithElement():{}
+	LogWithElement(const ImportLogger &_l, const pugi::xml_node &_e): log(_l), eLement(_e) {}
 	void error(const char *format, ...) const {
 		va_list args;
 		va_start(args, format);
@@ -856,8 +856,7 @@ constexpr Int ComponentType::CommonExposures   ::* ComponentType::CommonExposure
 constexpr Int ComponentType::CommonEventInputs ::* ComponentType::CommonEventInputs ::members[];
 constexpr Int ComponentType::CommonEventOutputs::* ComponentType::CommonEventOutputs::members[];
 
-template<typename LogProxy> // HERE ILogProxy
-bool ParseSynapseLocation(const LogProxy &log, Network::Projection::Connection::Type type, const char *sLocation,  Simulation::LemsQuantityPath::SynapsePath::Location &loca){
+bool ParseSynapseLocation(const ILogProxy &log, Network::Projection::Connection::Type type, const char *sLocation,  Simulation::LemsQuantityPath::SynapsePath::Location &loca){
 	typedef Simulation::LemsQuantityPath::SynapsePath::Location SynLoc;
 	typedef Network::Projection::Connection::Type ConnType;
 	if(     strcmp(sLocation, "post") == 0) loca = SynLoc::POST;
@@ -1062,6 +1061,826 @@ bool Model::GetLemsQuantityPathType(const Network &net, const Simulation::LemsQu
 		assert(false);
 		return false;
 	}
+}
+bool Model::LemsQuantityPathToString(const ComponentInstance &inst, const Simulation::LemsInstanceQuantityPath &path, std::string &ret) const {
+	assert(inst.ok());
+	Int comptype_seq = inst.id_seq;
+	assert(component_types.has(comptype_seq));
+	const auto &comptype = component_types.get(comptype_seq);
+	
+	const char *sName = comptype.name_space.getName(path.namespace_thing_seq);
+	printf("patt %s |%s|\n", ret.c_str(), sName);
+	if(!sName) return false;
+	ret += sName;
+	// all namespace things are leaves, until LATER
+	return true;
+}
+bool Model::LemsQuantityPathToString(const SynapticComponent &syn, const Simulation::SynapticComponentQuantityPath &path, std::string &ret) const  {
+	typedef Simulation::SynapticComponentQuantityPath Path;
+	if( path.type == Path::LEMS ){
+		return LemsQuantityPathToString(syn.component, path.lems_quantity_path, ret);
+	}
+	else if( path.type == Path::NATIVE ){
+		typedef Path::NativeEntry Nat;
+		switch( path.native_entry ){
+			case Nat::GBASE : ret += "gbase"    ; return true;
+			case Nat::EREV  : ret += "erev"     ; return true;
+			case Nat::TAU   : ret += "tauDecay" ; return true;
+			case Nat::G     : ret += "g"        ; return true;
+			default: return false;
+		}
+	}
+	else if( path.type == Path::BLOCK ){
+		ret += "blockMechanisms[0]/";
+		if(path.block.type == Path::Block::LEMS){
+			return LemsQuantityPathToString(syn.blopla.block_mechanism.component, path.block.lems_quantity_path, ret);
+		}
+		else return false;
+	}
+	else if( path.type == Path::PLASTICITY ){
+		ret += "plasticityMechanisms[0]/";
+		if(path.plasticity.type == Path::Plasticity::LEMS){
+			return LemsQuantityPathToString(syn.blopla.plasticity_mechanism.component, path.plasticity.lems_quantity_path, ret);
+		}
+		else return false;
+	}
+	else return false;
+}
+bool Model::LemsQuantityPathToString(const InputSource &input, const Simulation::InputInstanceQuantityPath &path, std::string &ret) const {
+	typedef Simulation::InputInstanceQuantityPath Path;
+	if( path.type == Path::LEMS ){
+		return LemsQuantityPathToString(input.component, path.lems_quantity_path, ret);
+	}
+	else if( path.type == Path::NATIVE ){
+		switch( path.native_entry ){
+			case Path::AMPLITUDE : ret += "amplitude"; return true;
+			case Path::DURATION  : ret += "duration" ; return true;
+			case Path::DELAY     : ret += "delay"    ; return true;
+			default: return false;
+		}
+	}
+	else if( path.type == Path::SYNAPSE ){
+		ret += "synapse/";
+		return LemsQuantityPathToString(synaptic_components.get(input.synapse), path.synapse, ret);
+	}
+	else return false;
+}
+bool Model::LemsQuantityPathToString(const ArtificialCell &cell, const Simulation::LemsQuantityPath::CellPath &path, std::string &ret) const {
+	typedef Simulation::LemsQuantityPath::CellPath Path;
+	if( path.type == Path::LEMS ){
+		return LemsQuantityPathToString(cell.component, path.lems_quantity_path, ret);
+	}
+	else if( path.type == Path::INPUT ){
+		assert( cell.type == ArtificialCell::SPIKE_SOURCE );
+		assert( cell.spike_source_seq >= 0 );
+		const auto &input = input_sources.get( cell.spike_source_seq );
+		return LemsQuantityPathToString(input, path.input, ret);
+	}
+	else return false;
+}
+bool Model::LemsQuantityPathToString(const Network &net, const Simulation::LemsQuantityPath &path, std::string &ret) const {
+	const auto &type = path.type;
+	typedef Simulation::LemsQuantityPath Path;
+	
+	ret.clear();
+	printf("type %s\n",std::to_string(type).c_str());
+	if(type == Path::CELL
+	|| type == Path::SEGMENT
+	|| type == Path::CHANNEL
+	|| type == Path::ION_POOL
+	){
+		ret += net.populations.getName(path.population) + ("["+accurate_string(path.cell_instance)+"]/");
+		const Network::Population &population = net.populations.get(path.population);
+		const CellType &cell = cell_types.get(population.component_cell);
+		printf("type %s\n",std::to_string(type).c_str());
+		// if it's a physical cell, add an explicit segment locator, just to be nice
+		if(cell.type == CellType::PHYSICAL){
+			// add segment locator
+			ret += accurate_string(path.segment_seq);
+			if(path.fractionAlong != 0.5) ret += accurate_string(path.fractionAlong);
+			ret += "/";
+		}
+		printf("patt %s\n", ret.c_str());
+		if(type == Path::CELL){
+			assert(cell.type == CellType::ARTIFICIAL);
+			return LemsQuantityPathToString(cell.artificial, path.cell, ret);
+		}
+		else if(type == Path::SEGMENT){
+			const auto type = path.segment.type;
+			printf("patt seg %s %d\n", ret.c_str(), (int)type);
+			typedef Path::SegmentPath Path;
+			if     ( type == Path::VOLTAGE ) ret += "v";
+			else if( type == Path::CALCIUM_INTRA ) ret += "caConc";
+			else if( type == Path::CALCIUM2_INTRA ) ret += "caConc2";
+			else return false;
+			printf("patt %s\n", ret.c_str());
+			return true;
+		}
+		else if(type == Path::CHANNEL){
+			ret += "biophysicalProperties/membraneProperties/";
+			const auto &bioph = biophysics.at(cell.physical.biophysicalProperties);
+			const auto &chandist = bioph.membraneProperties.channel_specs[path.channel.distribution_seq];
+			const auto &channel = ion_channels.get(chandist.ion_channel);
+			
+			ret += chandist.name; ret += "/";
+			typedef Path::ChannelPath Path; 
+			switch(path.channel.type){
+				case Path::I : ret += "i"; return true;
+				case Path::G : ret += "g"; return true;
+				case Path::I_DENSITY : ret += "iDensity"; return true;
+				case Path::G_DENSITY : ret += "gDensity"; return true;
+				case Path::Q :{
+					ret += ion_channels.getName(chandist.ion_channel); ret += "/";
+					ret += channel.gates.getName(path.channel.gate_seq); ret += "/q";
+					return true;
+				}
+				// TODO SUBQ, LEMS
+				default: break;
+			}
+			return false; // none of supported path types, somehow
+		}
+		// TODO ionpool!
+		else return false;
+	}
+	else if(type == Path::SYNAPSE){
+		ret += net.projections.getName(path.synapse.proj_seq) + ("["+accurate_string(path.synapse.conn_seq)+"]/");
+		const Network::Projection &proj = net.projections.get(path.synapse.proj_seq);
+		const Network::Projection::Connection &conn = proj.connections.contents[path.synapse.conn_seq];
+		
+		if(path.synapse.location == Path::SynapsePath::Location::POST) ret += "post/";
+		else if(path.synapse.location == Path::SynapsePath::Location::PRE) ret += "pre/";
+		else return false;
+		
+		Int syn_seq = path.synapse.GetSynSeq(conn);
+		const SynapticComponent &syn = synaptic_components.get(syn_seq);
+		// LATER access weight, delay as well?
+			
+		return LemsQuantityPathToString(syn, path.synapse, ret);
+	}
+	else if(type == Path::INPUT){
+		ret += net.input_lists.getName(path.input.list_seq) + ("["+accurate_string(path.input.inst_seq)+"]/");
+		const Network::InputList &list = net.input_lists.get(path.input.list_seq);
+		const InputSource &input = input_sources.get(list.component);
+		return LemsQuantityPathToString(input, path.input, ret);
+	}
+	else{
+		printf("path to string: type %d not supported yet\n", (int)type);
+		return false;
+	}
+}
+
+// helpers for LEMS id's
+// some are still inside ImportContext, like ParseLemsEventPath
+// parse according to the definitive specification: the source code
+// https://github.com/NeuroML/jNeuroML/issues/50
+// https://github.com/NeuroML/org.neuroml.export/blob/master/src/main/java/org/neuroml/export/utils/LEMSQuantityPath.java#L136
+// https://github.com/NeuroML/org.neuroml.export/blob/master/src/main/java/org/neuroml/export/neuron/LEMSQuantityPathNeuron.java#L118
+// https://github.com/NeuroML/org.neuroml.export/blob/master/src/main/java/org/neuroml/export/neuron/NeuronWriter.java#L1110
+// https://github.com/NeuroML/org.neuroml.export/blob/development/src/main/java/org/neuroml/export/neuron/NeuronWriter.java#L654
+// note that LEMS does fully modular resolution (but does not support multiple compartments) :
+// https://github.com/LEMS/jLEMS/blob/development/src/main/java/org/lemsml/jlems/core/sim/RunnableAccessor.java#L29
+
+// <population name>[instance]/[<redundant population>/]v for point neurons
+// <population name>/<instance>/<cell type, redundant>/<segment>/v
+// ... <segment>/<biophysical properties name>/membraneProperties/<ion channel distribution>/[i, g, iDensity, gDensity]
+// ... <segment>/<biophysical properties name>/membraneProperties/<ion channel distribution>/<channel type>/<gate>/q
+// <postsynaptic population name>/<instance>/<cell type, redundant>/<segment>/synapses:<synapse type>:<incrementing instance of same type on same segment of same cell>/g 
+// 	see https://github.com/NeuroML/org.neuroml.export/blob/master/src/main/java/org/neuroml/export/neuron/NeuronWriter.java#L581
+
+template<typename GroupCollection, typename Get_Seq>
+bool ParseLemsGroupLocator(const ILogProxy &log, const std::vector<std::string> tokens, const char *group_type_name, const GroupCollection &group_collection, const Get_Seq &GetSeq, Int &group_seq, Int &instance_seq, Int &tokens_consumed) {
+	// note: tokens are spearted by '/' in the following
+	Int pop_token_id = tokens_consumed;
+	if(tokens_consumed >= (int) tokens.size()){
+		return false;
+	}
+	const std::string &pop_token = tokens[pop_token_id];
+	std::string instance_string;
+	
+	size_t bracketIndex =  pop_token.find_first_of("[");
+	std::string pop_name = pop_token.substr(0,bracketIndex);
+	
+	group_seq = group_collection.get_id(pop_name.c_str());
+	if(group_seq < 0){
+		log.error("target %s %s not found", group_type_name, pop_name.c_str());
+		return false;
+	}
+	const auto &group = group_collection.get(group_seq);
+
+	if(pop_name.length() == pop_token.length()){
+		// no bracket, use pop/id/... instead
+		if( pop_token_id + 1 >= (int)tokens.size() ){
+			log.error("not enough factors for instance ID");
+			return false;
+		}
+		instance_string = tokens[pop_token_id + 1];
+		tokens_consumed = pop_token_id + 2;
+	}
+	else{
+		//with bracket, pop[id]/...
+		instance_string = pop_token.substr(bracketIndex + 1, pop_token.find_first_of("]") - (bracketIndex + 1));
+		tokens_consumed = pop_token_id + 1;
+	}
+	
+	Int instance_id;
+	if( !StrToL(instance_string.c_str(), instance_id) ){
+		log.error("target instance \"%s\" not an integer number", instance_string.c_str());
+		return false;
+	}
+	instance_seq = GetSeq(group, instance_id);
+	if(instance_seq < 0){
+		log.error("target instance %s not found in %s", instance_string.c_str(), pop_name.c_str());
+		return false;
+	}
+	return true;
+}// HERE ILogProxy?
+bool ParseLemsCellLocator(const ILogProxy &log, const std::vector<std::string> tokens, const Network &net, Simulation::LemsSegmentLocator &path, Int &tokens_consumed) {
+	return ParseLemsGroupLocator(log, tokens, "population", net.populations, [](const Network::Population &group, Int id){return group.instances.getSequential(id);}, path.population, path.cell_instance, tokens_consumed);
+}
+bool Model::ParseLemsSegmentLocator(const ILogProxy &log, const std::vector<std::string> tokens, const Network &net, Simulation::LemsSegmentLocator &path, Int &tokens_consumed) const {
+	
+	if( tokens.size() < 1 ){
+		log.error("target path must have at least 1 slash-delimited factor");
+		return false;
+	}
+	if(!( ParseLemsCellLocator(log, tokens, net, path, tokens_consumed) )) return false;
+	
+	// TODO pop might not be set when selecting populations or projections !
+	const Network::Population &population = net.populations.get(path.population);
+	
+	int segment_token_id = tokens_consumed;
+	if(segment_token_id < (int)tokens.size()){
+		
+		const std::string &segment_token = tokens[segment_token_id];
+		// check if the segment token is further below because this is the redundant pop name
+		if( segment_token == cell_types.getName(population.component_cell) ){
+			//printf("skip redundant %s\n", segment_token.c_str());
+			segment_token_id++;
+		}
+		
+	}
+	int segprop_token_id = -1;
+	auto MatchesFractionalSegmentId = [](const char *sId){
+		int dots_counted = 0;
+		for(const char *s = sId; *s; s++){
+			char c = *s;
+			if(isdigit(c)) ; // continue
+			else if(c == '.') dots_counted++;
+			else return false;
+		}
+		return dots_counted <= 1;
+	};
+	auto GetFractionalSegmentId = [&MatchesFractionalSegmentId](const char *sId, Int &segment_id, Real &fractionAlong){
+		if(!MatchesFractionalSegmentId(sId)) return false;
+		auto dot = strchr(sId,'.');
+		if(dot){
+			if(!StrToL(sId, segment_id, false)) return false; // allow stopping at dot
+			if(!( StrToF(dot, fractionAlong) && 0 <= fractionAlong && fractionAlong <= 1 )) return false;
+		}
+		else{
+			if(!StrToL(sId, segment_id)) return false;
+			fractionAlong = 0.5; // when not mentioned
+		}
+		return true;
+	};
+	Int segment_id = -1;
+	// if(!( segment_token_id < (int)tokens.size() && StrToL(tokens[segment_token_id].c_str(), segment_id) )){
+	if(!( segment_token_id < (int)tokens.size() && GetFractionalSegmentId(tokens[segment_token_id].c_str(), segment_id, path.fractionAlong) )){
+		// could be a single compartment cell, or an artificial cell
+		segment_id = -1; //set it to missing
+		// this token is a property of the single compartment cell, ignore
+		segprop_token_id = segment_token_id;
+	}
+	else{
+		// accept token
+		segprop_token_id = segment_token_id + 1;
+	}
+	
+	// check if segment ID exists, or can be defaulted if unset
+	const CellType &cell_type = cell_types.get(population.component_cell);
+	if( cell_type.type == CellType::ARTIFICIAL ){
+		if( segment_id < 0 ){
+			// set it to default
+			segment_id = 0;
+		}
+		if( segment_id != 0 ){
+			log.error("artificial cell only has segment 0");
+			return false;
+		}
+		
+		path.segment_seq = 0;
+		path.fractionAlong = 0.5; // for good measure
+	}
+	else if(cell_type.type == CellType::PHYSICAL ){
+		
+		const Morphology &morph = morphologies.get(cell_type.physical.morphology);
+		if( segment_id < 0 ){
+			if( morph.segments.size() == 1 ){
+				// set it to default
+				segment_id = 0;
+			}
+			else{
+				std::string complaint = "target path needs segment ID, because cell has multiple segments. Setting to implicit default: segment ID = 0";
+				// add diagnostic, may be useful? 
+				if( 0 <= segprop_token_id && segprop_token_id < (int)tokens.size() ) complaint += "(path following cell id was \""+tokens[segment_token_id]+"\")";
+				log.warning("%s", complaint.c_str());
+				// return false;
+				// TODO perhaps stop complaining after warning too many times
+				
+				segment_id = 0;
+			}
+		}
+		
+		path.segment_seq = morph.segments.getSequential(segment_id);
+		if(path.segment_seq < 0){
+			log.error("target segment %s not found in cell", tokens[segment_token_id].c_str());
+			return false;
+		}
+	}
+	else{
+		log.error("internal error: LEMS segment locator: cell type type %d", cell_type.type);
+		return false;
+	}
+	
+	tokens_consumed = segprop_token_id;
+	return true;
+}
+bool Model::ParseLemsQuantityPathInComponent(const ILogProxy &log, const ComponentInstance &instance, const std::vector<std::string> &tokens, Simulation::LemsInstanceQuantityPath &lems_instance_qty_path, Int &tokens_consumed ) const {
+	
+	if( (int)tokens.size() <= tokens_consumed ){
+		log.error("path needs to specify a property of LEMS component %s", ( tokens.empty() ? "" : tokens[tokens.size() - 1].c_str() ) );
+		return false;
+	}
+	if( tokens_consumed + 1 < (int)tokens.size() ){
+		log.error("LEMS child component quantities not yet supported" );
+		return false;
+	}
+	const char *propname = tokens[tokens_consumed].c_str();
+	tokens_consumed++;
+	
+	// get comp.type
+	Int comptype_seq = instance.id_seq;
+	if( !component_types.has(comptype_seq) ){
+		log.error("internal error: LEMS quantity path missing component type %d", (int) instance.id_seq);
+		return false;
+	}
+	
+	const auto &comptype = component_types.get(comptype_seq);
+	
+	Int &namespace_id = lems_instance_qty_path.namespace_thing_seq;
+	namespace_id = comptype.name_space.get_id(propname);
+	if( namespace_id < 0 ){
+		log.error("%s is not a define d quantity in component type %s", propname, component_types.getName(comptype_seq));
+		return false;
+	}
+	
+	return true;
+}
+bool Model::ParseLemsQuantityPath_SynapticComponent(const ILogProxy &log, const SynapticComponent &syn, const std::vector<std::string> &tokens, Simulation::SynapticComponentQuantityPath &path, Int &tokens_consumed ) const {
+	typedef SynapticComponent Syn;
+	typedef Simulation::SynapticComponentQuantityPath SynPath;
+	int mainprop_token_id = tokens_consumed;
+	
+	// now branch according to property type
+	if(mainprop_token_id >= (Int)tokens.size()){
+		log.error("not enough factors for synaptic component property");
+		return false;
+	}
+	
+	const std::string &mainprop = tokens[mainprop_token_id];
+	
+	// TODO weight?
+	// work with LEMSified stuff as a priority
+	if( syn.type != Syn::BLOCKING_PLASTIC && syn.component.ok() ){
+		path.type = SynPath::LEMS;
+		if( !ParseLemsQuantityPathInComponent(log, syn.component, tokens, path.lems_quantity_path, tokens_consumed ) ) return false;
+		return true;
+	}
+	else if( syn.type == Syn::BLOCKING_PLASTIC ){
+		// LATER children will be supported...
+		// TODO can they be a multitude?
+		if(mainprop == "blockMechanisms[0]"){
+			typedef Syn::BlockingPlasticSynapse::BlockMechanism Blo;
+			const Blo &blo = syn.blopla.block_mechanism;
+			if(blo.type == Blo::Type::NONE){
+				log.error("%s is not present on this component", mainprop.c_str());
+				return false;
+			}
+			tokens_consumed++;
+			path.type = SynPath::BLOCK;
+			
+			if(!(tokens_consumed+1 <= (Int)tokens.size())){
+				log.error("incomplete path for %s", mainprop.c_str());
+				return false;
+			}
+			
+			assert(blo.component.ok());
+			path.block.type = SynPath::Block::LEMS;
+			return ParseLemsQuantityPathInComponent(log, blo.component, tokens, path.block.lems_quantity_path, tokens_consumed );
+		}
+		else if(mainprop == "plasticityMechanisms[0]"){
+			typedef Syn::BlockingPlasticSynapse::PlasticityMechanism Pla;
+			const Pla &pla = syn.blopla.plasticity_mechanism;
+			if(pla.type == Pla::Type::NONE){
+				log.error("%s is not present on this component", mainprop.c_str());
+				return false;
+			}
+			tokens_consumed++;
+			path.type = SynPath::PLASTICITY;
+			
+			if(!(tokens_consumed+1 <= (Int)tokens.size())){
+				log.error("incomplete path for %s", mainprop.c_str());
+				return false;
+			}
+			
+			assert(pla.component.ok());
+			path.plasticity.type = SynPath::Plasticity::LEMS;
+			return ParseLemsQuantityPathInComponent(log, pla.component, tokens, path.plasticity.lems_quantity_path, tokens_consumed );
+		}
+		else{
+			// check for the main, synaptic component which happens to be lemsified
+			return ParseLemsQuantityPathInComponent(log, syn.component, tokens, path.lems_quantity_path, tokens_consumed );
+		} 
+	}
+	
+	// otherwise it's a native, or complicated, type.
+	path.type = SynPath::NATIVE;
+	
+	tokens_consumed++; // note: this token will be used in the following, unshift or refactor if necessary later
+	auto &native_entry = path.native_entry;
+	typedef SynPath::NativeEntry Nat;
+	
+	// is it a terminal property? (to avoid repeated checks in the following)
+	if(tokens_consumed == (Int)tokens.size()){
+		if(     mainprop == "gbase"      ){native_entry = Nat::GBASE; return true; }
+		else if(mainprop == "conductance"){native_entry = Nat::GBASE; return true; }
+		else if(mainprop == "erev"       ){native_entry = Nat::EREV ; return true; }
+		else if(mainprop == "tauDecay"   ){native_entry = Nat::TAU  ; return true; }
+		else if(mainprop == "g"          ){native_entry = Nat::G    ; return true; }
+		else{
+			log.error("unknown leaf property %s", mainprop.c_str()); // LATER log in token possibly in attribute
+			return false;
+		}
+	}
+	else{
+		log.error("unknown non-leaf property %s", mainprop.c_str());
+		return false;
+	}
+	
+	if( syn.type == Syn::EXP || syn.type == Syn::GAP ){
+		if(( syn.type == Syn::EXP && !( native_entry == Nat::GBASE || native_entry == Nat::EREV || native_entry == Nat::TAU || native_entry == Nat::G ) )
+		|| ( syn.type == Syn::GAP && !( native_entry == Nat::GBASE ) )
+		){
+			log.error("property %s does not match synaptic component type", mainprop.c_str()); return false;
+		}
+		return true; // all checks passed
+	}
+	// LATER composite?
+	else{
+		log.error("synaptic component type not supported yet");
+		return false;
+	}
+}
+bool Model::ParseLemsQuantityPath_InputInstance(const ILogProxy &log, const InputSource &input, const std::vector<std::string> &tokens, Simulation::InputInstanceQuantityPath &path, Int &tokens_consumed ) const {
+	typedef InputSource::Type InpType;
+	typedef Simulation::InputInstanceQuantityPath InpPath;
+	// TODO weight?
+	int mainprop_token_id = tokens_consumed;
+	
+	// now branch according to property type
+	if(mainprop_token_id >= (Int)tokens.size()){
+		log.error("not enough factors for input property");
+		return false;
+	}
+	
+	const std::string &mainprop = tokens[mainprop_token_id];
+	
+	// const bool is_native = ( input.type == InpType::PULSE );
+	const bool has_synapse = (
+		input.type == InpType::TIMED_SYNAPTIC
+		|| input.type == InpType::POISSON_SYNAPSE
+		|| input.type == InpType::POISSON_SYNAPSE_TRANSIENT
+	);
+	
+	// synapse containing stuff are more than just lemsified
+	if( has_synapse && mainprop == "synapse" ){
+		tokens_consumed++;
+		path.type = InpPath::SYNAPSE;
+		return ParseLemsQuantityPath_SynapticComponent(log, synaptic_components.get(input.synapse), tokens, path.synapse, tokens_consumed);
+	}
+	
+	// work with simple LEMSified stuff as a priority
+	if( input.component.ok() ){
+		path.type = InpPath::LEMS;
+		if( !ParseLemsQuantityPathInComponent(log, input.component, tokens, path.lems_quantity_path, tokens_consumed ) ) return false;
+		return true;
+	}
+	
+	// otherwise it's a native, or complicated, type.
+	path.type = InpPath::NATIVE;
+	tokens_consumed++; // note: this token will be used in the following, unshift or refactor if necessary later
+	
+	if(input.type == InpType::PULSE){
+		// is it a terminal property? (to avoid repeated checks in the following)
+		if(tokens_consumed == (Int)tokens.size()){
+			if(     mainprop == "amplitude"){ path.native_entry = InpPath::AMPLITUDE; return true; }
+			else if(mainprop == "duration" ){ path.native_entry = InpPath::DURATION ; return true; }
+			else if(mainprop == "delay"    ){ path.native_entry = InpPath::DELAY    ; return true; }
+			else{
+				log.error("unknown leaf property %s", mainprop.c_str()); // LATER log in token possibly in attribute
+				return false;
+			}
+		}
+		else{
+			log.error("unknown non-leaf property %s", mainprop.c_str());
+			return false;
+		}
+	}
+	else if(input.type == InpType::TIMED_SYNAPTIC){
+		// LATER if ever support customization of spike times. Though the number of spikes wouldn't easily change this way, so it's not so useful anyway.
+		log.error("timedSynapticInput paths not supported yet");
+		return false;
+	}
+	else{
+		// shouldn't happen for now, all types are checked for at this point
+		log.error("input source type not supported yet");
+		return false;
+	}
+}
+bool Model::ParseLemsQuantityPath_ArtificialCell(const ILogProxy &log, const ArtificialCell &cell,  const std::vector<std::string> &tokens, Simulation::LemsQuantityPath::CellPath &path_cell, Int &tokens_consumed) const {
+	if( cell.type == ArtificialCell::SPIKE_SOURCE ){
+		path_cell.type = Simulation::LemsQuantityPath::CellPath::INPUT;
+		
+		const auto &input = input_sources.get( cell.spike_source_seq );
+		
+		return ParseLemsQuantityPath_InputInstance( log, input, tokens, path_cell.input, tokens_consumed );
+	}
+	else{
+		// work only with LEMSified stuff for now
+		if( cell.component.ok() ){
+			path_cell.type = Simulation::LemsQuantityPath::CellPath::LEMS;
+			return ParseLemsQuantityPathInComponent(log, cell.component, tokens, path_cell.lems_quantity_path, tokens_consumed );
+		}
+		else{
+			log.error("native artificial cell type not supported yet");
+			return false;
+		}
+	}
+}
+
+// NOTE: path is a read+write argument. Specifically, segment_seq is read. If set, only the mechanism distributions that include this segment are valid. If unset (ie negative), the caller is responsible for validating that if selected, a mechanism distribution exists for the segments being considered (for example, when multiple segments are considered, is it an error if some segments are outside the distribution mechanism, or are those without the mechanism simply excluded? It depends).
+bool Model::ParseLemsQuantityPath_CellProperty(const ILogProxy &log, const CellType &cell_type, const std::vector<std::string> &tokens, Simulation::LemsQuantityPath &path, Int &tokens_consumed ) const {
+	
+	int segprop_token_id = tokens_consumed;
+	
+	// now branch according to property type
+	if(segprop_token_id >= (Int)tokens.size()){
+		log.error("not enough factors for cell or segment property");
+		return false;
+	}
+	
+	const std::string &segprop = tokens[segprop_token_id];
+	
+	
+	if( cell_type.type == CellType::ARTIFICIAL ){
+		path.type = Simulation::LemsQuantityPath::CELL;
+		return ParseLemsQuantityPath_ArtificialCell(log, cell_type.artificial, tokens, path.cell, tokens_consumed);
+	}
+	else if(cell_type.type == CellType::PHYSICAL ){
+		// use the token
+		tokens_consumed++;
+		
+		const PhysicalCell &cell = cell_type.physical;
+		const Morphology &morph = morphologies.get(cell.morphology);
+		const BiophysicalProperties &bioph = biophysics.at(cell.biophysicalProperties);
+	
+		if(segprop == "v"){
+			path.type = Simulation::LemsQuantityPath::SEGMENT;
+			path.segment.type =  Simulation::LemsQuantityPath::SegmentPath::VOLTAGE;
+			//printf("\n voltage yay!\n");
+			return true;
+		}
+		else if(segprop == "caConc"){
+			path.type = Simulation::LemsQuantityPath::SEGMENT;
+			path.segment.type =  Simulation::LemsQuantityPath::SegmentPath::CALCIUM_INTRA;
+			// TODO run a check for existence of Ca2, also for LEMS interface possibly
+			return true;
+		}
+		else if(segprop == "caConc2"){
+			path.type = Simulation::LemsQuantityPath::SEGMENT;
+			path.segment.type =  Simulation::LemsQuantityPath::SegmentPath::CALCIUM2_INTRA;
+			return true;
+		}
+		else if(segprop == bioph.name || segprop == "biophysicalProperties"){
+			
+			int biophprop_token_id = segprop_token_id + 1;
+			
+			if(biophprop_token_id >= (int)tokens.size()){
+				log.error("not enough factors for biophysical property");
+				return false;
+			}
+			
+			const std::string &bioprop = tokens[biophprop_token_id];
+			
+			if(bioprop == "membraneProperties"){
+				
+				// what membrane property is this?
+				int biophproprop_token_id = biophprop_token_id + 1;
+			
+				if(biophproprop_token_id >= (int)tokens.size()){
+					log.error("not enough factors for biophysical property");
+					return false;
+				}
+				
+				const std::string &bioproprop = tokens[biophproprop_token_id];
+				
+				// perhaps it is an ion channel distribution?
+				Int chandist_seq = -1;
+				for( size_t i = 0; i < bioph.membraneProperties.channel_specs.size(); i++ ){
+					// NOTE there should be at most one distribution under the same name, TODO discuss and if it's ok refactor to reflect that!
+					const auto &dist = bioph.membraneProperties.channel_specs.at(i);
+					// if segment_seq is set, select it only if it includes that segment, TODO improve error reporting to "distribution is not present on segment"
+					if( dist.name == bioproprop && ((path.segment_seq < 0) || dist.toList(morph).has(path.segment_seq)) ){
+						chandist_seq = i;
+						break;
+					}
+					
+				}
+				if(chandist_seq >= 0){
+					// it is
+					path.type = Simulation::LemsQuantityPath::CHANNEL;
+					path.channel.distribution_seq = chandist_seq;
+					const auto &chandist = bioph.membraneProperties.channel_specs[chandist_seq];
+					
+					int chandistprop_token_id = biophproprop_token_id + 1;
+					if(chandistprop_token_id >= (int)tokens.size()){
+						log.error("not enough factors for ion distribution property");
+						return false;
+					}
+					const std::string &chandistprop = tokens[chandistprop_token_id];
+					
+					if(chandistprop == "i"){
+						path.channel.type = Simulation::LemsQuantityPath::ChannelPath::I; // all that's needed
+						return true;
+					}
+					else if(chandistprop == "g"){
+						path.channel.type = Simulation::LemsQuantityPath::ChannelPath::G; // all that's needed
+						return true;
+					}
+					else if(chandistprop == "iDensity"){
+						path.channel.type = Simulation::LemsQuantityPath::ChannelPath::I_DENSITY; // all that's needed
+						return true;
+					}
+					else if(chandistprop == "gDensity"){
+						path.channel.type = Simulation::LemsQuantityPath::ChannelPath::G_DENSITY; // all that's needed
+						return true;
+					}
+					else if(chandistprop == ion_channels.getName(chandist.ion_channel)){
+						
+						// peek inside the channel model
+						const auto &channel = ion_channels.get(chandist.ion_channel);
+						
+						// what channel property is this?
+						int ionchanprop_token_id = chandistprop_token_id + 1;
+						if(ionchanprop_token_id >= (int)tokens.size()){
+							log.error("not enough factors for ion channel property");
+							return false;
+						}
+						const std::string &ionchanprop = tokens[ionchanprop_token_id];
+						
+						// perhaps it is a gate?
+						Int gate_seq = channel.gates.get_id(ionchanprop.c_str());
+						if(gate_seq >= 0){
+							
+							path.channel.gate_seq = gate_seq;
+							// what channel gate property is this?
+							int gateprop_token_id = ionchanprop_token_id + 1;
+							if(gateprop_token_id >= (int)tokens.size()){
+								log.error("not enough factors for ion channel gate property");
+								return false;
+							}
+							const std::string &gateprop = tokens[gateprop_token_id];
+							
+							if(gateprop == "q"){
+								path.channel.type = Simulation::LemsQuantityPath::ChannelPath::Q;  // all that's needed
+								return true;
+							}
+							else{
+								log.error("unknown ion channel gate property %s", gateprop.c_str());
+								return false;
+							}
+							
+						}
+						
+						//otherwise
+						{
+							log.error("unknown ion channel property %s", ionchanprop.c_str());
+							return false;
+						}
+						
+					}
+					else{
+						log.error("unknown ion channel distribution property %s", chandistprop.c_str());
+						return false;
+					}
+				}
+				// FIXME access all ion pools this way
+				
+				//otherwise
+				{
+					log.error("unknown membrane property %s", bioproprop.c_str());
+					return false;
+				}
+				
+			}
+			else{
+				log.error("unknown biophysical property %s", bioprop.c_str());
+				return false;
+			}
+		}
+		else if(segprop.find("synapses:") == 0){
+			log.error("synapse outputs not supported yet");
+			return false;
+		}
+		else{
+			log.error("unknown segment property %s", segprop.c_str());
+			return false;
+		}
+	}
+	else{
+		log.error("internal error: LEMS quantity path: cell type type %d", cell_type.type);
+		return false;
+	}
+}
+
+bool Model::ParseLemsQuantityPath(const ILogProxy &log, const char *qty_str, const Network &net, Simulation::LemsQuantityPath &path) const {
+	auto tokens = string_split(std::string(qty_str), "/");
+	assert(tokens.size() > 0);
+	const std::string first_identifier = string_split(tokens[0],"[")[0];
+	const char *sId = first_identifier.c_str();
+	Int tokens_consumed = 0;
+	
+	// LATER complain if name is ambiguous
+	Int group_seq = -1;
+	if( (group_seq = net.populations.get_id(sId)) >= 0 ){
+		
+		if ( !ParseLemsSegmentLocator(log, tokens, net, path, tokens_consumed) ) return false;
+		
+		// if (cell) segment locator is valid, then it is a property of a cell in a population, and the cell_type is valid.
+		const Network::Population &population = net.populations.get(path.population);
+		const CellType &cell_type = cell_types.get(population.component_cell);
+		
+		return ParseLemsQuantityPath_CellProperty(log, cell_type, tokens, path, tokens_consumed );
+	}
+	else if( (group_seq = net.input_lists.get_id(sId)) >= 0 ){
+		// access inputs in an ordered way, it is experimental though
+		path.type = Simulation::LemsQuantityPath::INPUT;
+		const Network::InputList &list = net.input_lists.get(group_seq);
+		const InputSource &input = input_sources.get(list.component);
+		// const Int pop_seq = list.population;
+		// [](const Network::InputList &group, Int id){return ( 0 <= id && id < (Int)group.input_instances_seq.size() ) ? id : -1 ;}
+		path.input.list_seq = group_seq;
+		if ( !ParseLemsGroupLocator(log, tokens, "inputList", net.input_lists, [](const Network::InputList &group, Int id){return group.input_instances_seq.getSequential(id);}, path.input.list_seq, path.input.inst_seq, tokens_consumed) ) return false;
+		
+		// TODO check for weight, delay here maybe?
+		return ParseLemsQuantityPath_InputInstance(log, input, tokens, path.input, tokens_consumed);
+	}
+	else if( (group_seq = net.projections.get_id(sId)) >= 0 ){
+		path.type = Simulation::LemsQuantityPath::SYNAPSE;
+		const Network::Projection &proj = net.projections.get(group_seq);
+		
+		if(!ParseLemsGroupLocator(log, tokens, "projection", net.projections, [](const Network::Projection &group, Int id){return group.connections.getSequential(id);}, path.synapse.proj_seq, path.synapse.conn_seq, tokens_consumed)) return false;
+		
+		// now branch according to property type
+		if(!(tokens_consumed+2 <= (Int)tokens.size())){
+			log.error("incomplete path for projection element");
+			return false;
+		}
+		
+		const Network::Projection::Connection &conn = proj.connections.contents[path.synapse.conn_seq];
+		// check for pre, post
+		if(!ParseSynapseLocation(log, conn.type, tokens[tokens_consumed].c_str(), path.synapse.location)) return false;
+		tokens_consumed++;
+		
+		Int syn_seq = path.synapse.GetSynSeq(conn);
+		const SynapticComponent &syn = synaptic_components.get(syn_seq);
+		// TODO check for weight, delay here maybe?
+		
+		return ParseLemsQuantityPath_SynapticComponent(log, syn, tokens, path.synapse, tokens_consumed);
+		// FIXME record a synapse to make sure it works
+	}
+	// parse them for upcoming refs
+	// and get type!
+	// FIXME fractionAlong for transmission !
+	// TODO flesh this out fully, with special cases, ions, and such.
+	// TODO make a reverse toString() for lemsquantitypaths.
+	// path locations: parse, gettype, print, to tabloc.
+	else{
+		log.error("unknown top level identifier \"%s\"", sId);
+		return false;
+	}
+	
+	// TODO access projections and input_lists.
 }
 
 //------------------> Debug printing
@@ -3801,668 +4620,7 @@ struct ImportState{
 		return TryLemsifyComponent_WithParmContainer( log, eThing, type_name, parms, compinst );
 	}
 	
-	// helpers for LEMS id's
-	// parse according to the definitive specification: the source code
-	// https://github.com/NeuroML/jNeuroML/issues/50
-	// https://github.com/NeuroML/org.neuroml.export/blob/master/src/main/java/org/neuroml/export/utils/LEMSQuantityPath.java#L136
-	// https://github.com/NeuroML/org.neuroml.export/blob/master/src/main/java/org/neuroml/export/neuron/LEMSQuantityPathNeuron.java#L118
-	// https://github.com/NeuroML/org.neuroml.export/blob/master/src/main/java/org/neuroml/export/neuron/NeuronWriter.java#L1110
-	// https://github.com/NeuroML/org.neuroml.export/blob/development/src/main/java/org/neuroml/export/neuron/NeuronWriter.java#L654
-	// note that LEMS does fully modular resolution (but does not support multiple compartments) :
-	// https://github.com/LEMS/jLEMS/blob/development/src/main/java/org/lemsml/jlems/core/sim/RunnableAccessor.java#L29
-	
-	// <population name>[instance]/[<redundant population>/]v for point neurons
-	// <population name>/<instance>/<cell type, redundant>/<segment>/v
-	// ... <segment>/<biophysical properties name>/membraneProperties/<ion channel distribution>/[i, g, iDensity, gDensity]
-	// ... <segment>/<biophysical properties name>/membraneProperties/<ion channel distribution>/<channel type>/<gate>/q
-	// <postsynaptic population name>/<instance>/<cell type, redundant>/<segment>/synapses:<synapse type>:<incrementing instance of same type on same segment of same cell>/g 
-	// 	see https://github.com/NeuroML/org.neuroml.export/blob/master/src/main/java/org/neuroml/export/neuron/NeuronWriter.java#L581
-	
-	template<typename LogProxy, typename GroupCollection, typename Get_Seq>
-	bool ParseLemsGroupLocator(const LogProxy &log, const std::vector<std::string> tokens, const char *group_type_name, const GroupCollection &group_collection, const Get_Seq &GetSeq, Int &group_seq, Int &instance_seq, Int &tokens_consumed) const {
-		// note: tokens are spearted by '/' in the following
-		Int pop_token_id = tokens_consumed;
-		if(tokens_consumed >= (int) tokens.size()){
-			return false;
-		}
-		const std::string &pop_token = tokens[pop_token_id];
-		std::string instance_string;
-		
-		size_t bracketIndex =  pop_token.find_first_of("[");
-		std::string pop_name = pop_token.substr(0,bracketIndex);
-		
-		group_seq = group_collection.get_id(pop_name.c_str());
-		if(group_seq < 0){
-			log.error("target %s %s not found", group_type_name, pop_name.c_str());
-			return false;
-		}
-		const auto &group = group_collection.get(group_seq);
-
-		if(pop_name.length() == pop_token.length()){
-			// no bracket, use pop/id/... instead
-			if( pop_token_id + 1 >= (int)tokens.size() ){
-				log.error("not enough factors for instance ID");
-				return false;
-			}
-			instance_string = tokens[pop_token_id + 1];
-			tokens_consumed = pop_token_id + 2;
-		}
-		else{
-			//with bracket, pop[id]/...
-			instance_string = pop_token.substr(bracketIndex + 1, pop_token.find_first_of("]") - (bracketIndex + 1));
-			tokens_consumed = pop_token_id + 1;
-		}
-		
-		Int instance_id;
-		if( !StrToL(instance_string.c_str(), instance_id) ){
-			log.error("target instance \"%s\" not an integer number", instance_string.c_str());
-			return false;
-		}
-		instance_seq = GetSeq(group, instance_id);
-		if(instance_seq < 0){
-			log.error("target instance %s not found in %s", instance_string.c_str(), pop_name.c_str());
-			return false;
-		}
-		return true;
-	}// HERE ILogProxy?
-	template<typename LogProxy>
-	bool ParseLemsCellLocator(const LogProxy &log, const std::vector<std::string> tokens, const Network &net, Simulation::LemsSegmentLocator &path, Int &tokens_consumed) const {
-		return ParseLemsGroupLocator(log, tokens, "population", net.populations, [](const Network::Population &group, Int id){return group.instances.getSequential(id);}, path.population, path.cell_instance, tokens_consumed);
-	}
-	template<typename LogProxy>
-	bool ParseLemsSegmentLocator(const LogProxy &log, const std::vector<std::string> tokens, const Network &net, Simulation::LemsSegmentLocator &path, Int &tokens_consumed) const {
-		
-		if( tokens.size() < 1 ){
-			log.error("target path must have at least 1 slash-delimited factor");
-			return false;
-		}
-		if(!( ParseLemsCellLocator(log, tokens, net, path, tokens_consumed) )) return false;
-		
-		// TODO pop might not be set when selecting populations or projections !
-		const Network::Population &population = net.populations.get(path.population);
-		
-		int segment_token_id = tokens_consumed;
-		if(segment_token_id < (int)tokens.size()){
-			
-			const std::string &segment_token = tokens[segment_token_id];
-			// check if the segment token is further below because this is the redundant pop name
-			if( segment_token == cell_types.getName(population.component_cell) ){
-				//printf("skip redundant %s\n", segment_token.c_str());
-				segment_token_id++;
-			}
-			
-		}
-		int segprop_token_id = -1;
-		auto MatchesFractionalSegmentId = [](const char *sId){
-			int dots_counted = 0;
-			for(const char *s = sId; *s; s++){
-				char c = *s;
-				if(isdigit(c)) ; // continue
-				else if(c == '.') dots_counted++;
-				else return false;
-			}
-			return dots_counted <= 1;
-		};
-		auto GetFractionalSegmentId = [&MatchesFractionalSegmentId](const char *sId, Int &segment_id, Real &fractionAlong){
-			if(!MatchesFractionalSegmentId(sId)) return false;
-			auto dot = strchr(sId,'.');
-			if(dot){
-				if(!StrToL(sId, segment_id, false)) return false; // allow stopping at dot
-				if(!( StrToF(dot, fractionAlong) && 0 <= fractionAlong && fractionAlong <= 1 )) return false;
-			}
-			else{
-				if(!StrToL(sId, segment_id)) return false;
-				fractionAlong = 0.5; // when not mentioned
-			}
-			return true;
-		};
-		Int segment_id = -1;
-		// if(!( segment_token_id < (int)tokens.size() && StrToL(tokens[segment_token_id].c_str(), segment_id) )){
-		if(!( segment_token_id < (int)tokens.size() && GetFractionalSegmentId(tokens[segment_token_id].c_str(), segment_id, path.fractionAlong) )){
-			// could be a single compartment cell, or an artificial cell
-			segment_id = -1; //set it to missing
-			// this token is a property of the single compartment cell, ignore
-			segprop_token_id = segment_token_id;
-		}
-		else{
-			// accept token
-			segprop_token_id = segment_token_id + 1;
-		}
-		
-		// check if segment ID exists, or can be defaulted if unset
-		const CellType &cell_type = cell_types.get(population.component_cell);
-		if( cell_type.type == CellType::ARTIFICIAL ){
-			if( segment_id < 0 ){
-				// set it to default
-				segment_id = 0;
-			}
-			if( segment_id != 0 ){
-				log.error("artificial cell only has segment 0");
-				return false;
-			}
-			
-			path.segment_seq = 0;
-			path.fractionAlong = 0.5; // for good measure
-		}
-		else if(cell_type.type == CellType::PHYSICAL ){
-			
-			const Morphology &morph = morphologies.get(cell_type.physical.morphology);
-			// const BiophysicalProperties &bioph = biophysics.at(cell.biophysicalProperties);
-			if( segment_id < 0 ){
-				if( morph.segments.size() == 1 ){
-					// set it to default
-					segment_id = 0;
-				}
-				else{
-					std::string complaint = "target path needs segment ID, because cell has multiple segments. Setting to implicit default: segment ID = 0";
-					// add diagnostic, may be useful? 
-					if( 0 <= segprop_token_id && segprop_token_id < (int)tokens.size() ) complaint += "(path following cell id was \""+tokens[segment_token_id]+"\")";
-					log.warning("%s", complaint.c_str());
-					// return false;
-					// TODO perhaps stop complaining after warning too many times
-					
-					segment_id = 0;
-				}
-			}
-			
-			path.segment_seq = morph.segments.getSequential(segment_id);
-			if(path.segment_seq < 0){
-				log.error("target segment %s not found in cell", tokens[segment_token_id].c_str());
-				return false;
-			}
-		}
-		else{
-			log.error("internal error: LEMS segment locator: cell type type %d", cell_type.type);
-			return false;
-		}
-		
-		tokens_consumed = segprop_token_id;
-		return true;
-	}
-	template<typename LogProxy>
-	bool ParseLemsQuantityPathInComponent(const LogProxy &log, const ComponentInstance &instance, const std::vector<std::string> &tokens, Simulation::LemsInstanceQuantityPath &lems_instance_qty_path, Int &tokens_consumed ) const {
-		
-		if( (int)tokens.size() <= tokens_consumed ){
-			log.error("path needs to specify a property of LEMS component %s", ( tokens.empty() ? "" : tokens[tokens.size() - 1].c_str() ) );
-			return false;
-		}
-		if( tokens_consumed + 1 < (int)tokens.size() ){
-			log.error("LEMS child component quantities not yet supported" );
-			return false;
-		}
-		const char *propname = tokens[tokens_consumed].c_str();
-		tokens_consumed++;
-		
-		// get comp.type
-		Int comptype_seq = instance.id_seq;
-		if( !component_types.has(comptype_seq) ){
-			log.error("internal error: LEMS quantity path missing component type %d", (int) instance.id_seq);
-			return false;
-		}
-		
-		const auto &comptype = component_types.get(comptype_seq);
-		
-		Int &namespace_id = lems_instance_qty_path.namespace_thing_seq;
-		namespace_id = comptype.name_space.get_id(propname);
-		if( namespace_id < 0 ){
-			log.error("%s is not a define d quantity in component type %s", propname, component_types.getName(comptype_seq));
-			return false;
-		}
-		
-		return true;
-	}
-	template<typename LogProxy>
-	bool ParseLemsQuantityPath_SynapticComponent(const LogProxy &log, const SynapticComponent &syn, const std::vector<std::string> &tokens, Simulation::SynapticComponentQuantityPath &path, Int &tokens_consumed ) const {
-		typedef SynapticComponent Syn;
-		typedef Simulation::SynapticComponentQuantityPath SynPath;
-		int mainprop_token_id = tokens_consumed;
-		
-		// now branch according to property type
-		if(mainprop_token_id >= (Int)tokens.size()){
-			log.error("not enough factors for synaptic component property");
-			return false;
-		}
-		
-		const std::string &mainprop = tokens[mainprop_token_id];
-		
-		// TODO weight?
-		// work with LEMSified stuff as a priority
-		if( syn.type != Syn::BLOCKING_PLASTIC && syn.component.ok() ){
-			path.type = SynPath::LEMS;
-			if( !ParseLemsQuantityPathInComponent(log, syn.component, tokens, path.lems_quantity_path, tokens_consumed ) ) return false;
-			return true;
-		}
-		else if( syn.type == Syn::BLOCKING_PLASTIC ){
-			// LATER children will be supported...
-			// TODO can they be a multitude?
-			if(mainprop == "blockMechanisms[0]"){
-				typedef Syn::BlockingPlasticSynapse::BlockMechanism Blo;
-				const Blo &blo = syn.blopla.block_mechanism;
-				if(blo.type == Blo::Type::NONE){
-					log.error("%s is not present on this component", mainprop.c_str());
-					return false;
-				}
-				tokens_consumed++;
-				path.type = SynPath::BLOCK;
-				
-				if(!(tokens_consumed+1 <= (Int)tokens.size())){
-					log.error("incomplete path for %s", mainprop.c_str());
-					return false;
-				}
-				
-				assert(blo.component.ok());
-				path.block.type = SynPath::Block::LEMS;
-				return ParseLemsQuantityPathInComponent(log, blo.component, tokens, path.block.lems_quantity_path, tokens_consumed );
-			}
-			else if(mainprop == "plasticityMechanisms[0]"){
-				typedef Syn::BlockingPlasticSynapse::PlasticityMechanism Pla;
-				const Pla &pla = syn.blopla.plasticity_mechanism;
-				if(pla.type == Pla::Type::NONE){
-					log.error("%s is not present on this component", mainprop.c_str());
-					return false;
-				}
-				tokens_consumed++;
-				path.type = SynPath::PLASTICITY;
-				
-				if(!(tokens_consumed+1 <= (Int)tokens.size())){
-					log.error("incomplete path for %s", mainprop.c_str());
-					return false;
-				}
-				
-				assert(pla.component.ok());
-				path.plasticity.type = SynPath::Plasticity::LEMS;
-				return ParseLemsQuantityPathInComponent(log, pla.component, tokens, path.plasticity.lems_quantity_path, tokens_consumed );
-			}
-			else{
-				// check for the main, synaptic component which happens to be lemsified
-				return ParseLemsQuantityPathInComponent(log, syn.component, tokens, path.lems_quantity_path, tokens_consumed );
-			} 
-		}
-		
-		// otherwise it's a native, or complicated, type.
-		path.type = SynPath::NATIVE;
-		
-		tokens_consumed++; // note: this token will be used in the following, unshift or refactor if necessary later
-		auto &native_entry = path.native_entry;
-		typedef SynPath::NativeEntry Nat;
-		
-		// is it a terminal property? (to avoid repeated checks in the following)
-		if(tokens_consumed == (Int)tokens.size()){
-			if(     mainprop == "gbase"      ){native_entry = Nat::GBASE; return true; }
-			else if(mainprop == "conductance"){native_entry = Nat::GBASE; return true; }
-			else if(mainprop == "erev"       ){native_entry = Nat::EREV ; return true; }
-			else if(mainprop == "tauDecay"        ){native_entry = Nat::TAU  ; return true; }
-			else if(mainprop == "g"          ){native_entry = Nat::G    ; return true; }
-			else{
-				log.error("unknown leaf property %s", mainprop.c_str()); // LATER log in token possibly in attribute
-				return false;
-			}
-		}
-		else{
-			log.error("unknown non-leaf property %s", mainprop.c_str());
-			return false;
-		}
-		
-		if( syn.type == Syn::EXP || syn.type == Syn::GAP ){
-			if(( syn.type == Syn::EXP && !( native_entry == Nat::GBASE || native_entry == Nat::EREV || native_entry == Nat::TAU || native_entry == Nat::G ) )
-			|| ( syn.type == Syn::GAP && !( native_entry == Nat::GBASE ) )
-			){
-				log.error("property %s does not match synaptic component type", mainprop.c_str()); return false;
-			}
-			return true; // all checks passed
-		}
-		// LATER composite?
-		else{
-			log.error("synaptic component type not supported yet");
-			return false;
-		}
-	}
-	template<typename LogProxy>
-	bool ParseLemsQuantityPath_InputInstance(const LogProxy &log, const InputSource &input, const std::vector<std::string> &tokens, Simulation::InputInstanceQuantityPath &path, Int &tokens_consumed ) const {
-		typedef InputSource::Type InpType;
-		typedef Simulation::InputInstanceQuantityPath InpPath;
-		// TODO weight?
-		int mainprop_token_id = tokens_consumed;
-		
-		// now branch according to property type
-		if(mainprop_token_id >= (Int)tokens.size()){
-			log.error("not enough factors for input property");
-			return false;
-		}
-		
-		const std::string &mainprop = tokens[mainprop_token_id];
-		
-		// const bool is_native = ( input.type == InpType::PULSE );
-		const bool has_synapse = (
-			input.type == InpType::TIMED_SYNAPTIC
-			|| input.type == InpType::POISSON_SYNAPSE
-			|| input.type == InpType::POISSON_SYNAPSE_TRANSIENT
-		);
-		
-		// synapse containing stuff are more than just lemsified
-		if( has_synapse && mainprop == "synapse" ){
-			tokens_consumed++;
-			path.type = InpPath::SYNAPSE;
-			return ParseLemsQuantityPath_SynapticComponent(log, synaptic_components.get(input.synapse), tokens, path.synapse, tokens_consumed);
-		}
-		
-		// work with simple LEMSified stuff as a priority
-		if( input.component.ok() ){
-			path.type = InpPath::LEMS;
-			if( !ParseLemsQuantityPathInComponent(log, input.component, tokens, path.lems_quantity_path, tokens_consumed ) ) return false;
-			return true;
-		}
-		
-		// otherwise it's a native, or complicated, type.
-		path.type = InpPath::NATIVE;
-		tokens_consumed++; // note: this token will be used in the following, unshift or refactor if necessary later
-		
-		if(input.type == InpType::PULSE){
-			// is it a terminal property? (to avoid repeated checks in the following)
-			if(tokens_consumed == (Int)tokens.size()){
-				if(     mainprop == "amplitude"){ path.native_entry = InpPath::AMPLITUDE; return true; }
-				else if(mainprop == "duration" ){ path.native_entry = InpPath::DURATION ; return true; }
-				else if(mainprop == "delay"    ){ path.native_entry = InpPath::DELAY    ; return true; }
-				else{
-					log.error("unknown leaf property %s", mainprop.c_str()); // LATER log in token possibly in attribute
-					return false;
-				}
-			}
-			else{
-				log.error("unknown non-leaf property %s", mainprop.c_str());
-				return false;
-			}
-		}
-		else if(input.type == InpType::TIMED_SYNAPTIC){
-			// LATER if ever support customization of spike times. Though the number of spikes wouldn't easily change this way, so it's not so useful anyway.
-			log.error("timedSynapticInput paths not supported yet");
-			return false;
-		}
-		else{
-			// shouldn't happen for now, all types are checked for at this point
-			log.error("input source type not supported yet");
-			return false;
-		}
-	}
-	template<typename LogProxy>
-	bool ParseLemsQuantityPath_ArtificialCell(const LogProxy &log, const ArtificialCell &cell,  const std::vector<std::string> &tokens, Simulation::LemsQuantityPath::CellPath &path_cell, Int &tokens_consumed) const {
-		if( cell.type == ArtificialCell::SPIKE_SOURCE ){
-			path_cell.type = Simulation::LemsQuantityPath::CellPath::INPUT;
-			
-			const auto &input = input_sources.get( cell.spike_source_seq );
-			
-			return ParseLemsQuantityPath_InputInstance( log, input, tokens, path_cell.input, tokens_consumed );
-		}
-		else{
-			// work only with LEMSified stuff for now
-			if( cell.component.ok() ){
-				path_cell.type = Simulation::LemsQuantityPath::CellPath::LEMS;
-				return ParseLemsQuantityPathInComponent(log, cell.component, tokens, path_cell.lems_quantity_path, tokens_consumed );
-			}
-			else{
-				log.error("native artificial cell type not supported yet");
-				return false;
-			}
-		}
-	}
-	
-	// NOTE: path is a read+write argument. Specifically, segment_seq is read. If set, only the mechanism distributions that include this segment are valid. If unset (ie negative), the caller is responsible for validating that if selected, a mechanism distribution exists for the segments being considered (for example, when multiple segments are considered, is it an error if some segments are outside the distribution mechanism, or are those without the mechanism simply excluded? It depends).
-	template<typename LogProxy>
-	bool ParseLemsQuantityPath_CellProperty(const LogProxy &log, const CellType &cell_type, const std::vector<std::string> &tokens, Simulation::LemsQuantityPath &path, Int &tokens_consumed ) const {
-		
-		int segprop_token_id = tokens_consumed;
-		
-		// now branch according to property type
-		if(segprop_token_id >= (Int)tokens.size()){
-			log.error("not enough factors for cell or segment property");
-			return false;
-		}
-		
-		const std::string &segprop = tokens[segprop_token_id];
-		
-		
-		if( cell_type.type == CellType::ARTIFICIAL ){
-			path.type = Simulation::LemsQuantityPath::CELL;
-			return ParseLemsQuantityPath_ArtificialCell(log, cell_type.artificial, tokens, path.cell, tokens_consumed);
-		}
-		else if(cell_type.type == CellType::PHYSICAL ){
-			// use the token
-			tokens_consumed++;
-			
-			const PhysicalCell &cell = cell_type.physical;
-			const Morphology &morph = morphologies.get(cell.morphology);
-			const BiophysicalProperties &bioph = biophysics.at(cell.biophysicalProperties);
-		
-			if(segprop == "v"){
-				path.type = Simulation::LemsQuantityPath::SEGMENT;
-				path.segment.type =  Simulation::LemsQuantityPath::SegmentPath::VOLTAGE;
-				//printf("\n voltage yay!\n");
-				return true;
-			}
-			else if(segprop == "caConc"){
-				path.type = Simulation::LemsQuantityPath::SEGMENT;
-				path.segment.type =  Simulation::LemsQuantityPath::SegmentPath::CALCIUM_INTRA;
-				// TODO run a check for existence of Ca2, also for LEMS interface possibly
-				return true;
-			}
-			else if(segprop == "caConc2"){
-				path.type = Simulation::LemsQuantityPath::SEGMENT;
-				path.segment.type =  Simulation::LemsQuantityPath::SegmentPath::CALCIUM2_INTRA;
-				return true;
-			}
-			else if(segprop == bioph.name || segprop == "biophysicalProperties"){
-				
-				int biophprop_token_id = segprop_token_id + 1;
-				
-				if(biophprop_token_id >= (int)tokens.size()){
-					log.error("not enough factors for biophysical property");
-					return false;
-				}
-				
-				const std::string &bioprop = tokens[biophprop_token_id];
-				
-				if(bioprop == "membraneProperties"){
-					
-					// what membrane property is this?
-					int biophproprop_token_id = biophprop_token_id + 1;
-				
-					if(biophproprop_token_id >= (int)tokens.size()){
-						log.error("not enough factors for biophysical property");
-						return false;
-					}
-					
-					const std::string &bioproprop = tokens[biophproprop_token_id];
-					
-					// perhaps it is an ion channel distribution?
-					Int chandist_seq = -1;
-					for( size_t i = 0; i < bioph.membraneProperties.channel_specs.size(); i++ ){
-						// NOTE there should be at most one distribution under the same name, TODO discuss and if it's ok refactor to reflect that!
-						const auto &dist = bioph.membraneProperties.channel_specs.at(i);
-						// if segment_seq is set, select it only if it includes that segment, TODO improve error reporting to "distribution is not present on segment"
-						if( dist.name == bioproprop && ((path.segment_seq < 0) || dist.toList(morph).has(path.segment_seq)) ){
-							chandist_seq = i;
-							break;
-						}
-						
-					}
-					if(chandist_seq >= 0){
-						// it is
-						path.type = Simulation::LemsQuantityPath::CHANNEL;
-						path.channel.distribution_seq = chandist_seq;
-						const auto &iondist = bioph.membraneProperties.channel_specs[chandist_seq];
-						
-						int iondistprop_token_id = biophproprop_token_id + 1;
-						if(iondistprop_token_id >= (int)tokens.size()){
-							log.error("not enough factors for ion distribution property");
-							return false;
-						}
-						const std::string &iondistprop = tokens[iondistprop_token_id];
-						
-						if(iondistprop == "i"){
-							path.channel.type = Simulation::LemsQuantityPath::ChannelPath::I; // all that's needed
-							return true;
-						}
-						else if(iondistprop == "g"){
-							path.channel.type = Simulation::LemsQuantityPath::ChannelPath::G; // all that's needed
-							return true;
-						}
-						else if(iondistprop == "iDensity"){
-							path.channel.type = Simulation::LemsQuantityPath::ChannelPath::I_DENSITY; // all that's needed
-							return true;
-						}
-						else if(iondistprop == "gDensity"){
-							path.channel.type = Simulation::LemsQuantityPath::ChannelPath::G_DENSITY; // all that's needed
-							return true;
-						}
-						else if(iondistprop == ion_channels.getName(iondist.ion_channel)){
-							
-							// peek inside the channel model
-							const auto &channel = ion_channels.get(iondist.ion_channel);
-							
-							// what channel property is this?
-							int ionchanprop_token_id = iondistprop_token_id + 1;
-							if(ionchanprop_token_id >= (int)tokens.size()){
-								log.error("not enough factors for ion channel property");
-								return false;
-							}
-							const std::string &ionchanprop = tokens[ionchanprop_token_id];
-							
-							// perhaps it is a gate?
-							Int gate_seq = channel.gates.get_id(ionchanprop.c_str());
-							if(gate_seq >= 0){
-								
-								path.channel.gate_seq = gate_seq;
-								// what channel gate property is this?
-								int gateprop_token_id = ionchanprop_token_id + 1;
-								if(gateprop_token_id >= (int)tokens.size()){
-									log.error("not enough factors for ion channel gate property");
-									return false;
-								}
-								const std::string &gateprop = tokens[gateprop_token_id];
-								
-								if(gateprop == "q"){
-									path.channel.type = Simulation::LemsQuantityPath::ChannelPath::Q;  // all that's needed
-									return true;
-								}
-								else{
-									log.error("unknown ion channel gate property %s", gateprop.c_str());
-									return false;
-								}
-								
-							}
-							
-							//otherwise
-							{
-								log.error("unknown ion channel property %s", ionchanprop.c_str());
-								return false;
-							}
-							
-						}
-						else{
-							log.error("unknown ion channel distribution property %s", iondistprop.c_str());
-							return false;
-						}
-					}
-					// FIXME access all ion pools this way
-					
-					//otherwise
-					{
-						log.error("unknown membrane property %s", bioproprop.c_str());
-						return false;
-					}
-					
-				}
-				else{
-					log.error("unknown biophysical property %s", bioprop.c_str());
-					return false;
-				}
-			}
-			else if(segprop.find("synapses:") == 0){
-				log.error("synapse outputs not supported yet");
-				return false;
-			}
-			else{
-				log.error("unknown segment property %s", segprop.c_str());
-				return false;
-			}
-		}
-		else{
-			log.error("internal error: LEMS quantity path: cell type type %d", cell_type.type);
-			return false;
-		}
-	}
-	
-	// TODO consider converting to virtual functions for less code bloat than templates
-	template<typename LogProxy>
-	bool ParseLemsQuantityPath(const LogProxy &log, const char *qty_str, const Network &net, Simulation::LemsQuantityPath &path) const {
-		auto tokens = string_split(std::string(qty_str), "/");
-		assert(tokens.size() > 0);
-		const std::string first_identifier = string_split(tokens[0],"[")[0];
-		const char *sId = first_identifier.c_str();
-		Int tokens_consumed = 0;
-		
-		// LATER complain if name is ambiguous
-		Int group_seq = -1;
-		if( (group_seq = net.populations.get_id(sId)) >= 0 ){
-			
-			if ( !ParseLemsSegmentLocator(log, tokens, net, path, tokens_consumed) ) return false;
-			
-			// if (cell) segment locator is valid, then it is a property of a cell in a population, and the cell_type is valid.
-			const Network::Population &population = net.populations.get(path.population);
-			const CellType &cell_type = cell_types.get(population.component_cell);
-			
-			return ParseLemsQuantityPath_CellProperty(log, cell_type, tokens, path, tokens_consumed );
-		}
-		else if( (group_seq = net.input_lists.get_id(sId)) >= 0 ){
-			// access inputs in an ordered way, it is experimental though
-			path.type = Simulation::LemsQuantityPath::INPUT;
-			const Network::InputList &list = net.input_lists.get(group_seq);
-			const InputSource &input = input_sources.get(list.component);
-			// const Int pop_seq = list.population;
-			// [](const Network::InputList &group, Int id){return ( 0 <= id && id < (Int)group.input_instances_seq.size() ) ? id : -1 ;}
-			path.input.list_seq = group_seq;
-			if ( !ParseLemsGroupLocator(log, tokens, "inputList", net.input_lists, [](const Network::InputList &group, Int id){return group.input_instances_seq.getSequential(id);}, path.input.list_seq, path.input.inst_seq, tokens_consumed) ) return false;
-			
-			// TODO check for weight, delay here maybe?
-			return ParseLemsQuantityPath_InputInstance(log, input, tokens, path.input, tokens_consumed);
-		}
-		else if( (group_seq = net.projections.get_id(sId)) >= 0 ){
-			path.type = Simulation::LemsQuantityPath::SYNAPSE;
-			const Network::Projection &proj = net.projections.get(group_seq);
-			
-			if(!ParseLemsGroupLocator(log, tokens, "projection", net.projections, [](const Network::Projection &group, Int id){return group.connections.getSequential(id);}, path.synapse.proj_seq, path.synapse.conn_seq, tokens_consumed)) return false;
-			
-			// now branch according to property type
-			if(!(tokens_consumed+2 <= (Int)tokens.size())){
-				log.error("incomplete path for projection element");
-				return false;
-			}
-			
-			const Network::Projection::Connection &conn = proj.connections.contents[path.synapse.conn_seq];
-			// check for pre, post
-			if(!ParseSynapseLocation(log, conn.type, tokens[tokens_consumed].c_str(), path.synapse.location)) return false;
-			tokens_consumed++;
-			
-			Int syn_seq = path.synapse.GetSynSeq(conn);
-			const SynapticComponent &syn = synaptic_components.get(syn_seq);
-			// TODO check for weight, delay here maybe?
-			
-			return ParseLemsQuantityPath_SynapticComponent(log, syn, tokens, path.synapse, tokens_consumed);
-			// FIXME record a synapse to make sure it works
-		}
-		// parse them for upcoming refs
-		// and get type!
-		// FIXME fractionAlong for transmission !
-		// TODO flesh this out fully, with special cases, ions, and such.
-		// TODO make a reverse toString() for lemsquantitypaths.
-		// path locations: parse, gettype, print, to tabloc.
-		else{
-			log.error("unknown top level identifier \"%s\"", sId);
-			return false;
-		}
-		
-		// TODO access projections and input_lists.
-	}
+	// helpers for LEMS paths, some are exposed in the Model already
 	bool ParseLemsEventPathInComponent( const ImportLogger &log, const pugi::xml_node &eOutEl, const ComponentInstance &instance, const std::vector<std::string> &tokens, const char *sEventPort, Simulation::LemsInstanceEventPath &liep, Int &tokens_consumed) const {
 		
 		if( tokens_consumed < (int)tokens.size() ){
@@ -4532,7 +4690,7 @@ struct ImportState{
 		
 		auto tokens = string_split(std::string(comp_path_str), "/");
 		Int tokens_consumed = 0;
-		if ( !ParseLemsSegmentLocator(LogWithElement{log,eOutEl}, tokens, net, path, tokens_consumed) ) return false;
+		if ( !model.ParseLemsSegmentLocator(LogWithElement{log,eOutEl}, tokens, net, path, tokens_consumed) ) return false;
 		
 		Int comp_token_id = tokens_consumed;
 		
@@ -6522,6 +6680,8 @@ struct ImportState{
 			const ImportLogger &log;
 			const char *filename;
 			const std::vector< ptrdiff_t > &tokenized_line_byte_offset;
+			LogCustomFile(const ImportLogger &_l, const char *_f, const std::vector< ptrdiff_t > &_lo): log(_l), filename(_f), tokenized_line_byte_offset(_lo) {}
+			
 			void warning(Int tokenized_lineno, Int token, const char *format, ...) const {
 				va_list args; va_start(args, format);
 				log.warning(args, filename, tokenized_line_byte_offset[tokenized_lineno], format);
@@ -6540,10 +6700,10 @@ struct ImportState{
 			}
 		} log = {that_log, filename, tokenized_line_byte_offset};
 		
-		struct LogInsideToken{
+		struct LogInsideToken : public ILogProxy{
 			const LogCustomFile &log;
 			Int tokenized_lineno, token;
-			// LogWithElement():{}
+			LogInsideToken(const LogCustomFile &_l, Int _n, Int _t): log(_l), tokenized_lineno(_n), token(_t) {}
 			void error(const char *format, ...) const {
 				va_list args; va_start(args, format);
 				log.error(args, tokenized_lineno, token, format);
@@ -6596,7 +6756,7 @@ struct ImportState{
 		
 		auto ParseCheckRef = [this, &net](const auto &log, const std::string &value_term, const Dimension &dimension, Simulation::LemsQuantityPath &path_value ){
 						
-			if(!ParseLemsQuantityPath(log, value_term.c_str(), net, path_value)) return false;
+			if(!model.ParseLemsQuantityPath(log, value_term.c_str(), net, path_value)) return false;
 			// check type and dimension
 			ComponentType::NamespaceThing::Type path_value_type; Dimension value_dimension;
 			if(!model.GetLemsQuantityPathType(net, path_value, path_value_type, value_dimension)) return false;
@@ -6907,7 +7067,7 @@ struct ImportState{
 					{
 					auto tokens = string_split(path_term, "/"); Int tokens_consumed = 0;
 					LogInsideToken log_proxy = {log, lineno, 5};
-					if(!ParseLemsQuantityPath_CellProperty(log_proxy, cell, tokens, path, tokens_consumed )) return false;
+					if(!model.ParseLemsQuantityPath_CellProperty(log_proxy, cell, tokens, path, tokens_consumed )) return false;
 					}
 					// check that the specified segments match the specified distribution; if not, abort. do not restrict 'set' to segments under the selected distribution, because this could become ambiguous futher on (for example, with cable mode).
 					// XXX allow segments either standalone or cables, but not both on the same statement!
@@ -7031,7 +7191,7 @@ struct ImportState{
 					const std::string &path_term = line[4];
 					{
 					auto tokens = string_split(path_term, "/"); Int tokens_consumed = 0;
-					if(!ParseLemsQuantityPath_InputInstance(LogInsideToken{log, lineno, 4}, input, tokens, path.input, tokens_consumed )) return false;
+					if(!model.ParseLemsQuantityPath_InputInstance(LogInsideToken{log, lineno, 4}, input, tokens, path.input, tokens_consumed )) return false;
 					}
 					// and check if the path is indeed settable
 					ComponentType::NamespaceThing::Type path_type; Dimension dimension; bool is_ref;
@@ -7141,7 +7301,7 @@ struct ImportState{
 					const std::string &path_term = line[5];
 					{
 					auto tokens = string_split(path_term, "/"); Int tokens_consumed = 0;
-					if(!ParseLemsQuantityPath_SynapticComponent(LogInsideToken{log, lineno, 5}, syn, tokens, path.synapse, tokens_consumed )) return false;
+					if(!model.ParseLemsQuantityPath_SynapticComponent(LogInsideToken{log, lineno, 5}, syn, tokens, path.synapse, tokens_consumed )) return false;
 					}
 					// and check if the path is indeed settable
 					ComponentType::NamespaceThing::Type path_type; Dimension dimension; bool is_ref;
@@ -7276,7 +7436,7 @@ struct ImportState{
 						}
 						// validate quantity right here right now
 						
-						if(!ParseLemsQuantityPath(LogWithElement{log,eOutEl}, out_quantity, net, out.quantity)) return false;
+						if(!model.ParseLemsQuantityPath(LogWithElement{log,eOutEl}, out_quantity, net, out.quantity)) return false;
 						
 						// XXX this is just a limitation in Eden right now
 						ComponentType::NamespaceThing::Type path_type; Dimension dimension;

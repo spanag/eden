@@ -107,22 +107,6 @@ static void AppendToVector(CAppendTo &append_to, const CAppendThis &append_this)
 
 // LATER add a helper for single variables
 
-// do not use default accuracy when converting numerics to alpha !
-// expicitly specify what the alpha is used for
-template< typename T, typename = typename std::enable_if< std::is_integral<T>::value >::type >
-std::string accurate_string( T val ){
-	return std::to_string( val );
-}
-std::string accurate_string( float val ){
-	char tmps[100];
-	sprintf(tmps, "%.9g", val);
-	return tmps;
-}
-std::string accurate_string( double val ){
-	char tmps[100];
-	sprintf(tmps, "%.17g", val);
-	return tmps;
-}
 
 std::string presentable_string( double val ){
 	char tmps[100];
@@ -184,6 +168,17 @@ struct FixedWidthNumberPrinter{
 		}
 		buf[number_size+1] = '\0';
 	}
+};
+
+// logging
+struct ILogSimpleProxy : public ILogProxy {
+	virtual void operator()(const char *format, va_list args) const  = 0;
+	void operator()(const char *format, ...) const {
+		va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
+	void error(const char *format, ...) const {
+		va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
+	void warning(const char *format, ...) const {
+		va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
 };
 
 //Linear interpolation from a -> b with respective parameter from 0 -> 1
@@ -284,16 +279,30 @@ MpiContext my_mpi;
 
 // TODO use logging machinery in whole codebase
 FILE *fLog = stdout;
-void Say( const char *format, ... ){
-	va_list args;
-	va_start(args, format);
-	
+void vSay( const char *format, va_list args ){
 	std::string new_format = "rank "+std::to_string(my_mpi.rank)+" : " + format + "\n";
 	vfprintf(fLog, new_format.c_str(), args);
 	fflush(stdout);
-	
+}
+void Say( const char *format, ... ){
+	va_list args; va_start(args, format);
+	vSay(format, args);
 	va_end (args);
 }
+template<typename Functor>
+struct SayWithPrefix : public ILogSimpleProxy {
+	const Functor fun;
+	void operator()(const char *format, va_list args) const {
+		// https://stackoverflow.com/questions/9941987/there-are-no-arguments-that-depend-on-a-template-parameter
+		std::string prefix = this->fun();
+		int strsiz =  vsnprintf(NULL, 0, format, args);
+		char *buf = (char *) malloc(1 + strsiz);
+		vsnprintf(buf, strsiz, format, args);
+		Say("%s%s%s", prefix.c_str(), (prefix.empty()?"":" "), buf);
+		free((void *)buf); buf = NULL;
+	}
+	SayWithPrefix(Functor _f) : fun(_f){}
+};
 
 #endif
 
@@ -393,11 +402,8 @@ struct RawTables{
 	// These are to access the singular, flat state & const vectors. They are not filled in otherwise.
 	long long global_const_tabref;
 	long long global_state_tabref;
-	
-	// the data loggers use this to access the variables, for remapping to be possible in MPI case - why not in eng.config then?
-	// long long logger_table_const_i64_to_state_f32_index;
-	
-	// TODO what about the MPI mirrors ?
+
+	// TODO keep track of the MPI mirrors ?
 	
 	RawTables(){
 		global_const_tabref = -1;
@@ -445,9 +451,9 @@ struct EngineConfig{
 			double scaleFactor; // in case of float values
 			
 			#ifdef USE_MPI
-			int on_node;
+			// int on_node;
 			LogColumn(){
-				on_node = -1;
+				// on_node = -1;
 			}
 			#endif
 		};
@@ -471,9 +477,8 @@ struct EngineConfig{
 		// std::vector<int> vpeer_positions_in_buffer;
 		std::vector<size_t> vpeer_positions_in_globstate; // TODO packed table entries
 		
-		std::vector< TrajectoryLogger::LogColumn > daw_columns;
-		// std::vector<int> daw_positions_in_buffer;
-		// std::vector<size_t> daw_positions_in_globstate; // TODO packed table entries
+		// entries for this are enumerated, and also resolved, internally in GenerateModel, based on the SendList
+		std::vector< RawTablesLocator > ref_locations;
 		
 		size_t spike_mirror_buffer;
 	};
@@ -6936,7 +6941,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// Order in vectors is same as order in sent packet
 		// (and is the order that the receiver requested)
 		std::vector<PointOnCellLocator> vpeer_sources;
-		std::vector<DawRef> daw_refs;
+		std::vector<Simulation::LemsQuantityPath> var_refs;
 		std::vector<PointOnCellLocator> spike_sources;
 	};
 	
@@ -6949,8 +6954,19 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// positions of trigger buffers, to be updated by spikes originating from points on cell
 		std::map< PointOnCellLocator, std::vector< TabEntryRef_Packed > > spike_refs;
 		
+		// it gets complicated here, because there are so far two resolution targets: int64 refs within tables, and logger refs outside them.
+		// Keep a std::set to be the full set of vars requested(?), and two std::maps for the specific cases.
+		// This duplicates storage of the paths, but it is probably not a concern for well-behaved MPI transfers.
+		std::set< std::string > value_refs;
+		
+		// VariableReferences are very much like gap junctions, keep the differentiation nonetheless to avoid custom handling later
+		std::map< std::string, std::vector<RawTablesLocator> > var_refs;
+		
 		// if a logging node, it needs to record values on remote work items
-		std::set< DawRef > daw_refs;
+		// add the list of daws indexed by path string, just to avoid filtering by unresolved status when resolving with recv lists. Improve to sth more efficient or clear if needed
+		// Or change to a vector of variants, easily.
+		std::map< std::string, std::vector<DawRef> > log_refs;
+		
 	};
 	
 	// not the send/recv buffers themselves, but lists of references
@@ -6980,10 +6996,25 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		return true;
 	};
-	auto AppendRemoteDependency_DataWriter = [ &recv_lists ]( const DawRef &dawref, int remote_node ){
-		
-		recv_lists[remote_node].daw_refs.insert(dawref);	
-		
+	auto AppendRemoteDependency_DataWriter = [ &recv_lists, &model, &net ]( const Simulation::LemsQuantityPath &path, int remote_node, const DawRef &dawref ){
+		std::string sPath;
+		if(!model.LemsQuantityPathToString(net, path, sPath)){
+			printf("recvlist add daw to string failed\n");
+			return false;
+		}
+		recv_lists[remote_node].value_refs.insert(sPath);
+		recv_lists[remote_node].log_refs[sPath].push_back(dawref);	
+		return true;
+	};
+	
+	auto AppendRemoteDependency_VariableReference = [ &recv_lists, &model, &net ]( const Simulation::LemsQuantityPath &path, int remote_node, const RawTablesLocator &tabloc ){
+		std::string sPath;
+		if(!model.LemsQuantityPathToString(net, path, sPath)){
+			printf("recvlist add varref to string failed\n");
+			return false;
+		}
+		recv_lists[remote_node].value_refs.insert(sPath);
+		recv_lists[remote_node].var_refs[sPath].push_back(tabloc);	
 		return true;
 	};
 	
@@ -7092,6 +7123,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	// GetLocalWorkItem_FromPopInst
 	
 	#endif
+	
+	// first of all, create NULL tables for unset references to trip on ...
+	tabs.global_state_null = tabs.global_tables_state_f32_arrays.size();
+	tabs.                         global_tables_state_f32_arrays.emplace_back();
+	tabs.                         global_tables_state_f32_arrays.push_back(NAN);
+	// HERE but they could be tabular or global?? doesn't matter for packed refs!
 	
 	printf("Creating populations...\n");
 	
@@ -7365,9 +7402,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	tabs.                           global_tables_const_f32_arrays.emplace_back();
 	tabs.global_state_tabref = tabs.global_tables_state_f32_arrays.size();
 	tabs.                           global_tables_state_f32_arrays.emplace_back();
-	
-	// tabs.logger_table_const_i64_to_state_f32_index = tabs.global_tables_const_i64_arrays.size();
-	// tabs.global_tables_const_f32_arrays.emplace_back();
 	
 	// Now add the attachments, as table entries
 	
@@ -8212,12 +8246,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				switch(path.segment.type){
 					
 					case SegPath::Type::VOLTAGE: {
-						// printf("daw volt cell %ld seg %ld comp %d\n", (Int)loca.cell_instance, (Int)loca.segment_seq, (int) comp_seq );
+						// printf("locate volt cell %ld seg %ld comp %d\n", (Int)loca.cell_instance, (Int)loca.segment_seq, (int) comp_seq );
 						tabloc.layou_type = RawTablesLocator::LayoutType::FLAT;
 						tabloc.varia_type = RawTablesLocator::VariableType::STATE;
 						tabloc.forma_type = RawTablesLocator::FormatType::F32;
 						
-						//TODOOOO
+						//TODO
 						size_t global_idx_V = tabs.global_state_f32_index[work_unit] + pig.GetVoltageStatevarIndex( comp_seq ); // LATER change for split cell?
 						
 						tabloc.table = tabs.global_state_tabref;
@@ -8476,19 +8510,22 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	};
 	
 	// add the loggers
-	struct LogInsideDataWriter{
+	struct LogInsideDataWriter : public ILogProxy {
 		// const LogCustomFile &log;
-		Int col_seq;
-		std::string output_filepath;
-		// LogWithElement():{}
-		void operator()(const char *format, ...) const {
-			va_list args; va_start(args, format);
+		const Int col_seq;
+		const std::string &output_filepath;
+		LogInsideDataWriter(Int _c, const std::string &_s) : col_seq(_c), output_filepath(_s){}
+		void operator()(const char *format, va_list args) const {
 			std::string prefix = "data writer"+output_filepath+", column "+accurate_string(col_seq)+": "; // FIXME allow no printf % to be injected here!
 			vprintf((prefix+format).c_str(), args);
-			va_end(args);
-			// 1+vsnprintf(NULL, 0, fmt, args1)
+			// 1+vsnprintf(NULL, 0, fmt, args1) TODO
 		}
-	
+		void operator()(const char *format, ...) const {
+			va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
+		void error(const char *format, ...) const {
+			va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
+		void warning(const char *format, ...) const {
+			va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
 	};
 	
 	bool i_log_the_data = true;
@@ -8530,12 +8567,30 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				if(!LocateNodeForPath( path, path_node )) return false;
 				if( path_node != my_mpi.rank ){
 					assert( my_mpi.rank == 0 ); // for now at least...
-					column.on_node = path_node;
+					// column.on_node = path_node;
 					
-					if( !AppendRemoteDependency_DataWriter( {daw_seq, col_seq}, path_node ) ) return false;
+					if( !AppendRemoteDependency_DataWriter( path, path_node, {daw_seq, col_seq} ) ) return false;
 				} else
 				#endif
 				if( !LocateEntryFromPath(path, column.tabloc, log_proxy ) ) return false;
+				
+				{
+				// XXX move this sanity check from here but keep somewhere, ifdef DEBUG or so
+				std::string s, sNew;
+				Simulation::LemsQuantityPath newpath;
+				if(!model.LemsQuantityPathToString(net, path, s)){ printf("path to string failed!\n"); return false;}
+				if(!model.ParseLemsQuantityPath(log_proxy, s.c_str(), net, newpath)){ printf("path to string %s to path failed!\n", s.c_str()); return false;}
+				if(!model.LemsQuantityPathToString(net, newpath, sNew)){ printf("path to string %s to path to string failed!\n", s.c_str()); return false;}
+				if(s != sNew){ printf("path to string %s is not the same as %s!\n", s.c_str(), sNew.c_str()); return false;}
+				
+				// const auto &pp = path;
+				const auto &path = newpath; // let's see if this triggers any bugs
+				
+				#ifdef USE_MPI
+				if( path_node == my_mpi.rank )
+				#endif
+				// XXX should non writing nodes calculate these? it should be redundant now
+				if( !LocateEntryFromPath(path, column.tabloc, log_proxy ) ) return false; // once more to use the new path
 				if(column.tabloc.forma_type != RawTablesLocator::F32){ log_proxy("not a float value!"); return false; }
 				
 				// and add scaling factor for output
@@ -8543,6 +8598,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				if(!model.GetLemsQuantityPathType(net, path, type, dimension)){
 					log_proxy("internal error: get qty path type"); return false;
 				}
+				
 				
 				// TODO scales should be strictly defined for lems quantities !					
 				const LemsUnit native = dimensions.GetNative(dimension);
@@ -8552,7 +8608,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				const LemsUnit desired = fundamental_units;
 				
 				column.scaleFactor = native.ConvertTo(1, desired);
-				
+				}
 				// done with column
 				logger.columns.push_back(column);
 			}
@@ -8580,15 +8636,25 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 		};
 		
-		auto SetRowColToTabLoc = [&LocateEntryFromPath](const auto &log_error, const Simulation::CustomSetup::Statement &set, Int row, Int col, const RawTablesLocator &tabloc, RawTables &tabs){
+		auto SetRowColToTabLoc = [&LocateEntryFromPath
+		#ifdef USE_MPI
+		, &LocateNodeForPath, &AppendRemoteDependency_VariableReference
+		#endif
+		](const auto &log_error, const Simulation::CustomSetup::Statement &set, Int row, Int col, const RawTablesLocator &tabloc, RawTables &tabs){
 			if(false){ // VARREQ REF? VariableReference
 				const Simulation::LemsQuantityPath &ref_path = set.ref_data[row][col];
 				RawTablesLocator ref_tabloc;
-				if(!LocateEntryFromPath(ref_path, ref_tabloc, log_error)){
-					// TODO add varref dependency to mpi list!
-					return false;
+				
+				#ifdef USE_MPI
+				int ref_path_node;
+				if(!LocateNodeForPath( ref_path, ref_path_node )) return false;
+				if( ref_path_node != my_mpi.rank ){
+					// add varref dependency to mpi list
+					return( AppendRemoteDependency_VariableReference( ref_path, ref_path_node, tabloc ) );
 				}
-				else{
+				#endif
+				if(!LocateEntryFromPath(ref_path, ref_tabloc, log_error)) return false;
+				else {
 					if(!( ref_tabloc.varia_type == RawTablesLocator::VariableType::STATE 
 					&& ref_tabloc.forma_type == RawTablesLocator::FormatType::F32 )){
 						log_error("error: path ref  non state float type not supported yet");
@@ -8596,6 +8662,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					}
 					
 					tabs.GetSingleI64(tabloc) = GetEncodedTableEntryId(tabloc.table, tabloc.entry);
+					
+					return true;
 				}
 			}
 			else{
@@ -8604,8 +8672,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				Real val = set.real_data[row][col];
 				// printf("val %f\n", val);
 				tabs.GetSingleF32(tabloc) = val;
+				
+				return true;
 			}
-			return true;
 		};
 			
 		if(set.type == Simulation::CustomSetup::Statement::POPULATION){
@@ -8726,7 +8795,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			const auto &proj = net.projections.get(proj_seq);
 			// get syncomp type
 			// Int syn_seq = path.synapse.GetSynSeq(conn);
-			// assert(syn_seq >= 0);HERE
+			// assert(syn_seq >= 0);
 			// const SynapticComponent &syn = synaptic_components.get(syn_seq);
 			
 			auto items_seq = set.items_seq;
@@ -8771,7 +8840,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		}
 		// done with statements
 	}
-	
+	// HERE
 	// // for cell, for segment
 	// get location of target (maybe use shortcut?)
 	// update value
@@ -8810,8 +8879,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			Say("%s", say_refs.c_str());
 		}
 		
-		for( const auto &daw : recv_list.daw_refs ){
-			std::string say_refs = "\tDaw " + daw.toPresentableString() + " to log ";
+		for( const auto &sPath : recv_list.value_refs ){
+			std::string say_refs = "\tVar " + sPath + " to continuous: ";
+			for( RawTablesLocator tabloc : recv_list.var_refs.at(sPath) ){
+				say_refs += tabloc.Stringify() + " ";
+			}
+			say_refs += "and logs:";
+			for( DawRef logref : recv_list.log_refs.at(sPath) ){
+				say_refs += logref.toPresentableString() + " ";
+			}
 			
 			Say("%s", say_refs.c_str());
 		}
@@ -8832,7 +8908,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		std::string enc;
 		// first, the header oine
 		enc += accurate_string( recvlist.vpeer_refs.size() ) + " "
-			+  accurate_string( recvlist.daw_refs  .size() ) + " "
+			+  accurate_string( recvlist.value_refs.size() ) + " "
 			+  accurate_string( recvlist.spike_refs.size() ) + "\n" ;
 		
 		for( const auto &keyval : recvlist.vpeer_refs ){
@@ -8840,8 +8916,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			loc.toEncodedString( enc );
 			enc += "\n";
 		}
-		for( const DawRef &daw_ref : recvlist.daw_refs ){
-			daw_ref.toEncodedString( enc );
+		for( const std::string &sPath : recvlist.value_refs ){
+			enc += sPath;
 			enc += "\n";
 		}
 		for( const auto &keyval : recvlist.spike_refs ){
@@ -9246,7 +9322,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		auto &sendlist = send_lists[other_rank];
 		assert( enc.size() );
 		// convert enc to null-terminated lines, for convenience
-		std::vector<char *> lines;
+		std::vector<const char *> lines;
 		lines.push_back( enc.data() );
 		for( size_t i = 0; i < enc.size() ; i++ ){
 			if( enc[i] == '\n' ){
@@ -9263,14 +9339,14 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		}
 		}
 		
-		Int vpeers, daws, spikes;
-		sscanf(lines[0], "%ld %ld %ld", &vpeers, &daws, &spikes );
+		Int vpeers, refs, spikes;
+		sscanf(lines[0], "%ld %ld %ld", &vpeers, &refs, &spikes );
 		if( config.debug_netcode ){
-			Say("%ld %ld %ld <- %s", vpeers, daws, spikes, lines[0]);
+			Say("%ld %ld %ld <- %s", vpeers, refs, spikes, lines[0]);
 		}
 		Int vpeer_idx = 1;
-		Int daw_idx = vpeer_idx + vpeers;
-		Int spike_idx = daw_idx + daws;
+		Int value_idx = vpeer_idx + vpeers;
+		Int spike_idx = value_idx + refs;
 		
 		
 		sendlist.vpeer_sources.resize(vpeers);
@@ -9279,11 +9355,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			if(!ret) Say( "fail %s", lines[ vpeer_idx + i ] );
 			assert(ret);
 		}
-		sendlist.daw_refs.resize(daws);
-		for(int i = 0; i < daws; i++){
-			auto ret = sendlist.daw_refs[i].fromEncodedString( lines[ daw_idx + i ] );
-			if(!ret) Say( "fail %s", lines[ daw_idx + i ] );
-			assert(ret);
+		sendlist.var_refs.resize(refs);
+		for(int i = 0; i < refs; i++){
+			const char *line = lines[ daw_idx + i ];
+			auto &path = sendlist.var_refs[i];
+			// Say( "line %s", line);
+			SayWithPrefix log([&other_rank, &i, &line](){ return "send list "+accurate_string(other_rank)+", ref "+accurate_string(i)+" "+line+": "; });
+			if(!model.ParseLemsQuantityPath(log, line, net, path)) return false;
 		}
 		sendlist.spike_sources.resize(spikes);
 		for(int i = 0; i < spikes; i++){
@@ -9310,9 +9388,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			Say("%s", say_refs.c_str());
 		}
 		
-		for( const auto &daw : send_list.daw_refs ){
-			std::string say_refs = "\tDaw " + daw.toPresentableString() ;
-			Say("%s", say_refs.c_str());
+		for( const auto &path : send_list.var_refs ){
+			std::string sPath; if(!model.LemsQuantityPathToString(net, path, sPath)) return false;
+			Say("%s", ("\tRef " + sPath).c_str());
 		}
 	}
 	}
@@ -9332,26 +9410,20 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			send_list_impl.vpeer_positions_in_globstate[i] = GetCompartmentVoltageStatevarIndex_Global( loc );
 		}
 		
-		send_list_impl.daw_columns.resize( send_list.daw_refs.size() );
-		// also realize any data logger columns that access values local to this node
-		for( size_t i = 0; i < send_list.daw_refs.size() ; i++ ){
-			const auto &ref = send_list.daw_refs.at(i);
+		send_list_impl.ref_locations.resize( send_list.var_refs.size() );
+		// also resolve any refs to be sent, that access values local to this node
+		for( size_t i = 0; i < send_list.var_refs.size() ; i++ ){
+			const auto &path = send_list.var_refs.at(i);
 			
-			// NB make sure this node knows about this daw
-			const auto &daw = sim.data_writers.get(ref.daw_seq);
-			const auto &col = daw.output_columns.get(ref.col_seq);
-			const auto &path = col.quantity;
-			
-			auto &impl_col = send_list_impl.daw_columns[i];
+			auto &impl_loc = send_list_impl.ref_locations[i];
 			
 			int path_node;
 			if(!LocateNodeForPath( path, path_node )) return false;
-			LogInsideDataWriter log_proxy{ref.col_seq, daw.fileName};
 			if( path_node != my_mpi.rank ){
-				log_proxy("internal error: received send list for remote node"); return false;
+				Say("internal error: received send list var ref for remote node"); return false;
 			}
-			if( !LocateEntryFromPath(path, impl_col.tabloc, log_proxy ) ) return false;
-			if(impl_col.tabloc.forma_type != RawTablesLocator::F32){ log_proxy("internal error: send list element not a float value!"); return false; }
+			if( !LocateEntryFromPath(path, impl_loc, Say ) ) return false;
+			if(impl_loc.forma_type != RawTablesLocator::F32){ Say("internal error: send list var ref element not a float value!"); return false; }
 		}
 		
 		// allocate mirror buffers for spike triggers
@@ -9381,15 +9453,18 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		auto &recv_list_impl = engine_config.recvlist_impls[other_rank];
 		
 		// allocate mirror buffers for values continuously being sent
-		recv_list_impl.value_mirror_size = recv_list.vpeer_refs.size() + recv_list.daw_refs.size();
+		recv_list_impl.value_mirror_size = recv_list.vpeer_refs.size() + recv_list.value_refs.size();
 		recv_list_impl.value_mirror_buffer = tabs.global_tables_state_f32_arrays.size();
 		tabs.                                     global_tables_state_f32_arrays.emplace_back();
 		auto &value_mirror = tabs.                global_tables_state_f32_arrays.back();
 		value_mirror.resize( recv_list_impl.value_mirror_size, 5555); // XXX set as NAN after debug
 		for( int i = recv_list.vpeer_refs.size(); i < (int)value_mirror.size(); i++ ) value_mirror[i] = 4444;
+		
 		// NB walk through these requested values, in the same order they were requested in the recv list
 		long long value_mirror_table = recv_list_impl.value_mirror_buffer;
 		int value_mirror_entry = 0;
+		
+		// first are the vpeer refs, remap them. iterate in the same way as they were requested, eg ascending order here 
 		for( const auto &keyval : recv_list.vpeer_refs ){
 			const auto & remap_ref_list = keyval.second;
 			
@@ -9403,13 +9478,27 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			value_mirror_entry++;
 		}
 		
-		
-		// right next, the daw values
-		for( const auto &daw_ref : recv_list.daw_refs ){
-			assert(my_mpi.rank == 0);
+		// right next, the value references
+		for( const std::string &sPath : recv_list.value_refs ){
 			
-			engine_config.trajectory_loggers[daw_ref.daw_seq].columns[daw_ref.col_seq].tabloc = {value_mirror_table, value_mirror_entry, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::F32};
+			// resolve loggers
+			if(recv_list.log_refs.count(sPath) > 0)
+			for( const auto &log_ref : recv_list.log_refs.at(sPath) ){
+				assert(my_mpi.rank == 0);
+				
+				engine_config.trajectory_loggers[log_ref.daw_seq].columns[log_ref.col_seq].tabloc = {value_mirror_table, value_mirror_entry, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::F32};
+			}
 			
+			// and varref values
+			if(recv_list.var_refs.count(sPath) > 0)
+			for( const auto &tabloc : recv_list.var_refs.at(sPath) ){
+				assert(tabloc.varia_type == RawTablesLocator::VariableType::CONST
+				&& tabloc.forma_type == RawTablesLocator::FormatType::I64);
+				
+				tabs.GetSingleI64(tabloc) = GetEncodedTableEntryId(tabloc.table, tabloc.entry);
+			}
+			
+			// and more to next continuous var requested
 			value_mirror_entry++;
 		}
 		
@@ -9886,10 +9975,10 @@ int main(int argc, char **argv){
 			size_t vpeer_buf_idx = 0;
 			size_t vpeer_buf_len = sendlist_impl.vpeer_positions_in_globstate.size();
 			
-			size_t daw_buf_idx = vpeer_buf_idx + vpeer_buf_len;
-			size_t daw_buf_len = sendlist_impl.daw_columns.size();
+			size_t ref_buf_idx = vpeer_buf_idx + vpeer_buf_len;
+			size_t ref_buf_len = sendlist_impl.ref_locations.size();
 			
-			size_t buf_value_len = vpeer_buf_len + daw_buf_len;
+			size_t buf_value_len = vpeer_buf_len + ref_buf_len;
 			
 			buf.resize(buf_value_len); // std::vector won't reallocate due to size reduction
 			// otherwise implement appending the spikes manually
@@ -9901,11 +9990,10 @@ int main(int argc, char **argv){
 				buf[ vpeer_buf_idx + i ] = global_state_now[off];
 			}
 			
-			for( size_t i = 0; i < sendlist_impl.daw_columns.size(); i++ ){
+			for( size_t i = 0; i < sendlist_impl.ref_locations.size(); i++ ){
 				assert( my_mpi.rank != 0 && other_rank == 0 );
-				auto &col = sendlist_impl.daw_columns[i];
 				// do not apply scaling! keep engine units consistent or at most marshalled!
-				buf[ daw_buf_idx + i ] = GetSingleF32(col.tabloc); // global_state_now[ off ];  * col.scaleFactor ;
+				buf[ ref_buf_idx + i ] = GetSingleF32(sendlist_impl.ref_locations[i]); // global_state_now[ off ];  * col.scaleFactor ;
 			}
 			
 			size_t spikebuf_off = sendlist_impl.spike_mirror_buffer;
@@ -9941,8 +10029,6 @@ int main(int argc, char **argv){
 			// NB make sure these buffers are synchronized with CPU memory LATER
 			for( ptrdiff_t i = 0; i < recvlist_impl.value_mirror_size; i++ ){
 				value_buf[i] = buf[ value_buf_idx + i ];
-				
-				// global_state_now[ off + i] = buf[ value_buf_idx + i ];
 			}
 			
 			// and deliver the spikes to trigger buffers
