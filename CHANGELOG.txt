@@ -1,5 +1,6 @@
 Latest
 
+- Add experimental extension to LEMS: 'VariableRequirement' for CoreNEURON-style POINTERs, which is accessible through the experimental "EdenCustomSetup" file format
 - Add experimental file format for direct, per-instance customization of model parameters
 - Eliminate LEMS constants from the model's memory footprint
 - Add support to keep model files loaded after finishing loading the model. Now EDEN and extensions can access the names of objects, for diagnostics and more!

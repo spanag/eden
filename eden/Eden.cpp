@@ -62,6 +62,7 @@ typedef void ( *IterationCallback)(
 	double time,
 	float dt,
 	const float *__restrict__ constants, long long const_local_index,
+	const long long *__restrict__ constints, long long cinst_local_index,
 	const long long *__restrict__ const_table_f32_sizes, const Table_F32 *__restrict__ const_table_f32_arrays, long long table_cf32_local_index,
 	const long long *__restrict__ const_table_i64_sizes, const Table_I64 *__restrict__ const_table_i64_arrays, long long table_ci64_local_index,
 	const long long *__restrict__ state_table_f32_sizes, const Table_F32 *__restrict__ state_table_f32_arrays, Table_F32 *__restrict__ stateNext_table_f32_arrays, long long table_sf32_local_index,
@@ -74,6 +75,7 @@ void UndefinedCallback(
 	double time,
 	float dt,
 	const float *__restrict__ constants, long long const_local_index,
+	const long long *__restrict__ constints, long long cinst_local_index,
 	const long long *__restrict__ const_table_f32_sizes, const Table_F32 *__restrict__ const_table_f32_arrays, long long table_cf32_local_index,
 	const long long *__restrict__ const_table_i64_sizes, const Table_I64 *__restrict__ const_table_i64_arrays, long long table_ci64_local_index,
 	const long long *__restrict__ state_table_f32_sizes, const Table_F32 *__restrict__ state_table_f32_arrays, Table_F32 *__restrict__ stateNext_table_f32_arrays, long long table_sf32_local_index,
@@ -379,10 +381,11 @@ struct RawTables{
 	// TODO aligned vectors, e.g. std::vector<T, boost::alignment::aligned_allocator<T, 16>>
 	Table_F32 global_initial_state; // sum of states of work items
 	Table_F32 global_constants; // sum of states of work items
-	Table_I64 index_constants; // TODO if ever
+	Table_I64 global_constints; // temporary. TODO abolish globals
 	
 	std::vector<long long> global_state_f32_index; // for each work unit TODO explain they are not completely "global"
 	std::vector<long long> global_const_f32_index; // for each work unit
+	std::vector<long long> global_const_i64_index; // for each work unit
 	
 	//the tables TODO aligned
 	std::vector<long long> global_table_const_f32_index; // for each work unit
@@ -401,12 +404,15 @@ struct RawTables{
 	
 	// These are to access the singular, flat state & const vectors. They are not filled in otherwise.
 	long long global_const_tabref;
+	long long global_cinst_tabref;
 	long long global_state_tabref;
+	long long global_state_tabref_null;
 
 	// TODO keep track of the MPI mirrors ?
 	
 	RawTables(){
 		global_const_tabref = -1;
+		global_cinst_tabref = -1;
 		global_state_tabref = -1;
 	}
 	
@@ -429,7 +435,7 @@ struct RawTables{
 		assert(tabloc.forma_type == RawTablesLocator::FormatType::I64);
 		if(tabloc.layou_type == RawTablesLocator::LayoutType::FLAT){
 			assert(tabloc.varia_type == RawTablesLocator::VariableType::CONST);
-			return index_constants[tabloc.entry];
+			return global_constints[tabloc.entry];
 		}
 		else{ // if(tabloc.layou_type == RawTablesLocator::LayoutType::TABLE){
 			if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
@@ -723,6 +729,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// Indexes that could either refer to the cell(or compartment)'s scalar signature , or new spawned tables
 			// (depending on the nature of the component
 			std::vector<Entry> properties_to_constants;
+			std::vector<Entry> varreqs_to_constints;
 			std::vector<Entry> statevars_to_states;
 			
 		};
@@ -922,7 +929,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				// vectors per compartment, for now; could join per-list for less pointer chasing
 				std::vector< int > r_off; // RNG offsets
-				std::vector< int > c_off, s_off;
+				std::vector< int > c_off, i_off, s_off;
 				std::vector< int > cf32_off, sf32_off, ci64_off, si64_off;
 				
 				// indices to grouped lists of compartments
@@ -930,7 +937,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				// indices to the allocated vectors
 				size_t Index_Roff;
-				size_t Index_Coff, Index_Soff;
+				size_t Index_Coff, Index_Ioff, Index_Soff;
 				size_t Index_CF32off, Index_SF32off, Index_CI64off, Index_SI64off;
 				
 			};
@@ -1163,13 +1170,16 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// 	Table_F32 vs. std::vector<float>. Could it be the allocator's fault, STL non-inlining's fault, or what else?
 			// std::vector<float> state, constants;
 			RawTables::Table_F32 state, constants;
+			RawTables::Table_I64 constints;
 			
 			std::vector<TableInfo> tables_const_f32, tables_const_i64, tables_state_f32, tables_state_i64;
 			std::unordered_map<size_t, std::string> constants_names;
+			std::unordered_map<size_t, std::string> constints_names;
 			std::unordered_map<size_t, std::string> state_names;
 			
-			// TODO do something with these, default constants for tables??
+			// TODO do something with these, default constants for tables?? abolish, rather!
 			std::vector<Real> prototype_const;
+			std::vector<long long> prototype_cinst;
 			std::vector<Real> prototype_state;
 			// LATER reverse indices, somehow
 			
@@ -1188,12 +1198,17 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				for( auto keyval : rhs.constants_names ){
 					constants_names[ keyval.first + conoff ] = keyval.second;
 				}
+				ptrdiff_t cinoff = constints.size();
+				for( auto keyval : rhs.constints_names ){
+					constints_names[ keyval.first + cinoff ] = keyval.second;
+				}
 				ptrdiff_t staoff = state.size();
 				for( auto keyval : rhs.state_names ){
 					state_names[ keyval.first + staoff ] = keyval.second;
 				}
 				
 				AppendToVector( constants        , rhs.constants        );
+				AppendToVector( constints        , rhs.constints        );
 				AppendToVector( state            , rhs.state            );
 				AppendToVector( tables_const_f32 , rhs.tables_const_f32 );
 				AppendToVector( tables_state_f32 , rhs.tables_state_f32 );
@@ -1201,6 +1216,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				AppendToVector( tables_state_i64 , rhs.tables_state_i64 );
 				
 				AppendToVector( prototype_const  , rhs.prototype_const  );
+				AppendToVector( prototype_cinst  , rhs.prototype_cinst  );
 				AppendToVector( prototype_state  , rhs.prototype_state  );
 				
 				random_call_counter += rhs.random_call_counter;
@@ -1800,9 +1816,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	struct ISignatureAppender{
 		
 		virtual size_t Constant( Real default_value, const std::string &for_what ) const = 0;
+		virtual size_t ConstI64( long long default_value, const std::string &for_what ) const = 0;
 		virtual size_t StateVariable( Real default_value, const std::string &for_what ) const = 0;
 		
 		virtual std::string ReferTo_Const( size_t index ) const = 0;
+		virtual std::string ReferTo_Cinst( size_t index ) const = 0;
 		virtual std::string ReferTo_State( size_t index ) const = 0;
 		virtual std::string ReferTo_StateNext( size_t index ) const = 0;
 	};
@@ -1871,6 +1889,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			wig.constants_names[Index] = for_what;
 			return Index;
 		}
+		virtual size_t ConstI64( long long default_value, const std::string &for_what ) const {
+			size_t Index = wig.constints.size();
+			wig.constints.push_back(default_value);
+			wig.constints_names[Index] = for_what;
+			return Index;
+		}
 		virtual size_t StateVariable( Real default_value, const std::string &for_what ) const {
 			size_t Index = wig.state.size();
 			wig.state.push_back(default_value);
@@ -1892,6 +1916,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		virtual std::string ReferTo_Const( size_t index ) const {
 			return "local_constants["+itos(index)+"]";
+		}
+		virtual std::string ReferTo_Cinst( size_t index ) const {
+			return "local_constints["+itos(index)+"]";
 		}
 		virtual std::string ReferTo_State( size_t index ) const {
 			return "local_state["+itos(index)+"]";
@@ -1924,10 +1951,17 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			wig.prototype_state.push_back(default_value);
 			return Index;
 		}
-		size_t ConstI64( const std::string &for_what ) const {
+		size_t ConstI64( long long default_value, const std::string &for_what ) const {
 			size_t Index = wig.tables_const_i64.size();
 			wig.tables_const_i64.push_back( CellInternalSignature::TableInfo(for_what) );
+			
+			// do something with the table's default variable
+			wig.prototype_cinst.push_back(default_value);
+			
 			return Index;
+		}
+		size_t ConstI64( const std::string &for_what ) const {
+			return ConstI64(0xd153a53db020caf3, for_what);
 		}
 		size_t StateI64( const std::string &for_what ) const {
 			size_t Index = wig.tables_state_i64.size();
@@ -1945,6 +1979,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		virtual std::string ReferTo_Const( size_t index ) const {
 			return "local_const_table_f32_arrays["+itos(index)+"][instance]";
+		}
+		virtual std::string ReferTo_Cinst( size_t index ) const {
+			return "local_const_table_i64_arrays["+itos(index)+"][instance]";
 		}
 		virtual std::string ReferTo_State( size_t index ) const {
 			return "local_state_table_f32_arrays["+itos(index)+"][instance]";
@@ -2372,6 +2409,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				ret.statevars_to_states.push_back({Index, CellInternalSignature::ComponentSubSignature::Entry::ValueType::F32});
 			}
+			for(size_t seq = 0; seq < type.variable_requirements.contents.size(); seq++ ){
+				size_t Index = Add->ConstI64( 0, for_what + std::string(" VarReq ") + itos(seq) + " ("+dimensions.GetNative(type.variable_requirements.get(seq).dimension).name+")"); 
+				ret.varreqs_to_constints.push_back({Index, CellInternalSignature::ComponentSubSignature::Entry::ValueType::I64});
+			}
 			
 			return ret;
 		}
@@ -2452,6 +2493,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				sprintf(tmps, "float Lems_constant_%d = %s; // %s", i, accurate_string(type.constants.get(i).value).c_str(), dimensions.GetNative(type.constants.get(i).dimension).name.c_str() );
 				ret += tab+tmps+"\n";
 			}
+			// TODO write down in the guide the lack of intention to update such reqs, if they happen to
+			// point to the statevars of the same component which may get updated by OnCondition and other events
+			for(int i = 0; i < (int)type.variable_requirements.contents.size(); i++){
+				sprintf(tmps, "float Lems_varreq_%d = GetSingleF32(global_state_table_f32_arrays, %s);", i, Add->ReferTo_Cinst(subsig.varreqs_to_constints.at(i).index).c_str() );
+				ret += tab+tmps+"\n";
+			}
 			ret += tab+"// fixed properties "+for_what+"\n";
 			for(size_t i = 0; i < type.properties.contents.size(); i++){
 				sprintf(tmps, "float Lems_property_%zd = %s;", i, Add->ReferTo_Const(subsig.properties_to_constants.at(i).index).c_str() );
@@ -2484,6 +2531,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				}
 				else if(namet == ComponentType::NamespaceThing::REQUIREMENT){
 					ret += "requirement";
+				}
+				else if(namet == ComponentType::NamespaceThing::VARREQ){
+					ret += "varreq";
 				}
 				else if(namet == ComponentType::NamespaceThing::STATE){
 					ret += "state";
@@ -2603,6 +2653,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					// skip
 				}
 				else if(namet == ComponentType::NamespaceThing::REQUIREMENT){
+					// skip
+				}
+				else if(namet == ComponentType::NamespaceThing::VARREQ){
 					// skip
 				}
 				else if(namet == ComponentType::NamespaceThing::STATE){
@@ -2726,8 +2779,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// grab any constants from the property type, then replace them with instance parms, then append them to the vectors
 		
 		const auto off_cf32 = tabs.global_table_const_f32_index[work_unit];
+		const auto off_ci64 = tabs.global_table_const_i64_index[work_unit];
 		const auto off_sf32 = tabs.global_table_state_f32_index[work_unit];
 		auto &tab_cf32 = tabs.global_tables_const_f32_arrays;
+		auto &tab_ci64 = tabs.global_tables_const_i64_arrays;
 		auto &tab_sf32 = tabs.global_tables_state_f32_arrays;
 		
 		const ComponentType &comp_type = component_types.get(comp_instance.id_seq);
@@ -2736,6 +2791,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		for( size_t seq = 0; seq < vals.properties.size(); seq++ ){
 			tab_cf32[off_cf32 + subsig.properties_to_constants[seq].index].push_back(vals.properties.at(seq));
+		}
+		for( size_t seq = 0; seq < subsig.varreqs_to_constints.size(); seq++ ){
+			tab_ci64[off_ci64 + subsig.varreqs_to_constints[seq].index].push_back(0); // TODO default GetValues ?
 		}
 		
 		for( size_t seq = 0; seq < vals.statevars.size(); seq++ ){
@@ -2893,6 +2951,17 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		code += "static float EncodeI32ToF32( int   i ){ TypePun_I32F32 cast; cast.i32 = i; return cast.f32;}\n";
 		code += "static int   EncodeF32ToI32( float f ){ TypePun_I32F32 cast; cast.f32 = f; return cast.i32;}\n";
 		
+		// packed ref access
+		std::string tab = "";
+		code += "\n" + tab + "static inline float GetSingleF32(const Table_F32 *global_tables, unsigned long long packed_id){";
+		code += "\n" + tab + "\tconst unsigned long long table_id = packed_id / (1 << 24);";
+		code += "\n" + tab + "\tconst unsigned long long entry_id = packed_id % (1 << 24);";
+		if(config.debug){
+		code += "\n" + tab + "\tprintf(\"refc %llx\\t%llu\\t%llu\\t%p\\n\", packed_id, table_id, entry_id,global_tables[table_id]);";
+		code += "\n" + tab + "\tfflush(stdout);";
+		}
+		code += "\n" + tab + "\treturn global_tables[table_id][entry_id];\n}\n";
+		
 		// the humble but mighty step function
 		code += "static float stepf( float x ){ if( x < 0 ) return 0; else return 1;  }\n";
 		
@@ -2937,6 +3006,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	auto EmitWorkItemRoutineHeader = [ &config ]( std::string &code ){
 		(void) config; // just in case
 		code += "void doit( double time, float dt, const float *__restrict__ global_constants, long long const_local_index, \n"
+											  "const long long *__restrict__ global_constints, long long cinst_local_index, \n"
 		"const long long *__restrict__ global_const_table_f32_sizes, const Table_F32 *__restrict__ global_const_table_f32_arrays, long long table_cf32_local_index,\n"
 		"const long long *__restrict__ global_const_table_i64_sizes, const Table_I64 *__restrict__ global_const_table_i64_arrays, long long table_ci64_local_index,\n"
 		"const long long *__restrict__ global_state_table_f32_sizes, const Table_F32 *__restrict__ global_state_table_f32_arrays, Table_F32 *__restrict__ global_stateNext_table_f32_arrays, long long table_sf32_local_index,\n"
@@ -3005,6 +3075,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			const auto &by = from_context, &to = to_context;
 			
 			code +=   "	const float *"+to+"_constants = "+by+"_constants + const_"+to+"_index;\n";
+			code +=   "	const long long *"+to+"_constints = "+by+"_constints + cinst_"+to+"_index;\n";
 			code +=   "	const float *"+to+"_state     = "+by+"_state     + state_"+to+"_index;\n";
 			code +=   "	      float *"+to+"_stateNext = "+by+"_stateNext + state_"+to+"_index;\n";
 			code +=   "	\n";
@@ -3029,6 +3100,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			const auto &by = from_context, &to = to_context;
 			
 			code +=   "	const long long const_"+to+"_index = const_"+by+"_index;\n";
+			code +=   "	const long long cinst_"+to+"_index = cinst_"+by+"_index;\n";
 			code +=   "	const long long state_"+to+"_index = state_"+by+"_index;\n";
 			code +=   "	const long long table_cf32_"+to+"_index = table_cf32_"+by+"_index;\n";
 			code +=   "	const long long table_ci64_"+to+"_index = table_ci64_"+by+"_index;\n";
@@ -3690,7 +3762,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			std::string &ccde
 		){
 			char tmps[1000];
-			// CellInternalSignature::InputImplementation inpimpl; HERE ???
 			
 			ptrdiff_t Index_RngSeed = rng_impl.Index_RngSeed = AppendSingle.Constant( 0, for_what+" Cell RNG Seed" );
 			
@@ -6093,6 +6164,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// allocate the tables
 			
 			gp.Index_Coff    = AppendMulti_CellScope.ConstI64("Compartment Scalar CF32 Offset");
+			gp.Index_Ioff    = AppendMulti_CellScope.ConstI64("Compartment Scalar CI64 Offset");
 			gp.Index_Soff    = AppendMulti_CellScope.ConstI64("Compartment Scalar SF32 Offset");
 			gp.Index_CF32off = AppendMulti_CellScope.ConstI64("Compartment Table  CF32 Offset");
 			gp.Index_SF32off = AppendMulti_CellScope.ConstI64("Compartment Table  SF32 Offset");
@@ -6101,6 +6173,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			gp.Index_Roff    = AppendMulti_CellScope.ConstI64("Compartment RNG Offset");
 			
 			sig.code +=	tab+"const Table_I64 Comp_Coff    = cell_const_table_i64_arrays["+itos( gp.Index_Coff    )+"];\n";
+			sig.code +=	tab+"const Table_I64 Comp_Ioff    = cell_const_table_i64_arrays["+itos( gp.Index_Ioff    )+"];\n";
 			sig.code +=	tab+"const Table_I64 Comp_Soff    = cell_const_table_i64_arrays["+itos( gp.Index_Soff    )+"];\n";
 			sig.code +=	tab+"const Table_I64 Comp_CF32off = cell_const_table_i64_arrays["+itos( gp.Index_CF32off )+"];\n";
 			sig.code +=	tab+"const Table_I64 Comp_SF32off = cell_const_table_i64_arrays["+itos( gp.Index_SF32off )+"];\n";
@@ -6133,6 +6206,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				
 				ctde += tab+"	const long long const_comp_index      = Comp_Coff   [comp];\n";
+				ctde += tab+"	const long long cinst_comp_index      = Comp_Ioff   [comp];\n";
 				ctde += tab+"	const long long state_comp_index      = Comp_Soff   [comp];\n";
 				ctde += tab+"	const long long table_cf32_comp_index = Comp_CF32off[comp];\n";
 				ctde += tab+"	const long long table_ci64_comp_index = Comp_CI64off[comp];\n";
@@ -6164,6 +6238,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			int nComps = (int)pig.comp_implementations.size();
 			gp.r_off   .resize( nComps );
 			gp.c_off   .resize( nComps );
+			gp.i_off   .resize( nComps );
 			gp.s_off   .resize( nComps );
 			gp.cf32_off.resize( nComps );
 			gp.sf32_off.resize( nComps );
@@ -6221,6 +6296,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					
 					gp.r_off   [comp_seq] = ( cell_wig.random_call_counter   );
 					gp.c_off   [comp_seq] = ( cell_wig.constants       .size() );
+					gp.i_off   [comp_seq] = ( cell_wig.constints       .size() ); 
 					gp.s_off   [comp_seq] = ( cell_wig.state           .size() );
 					gp.cf32_off[comp_seq] = ( cell_wig.tables_const_f32.size() );
 					gp.sf32_off[comp_seq] = ( cell_wig.tables_state_f32.size() );
@@ -6562,6 +6638,14 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				printf("\t%20g\t", wig.constants[i]);
 				if(wig.constants_names.count(i)){
 					printf("%s", wig.constants_names.at(i).c_str());
+				}
+				printf("\n");
+			}
+			printf("Constints:\n");
+			for(size_t i = 0; i < wig.constints.size(); i++){
+				printf("\t%s\t", presentable_string(wig.constints[i]).c_str() );
+				if(wig.constints_names.count(i)){
+					printf("%s", wig.constints_names.at(i).c_str());
 				}
 				printf("\n");
 			}
@@ -6941,7 +7025,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// Order in vectors is same as order in sent packet
 		// (and is the order that the receiver requested)
 		std::vector<PointOnCellLocator> vpeer_sources;
-		std::vector<Simulation::LemsQuantityPath> var_refs;
+		std::vector<Simulation::LemsQuantityPath> value_refs;
 		std::vector<PointOnCellLocator> spike_sources;
 	};
 	
@@ -6959,7 +7043,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// This duplicates storage of the paths, but it is probably not a concern for well-behaved MPI transfers.
 		std::set< std::string > value_refs;
 		
-		// VariableReferences are very much like gap junctions, keep the differentiation nonetheless to avoid custom handling later
+		// VariableRequirements are very much like gap junctions, keep the differentiation nonetheless to avoid custom handling later
 		std::map< std::string, std::vector<RawTablesLocator> > var_refs;
 		
 		// if a logging node, it needs to record values on remote work items
@@ -7007,10 +7091,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		return true;
 	};
 	
-	auto AppendRemoteDependency_VariableReference = [ &recv_lists, &model, &net ]( const Simulation::LemsQuantityPath &path, int remote_node, const RawTablesLocator &tabloc ){
+	auto AppendRemoteDependency_VariableRequirement = [ &recv_lists, &model, &net ]( const Simulation::LemsQuantityPath &path, int remote_node, const RawTablesLocator &tabloc ){
 		std::string sPath;
 		if(!model.LemsQuantityPathToString(net, path, sPath)){
-			printf("recvlist add varref to string failed\n");
+			printf("recvlist add varreq to string failed\n");
 			return false;
 		}
 		recv_lists[remote_node].value_refs.insert(sPath);
@@ -7125,10 +7209,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	#endif
 	
 	// first of all, create NULL tables for unset references to trip on ...
-	tabs.global_state_null = tabs.global_tables_state_f32_arrays.size();
+	tabs.global_state_tabref_null = tabs.global_tables_state_f32_arrays.size();
 	tabs.                         global_tables_state_f32_arrays.emplace_back();
-	tabs.                         global_tables_state_f32_arrays.push_back(NAN);
-	// HERE but they could be tabular or global?? doesn't matter for packed refs!
+	tabs.                         global_tables_state_f32_arrays[tabs.global_state_tabref_null].push_back(NAN);
 	
 	printf("Creating populations...\n");
 	
@@ -7154,6 +7237,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		tabs.global_const_f32_index.push_back(local_const_f32_index);
 		AppendToVector(tabs.global_constants, wig.constants);
 		
+		size_t local_const_i64_index = tabs.global_constints.size();
+		tabs.global_const_i64_index.push_back(local_const_i64_index);
+		AppendToVector(tabs.global_constints, wig.constints);
+		
 		// and populate any scalar constants
 		
 		// the RNG seed for the cell
@@ -7176,7 +7263,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// TODO use all bits in RNG seed
 			uint32_t combined_seed = ReverseBits( (uint32_t) simulation_rng_seed ) ^ (uint32_t) cell_gid;
 			
-			tabs.global_constants[ local_const_f32_index + Index_RngSeed ] = EncodeI32ToF32( (int32_t) combined_seed );
+			tabs.global_constants[ local_const_f32_index + Index_RngSeed ] = EncodeI32ToF32( (int32_t) combined_seed ); // TODO move to constints i guess?
 		}
 		
 		
@@ -7228,6 +7315,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				RawTables::Table_I64 &Roff    = tab_ci64[off_ci64 + gp.Index_Roff   ]; AppendToVector( Roff    , gp.r_off    );
 				RawTables::Table_I64 &Coff    = tab_ci64[off_ci64 + gp.Index_Coff   ]; AppendToVector( Coff    , gp.c_off    );
+				RawTables::Table_I64 &Ioff    = tab_ci64[off_ci64 + gp.Index_Ioff   ]; AppendToVector( Ioff    , gp.i_off    );
 				RawTables::Table_I64 &Soff    = tab_ci64[off_ci64 + gp.Index_Soff   ]; AppendToVector( Soff    , gp.s_off    );
 				RawTables::Table_I64 &CF32off = tab_ci64[off_ci64 + gp.Index_CF32off]; AppendToVector( CF32off , gp.cf32_off    );
 				RawTables::Table_I64 &SF32off = tab_ci64[off_ci64 + gp.Index_SF32off]; AppendToVector( SF32off , gp.sf32_off    );
@@ -7400,6 +7488,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	// Add some extra misc-purpose tables, TODO move to, or abolish even?
 	tabs.global_const_tabref = tabs.global_tables_const_f32_arrays.size();
 	tabs.                           global_tables_const_f32_arrays.emplace_back();
+	tabs.global_cinst_tabref = tabs.global_tables_const_i64_arrays.size();
+	tabs.                           global_tables_const_i64_arrays.emplace_back();
 	tabs.global_state_tabref = tabs.global_tables_state_f32_arrays.size();
 	tabs.                           global_tables_state_f32_arrays.emplace_back();
 	
@@ -8085,6 +8175,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				subentry = compsubsig.properties_to_constants[ refer_thing.seq ].index;
 				return true;
 			}
+			else if( refer_thing.type == ComponentType::NamespaceThing::VARREQ ){
+				varia_type = RawTablesLocator::VariableType::CONST;
+				forma_type = RawTablesLocator::FormatType::I64;
+				subentry = compsubsig.varreqs_to_constints[ refer_thing.seq ].index;
+				return true;
+			}
 			else{
 				log_error("error: only state variables and properties can be located, %s can't", refer_thing.getTypeName());
 				return false; // perhaps fix LATER
@@ -8110,8 +8206,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					else{ assert(false); return false; }
 				}
 				else if(tabloc.forma_type == RawTablesLocator::FormatType::I64){
-					// TODO refs
-					log_error("internal error: flat subentry i64 not supported yet");
+					if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+						tabloc.table = tabs.global_cinst_tabref;
+						tabloc.entry += (int) tabs.global_const_i64_index[work_unit];
+						return true;
+					}
+					log_error("internal error: flat subentry state i64 not supported yet");
 					return false;
 				}
 				else{ assert(false); return false; }
@@ -8176,7 +8276,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			int32_t comp_seq = -1;
 			if( cell_type.type == CellType::PHYSICAL ){
 				if( loca.segment_seq >= 0 ){
-					comp_seq = GetCompSeqForCell(cell_type, sig, loca.segment_seq, loca.fractionAlong); // NB: LEMS refs lack fractionAlong for now HERE
+					comp_seq = GetCompSeqForCell(cell_type, sig, loca.segment_seq, loca.fractionAlong); // NB: LEMS refs lack fractionAlong for now, test if it's been fixed HERE
 					// TODO add fractionAlong to path
 					if(comp_seq < 0){
 						log_error("internal error: could not resolve on segment path");// should not happen as of now, guard for when this case happens LATER
@@ -8636,12 +8736,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 		};
 		
-		auto SetRowColToTabLoc = [&LocateEntryFromPath
+		auto SetRowColToTabLoc = [&model, &net, &LocateEntryFromPath
 		#ifdef USE_MPI
-		, &LocateNodeForPath, &AppendRemoteDependency_VariableReference
+		, &LocateNodeForPath, &AppendRemoteDependency_VariableRequirement
 		#endif
-		](const auto &log_error, const Simulation::CustomSetup::Statement &set, Int row, Int col, const RawTablesLocator &tabloc, RawTables &tabs){
-			if(false){ // VARREQ REF? VariableReference
+		](const auto &log_error, const Simulation::CustomSetup::Statement &set, const auto &path, Int row, Int col, const RawTablesLocator &tabloc, RawTables &tabs){
+			ComponentType::NamespaceThing::Type path_type; Dimension dimension;
+			if(!model.GetLemsQuantityPathType(net, path, path_type, dimension)) return false;
+			
+			if(path_type == ComponentType::NamespaceThing::Type::VARREQ){ // VariableRequirement
 				const Simulation::LemsQuantityPath &ref_path = set.ref_data[row][col];
 				RawTablesLocator ref_tabloc;
 				
@@ -8649,8 +8752,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				int ref_path_node;
 				if(!LocateNodeForPath( ref_path, ref_path_node )) return false;
 				if( ref_path_node != my_mpi.rank ){
-					// add varref dependency to mpi list
-					return( AppendRemoteDependency_VariableReference( ref_path, ref_path_node, tabloc ) );
+					// add varreq dependency to mpi list
+					return( AppendRemoteDependency_VariableRequirement( ref_path, ref_path_node, tabloc ) );
 				}
 				#endif
 				if(!LocateEntryFromPath(ref_path, ref_tabloc, log_error)) return false;
@@ -8661,7 +8764,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						return false; // allow and check for more possibilities if ever needed, LATER
 					}
 					
-					tabs.GetSingleI64(tabloc) = GetEncodedTableEntryId(tabloc.table, tabloc.entry);
+					tabs.GetSingleI64(tabloc) = GetEncodedTableEntryId(ref_tabloc.table, ref_tabloc.entry);
 					
 					return true;
 				}
@@ -8743,7 +8846,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				else{
 					row = 0;
 					if(set.multi_mode) col = item_i; else col = 0;
-					if(!SetRowColToTabLoc(log_error, set, row, col, tabloc, tabs)) return false;
+					if(!SetRowColToTabLoc(log_error, set, path, row, col, tabloc, tabs)) return false;
 				}
 				// done setting item
 			}
@@ -8787,7 +8890,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				row = 0;
 				if(set.multi_mode) col = item_i; else col = 0;
 				
-				if(!SetRowColToTabLoc(log_error, set, row, col, tabloc, tabs)) return false;
+				if(!SetRowColToTabLoc(log_error, set, path, row, col, tabloc, tabs)) return false;
 			}
 		}
 		else if(set.type == Simulation::CustomSetup::Statement::PROJECTION){
@@ -8831,7 +8934,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				row = 0;
 				if(set.multi_mode) col = item_i; else col = 0;
 				
-				if(!SetRowColToTabLoc(log_error, set, row, col, tabloc, tabs)) return false;
+				if(!SetRowColToTabLoc(log_error, set, path, row, col, tabloc, tabs)) return false;
 			}
 		}
 		else{
@@ -9355,10 +9458,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			if(!ret) Say( "fail %s", lines[ vpeer_idx + i ] );
 			assert(ret);
 		}
-		sendlist.var_refs.resize(refs);
+		sendlist.value_refs.resize(refs);
 		for(int i = 0; i < refs; i++){
-			const char *line = lines[ daw_idx + i ];
-			auto &path = sendlist.var_refs[i];
+			const char *line = lines[ value_idx + i ];
+			auto &path = sendlist.value_refs[i];
 			// Say( "line %s", line);
 			SayWithPrefix log([&other_rank, &i, &line](){ return "send list "+accurate_string(other_rank)+", ref "+accurate_string(i)+" "+line+": "; });
 			if(!model.ParseLemsQuantityPath(log, line, net, path)) return false;
@@ -9388,7 +9491,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			Say("%s", say_refs.c_str());
 		}
 		
-		for( const auto &path : send_list.var_refs ){
+		for( const auto &path : send_list.value_refs ){
 			std::string sPath; if(!model.LemsQuantityPathToString(net, path, sPath)) return false;
 			Say("%s", ("\tRef " + sPath).c_str());
 		}
@@ -9410,10 +9513,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			send_list_impl.vpeer_positions_in_globstate[i] = GetCompartmentVoltageStatevarIndex_Global( loc );
 		}
 		
-		send_list_impl.ref_locations.resize( send_list.var_refs.size() );
+		send_list_impl.ref_locations.resize( send_list.value_refs.size() );
 		// also resolve any refs to be sent, that access values local to this node
-		for( size_t i = 0; i < send_list.var_refs.size() ; i++ ){
-			const auto &path = send_list.var_refs.at(i);
+		for( size_t i = 0; i < send_list.value_refs.size() ; i++ ){
+			const auto &path = send_list.value_refs.at(i);
 			
 			auto &impl_loc = send_list_impl.ref_locations[i];
 			
@@ -9489,13 +9592,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				engine_config.trajectory_loggers[log_ref.daw_seq].columns[log_ref.col_seq].tabloc = {value_mirror_table, value_mirror_entry, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::F32};
 			}
 			
-			// and varref values
+			// and varreq values
 			if(recv_list.var_refs.count(sPath) > 0)
 			for( const auto &tabloc : recv_list.var_refs.at(sPath) ){
 				assert(tabloc.varia_type == RawTablesLocator::VariableType::CONST
 				&& tabloc.forma_type == RawTablesLocator::FormatType::I64);
 				
-				tabs.GetSingleI64(tabloc) = GetEncodedTableEntryId(tabloc.table, tabloc.entry);
+				tabs.GetSingleI64(tabloc) = GetEncodedTableEntryId(value_mirror_table, value_mirror_entry);
 			}
 			
 			// and more to next continuous var requested
@@ -9791,6 +9894,9 @@ int main(int argc, char **argv){
 	global_tables_const_f32_arrays[tabs.global_const_tabref] = tabs.global_constants.data();
 	global_tables_const_f32_sizes [tabs.global_const_tabref] = tabs.global_constants.size();
 	
+	global_tables_const_i64_arrays[tabs.global_cinst_tabref] = tabs.global_constints.data();
+	global_tables_const_i64_sizes [tabs.global_cinst_tabref] = tabs.global_constints.size();
+	
 	global_tables_stateOne_f32_arrays[tabs.global_state_tabref] = state_one.data();
 	global_tables_stateTwo_f32_arrays[tabs.global_state_tabref] = state_two.data();
 	global_tables_state_f32_sizes    [tabs.global_state_tabref] = state_one.size();
@@ -9808,9 +9914,14 @@ int main(int argc, char **argv){
 		printf("Constants:\n");
 		for(auto val : tabs.global_constants ) printf("%g \t", val); 
 		printf("\n");
-		
 		printf("ConstIdx:\n");
 		for(auto val : tabs.global_const_f32_index ) printf("%lld \t", val);
+		printf("\n");
+		printf("Constints:\n");
+		for(auto val : tabs.global_constints ) printf("%s \t", presentable_string(val).c_str()); 
+		printf("\n");
+		printf("CinstIdx:\n");
+		for(auto val : tabs.global_const_i64_index ) printf("%lld \t", val);
 		printf("\n");
 		printf("StateIdx:\n");
 		for(auto val : tabs.global_state_f32_index ) printf("%lld \t", val);
@@ -10117,6 +10228,7 @@ int main(int argc, char **argv){
 			}
 			tabs.callbacks[item]( time, dt,
 				tabs.global_constants        .data(), tabs.global_const_f32_index      [item],
+				tabs.global_constints        .data(), tabs.global_const_i64_index      [item],
 				global_tables_const_f32_sizes.data(), global_tables_const_f32_arrays.data(), tabs.global_table_const_f32_index[item],
 				global_tables_const_i64_sizes.data(), global_tables_const_i64_arrays.data(), tabs.global_table_const_i64_index[item],
 				global_tables_state_f32_sizes.data(), global_tables_stateNow_f32, global_tables_stateNext_f32, tabs.global_table_state_f32_index[item],

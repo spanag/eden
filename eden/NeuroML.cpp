@@ -694,7 +694,7 @@ bool ArtificialCell::GetCurrentInputAndDimension( const CollectionWithNames<Comp
 bool ArtificialCell::GetVoltageExposureAndDimension( const CollectionWithNames<ComponentType> &component_types, Dimension &dim_out ) const {
 	if( type == COMPONENT ){
 		const auto &comptype = component_types.get( component.id_seq );
-		return comptype.GetRequirementAndDimension( comptype.common_exposures.membrane_voltage, dim_out );
+		return comptype.GetExposureAndDimension( comptype.common_exposures.membrane_voltage, dim_out );
 	}
 	else if( type == SPIKE_SOURCE ){
 		return false; // perhaps something else LATER
@@ -1069,7 +1069,6 @@ bool Model::LemsQuantityPathToString(const ComponentInstance &inst, const Simula
 	const auto &comptype = component_types.get(comptype_seq);
 	
 	const char *sName = comptype.name_space.getName(path.namespace_thing_seq);
-	printf("patt %s |%s|\n", ret.c_str(), sName);
 	if(!sName) return false;
 	ret += sName;
 	// all namespace things are leaves, until LATER
@@ -1143,7 +1142,6 @@ bool Model::LemsQuantityPathToString(const Network &net, const Simulation::LemsQ
 	typedef Simulation::LemsQuantityPath Path;
 	
 	ret.clear();
-	printf("type %s\n",std::to_string(type).c_str());
 	if(type == Path::CELL
 	|| type == Path::SEGMENT
 	|| type == Path::CHANNEL
@@ -1152,7 +1150,6 @@ bool Model::LemsQuantityPathToString(const Network &net, const Simulation::LemsQ
 		ret += net.populations.getName(path.population) + ("["+accurate_string(path.cell_instance)+"]/");
 		const Network::Population &population = net.populations.get(path.population);
 		const CellType &cell = cell_types.get(population.component_cell);
-		printf("type %s\n",std::to_string(type).c_str());
 		// if it's a physical cell, add an explicit segment locator, just to be nice
 		if(cell.type == CellType::PHYSICAL){
 			// add segment locator
@@ -1160,20 +1157,17 @@ bool Model::LemsQuantityPathToString(const Network &net, const Simulation::LemsQ
 			if(path.fractionAlong != 0.5) ret += accurate_string(path.fractionAlong);
 			ret += "/";
 		}
-		printf("patt %s\n", ret.c_str());
 		if(type == Path::CELL){
 			assert(cell.type == CellType::ARTIFICIAL);
 			return LemsQuantityPathToString(cell.artificial, path.cell, ret);
 		}
 		else if(type == Path::SEGMENT){
 			const auto type = path.segment.type;
-			printf("patt seg %s %d\n", ret.c_str(), (int)type);
 			typedef Path::SegmentPath Path;
 			if     ( type == Path::VOLTAGE ) ret += "v";
 			else if( type == Path::CALCIUM_INTRA ) ret += "caConc";
 			else if( type == Path::CALCIUM2_INTRA ) ret += "caConc2";
 			else return false;
-			printf("patt %s\n", ret.c_str());
 			return true;
 		}
 		else if(type == Path::CHANNEL){
@@ -1293,7 +1287,7 @@ bool ParseLemsGroupLocator(const ILogProxy &log, const std::vector<std::string> 
 		return false;
 	}
 	return true;
-}// HERE ILogProxy?
+}
 bool ParseLemsCellLocator(const ILogProxy &log, const std::vector<std::string> tokens, const Network &net, Simulation::LemsSegmentLocator &path, Int &tokens_consumed) {
 	return ParseLemsGroupLocator(log, tokens, "population", net.populations, [](const Network::Population &group, Int id){return group.instances.getSequential(id);}, path.population, path.cell_instance, tokens_consumed);
 }
@@ -6775,15 +6769,8 @@ struct ImportState{
 			|| path_type == ComponentType::NamespaceThing::PROPERTY){
 				// it's ok, they can be set
 			}
-			else if(path_type == ComponentType::NamespaceThing::REQUIREMENT){
-				// can be set only if it's a free, nont structureal requirement
-				if(false){ //VARREQ or REF? i guess, the componenttype would have to be queried otherwise 
-					is_ref = true;
-				}
-				else{
-					log.error("%s term can only refer to a LEMS VariableRequirement", ComponentType::NamespaceThing::getTypeName(path_type));
-					return false;
-				}
+			else if(path_type == ComponentType::NamespaceThing::VARREQ){
+				is_ref = true;
 			}
 			else{
 				log.error("term must refer to a State variable, Parameter, Property, or VariableRequirement; not a %s", ComponentType::NamespaceThing::getTypeName(path_type));
@@ -6908,15 +6895,14 @@ struct ImportState{
 			}
 			else{
 				// it must be a single value
-				if(false){
-					// TODO refs
+				if(is_ref){
 					set.ref_data.resize(1);
 					set.ref_data[0].resize(1);
 					set.ref_data[0][0] = path_value;
 				}
 				else{
 					if( value != value ){
-						log.error(lineno, 6, "internal error: single value %s unset");
+						log.error(lineno, 0, "internal error: single value %s unset", ""); // LATER bother passing the token or sth, because its location may vary
 						return false;
 					}
 					set.real_data.resize(1);
@@ -8038,6 +8024,8 @@ struct ImportState{
 			// "Child", TODO
 			// "Children", TODO
 			
+			"VariableRequirement", // an extension
+			
 			"Text", // for annotations
 		};
 		TagSet kids(known_component_child_types);
@@ -8136,6 +8124,8 @@ struct ImportState{
 		
 		for(const pugi::xml_node &eProp : kids.by_name.getOrNew("Requirement") ){
 			if( !ParseStatevarOrRequirement(log, eProp, new_type.requirements, new_type.name_space, ComponentType::NamespaceThing::REQUIREMENT, "requirement" ) ) return false; }
+		for(const pugi::xml_node &eProp : kids.by_name.getOrNew("VariableRequirement") ){
+			if( !ParseStatevarOrRequirement(log, eProp, new_type.variable_requirements, new_type.name_space, ComponentType::NamespaceThing::VARREQ, "variable requirement" ) ) return false; }
 		
 		for(const pugi::xml_node &ePort : kids.by_name.getOrNew("EventPort") ){
 			
@@ -8211,7 +8201,6 @@ struct ImportState{
 				new_exp.type = type;
 				new_exp.seq = seq;
 				exposures.add(new_exp, exposure);
-				
 			}
 			
 			return true;
@@ -8658,8 +8647,8 @@ struct ImportState{
 			}
 			
 		}
-		// check for possible requirment native names, too! (such as iCa which is not defined in concentrationModel)
-		// add some type-based requirements here to avoid resolving them on the engine
+		// check for possible requirement native names, too! (such as iCa which is not defined in concentrationModel)
+		// add some type-based requirements here to avoid resolving them in the backend engine
 		for(const auto &keyval : new_type.requirements.names){
 			
 			auto exptype_it = ComponentType::CommonRequirements::names.find(keyval.first);

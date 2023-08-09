@@ -918,6 +918,9 @@ struct ComponentType{
 			STATE,
 			DERIVED,
 			
+			// nonstandard EDEN extension, but it's necessary for real models, oh well
+			VARREQ,
+			
 			// magical requirements are in CommonRequirements
 			
 		}type;
@@ -1108,6 +1111,9 @@ struct ComponentType{
 	CollectionWithNames<DerivedVariable> derived_variables;
 	std::vector<Int> derived_variables_topological_order; // topological order is a sequence of id's, not a mapping id -> order
 	
+	// nonstandard EDEN extension, but it's necessary for real models, oh well
+	CollectionWithNames<Requirement> variable_requirements;
+	
 	CollectionWithNames<NamespaceThing> name_space;
 	
 	std::vector<StateAssignment> on_start;
@@ -1163,6 +1169,9 @@ struct ComponentType{
 		}
 		else if(exp.type == NamespaceThing::REQUIREMENT){
 			return requirements.get(exp.seq).dimension;
+		}
+		else if(exp.type == NamespaceThing::VARREQ){
+			return variable_requirements.get(exp.seq).dimension;
 		}
 		else{
 			assert(false);

@@ -23,6 +23,16 @@ tests = [
     ]
 },
 {
+    'type': 'half_vs_half',
+    'sim_file': 'neuroml/' + 'EdenTest_Extension_VariableRequirement.nml',
+    'validation_criteria':[
+        ["popA[0]/v", "pRp[0]/v", "exact"],
+        ["popA[0]/u", "pSp[0]/u", "exact"],
+        ["popB[0]/v", "pRp[1]/v", "exact"],
+        ["popB[0]/u", "pSp[1]/u", "exact"],
+    ]
+},
+{
 	'type': 'validate_vs_neuron',
 	'sim_file': test_nml_dir + 'LEMS_EdenTest1.xml',
 	'validation_criteria': {
@@ -68,7 +78,7 @@ tests = [
 		# 'InputDemosDL[02]/v': { 'type': 'box', 'dt': 0.000001, 'dv': 0.000100 },
 		# 'InputDemosDL[03]/v': { 'type': 'box', 'dt': 0.000001, 'dv': 0.000100 },
 		
-		# TODO automate running the ones commented out with jLEMSa
+		# TODO automate running the ones commented out with jLEMS
 	},
 },
 {

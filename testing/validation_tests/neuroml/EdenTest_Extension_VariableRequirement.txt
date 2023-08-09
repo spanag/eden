@@ -1,0 +1,14 @@
+
+# split izh population
+
+# set pointers on Izhik toward "u" values of Evich
+# and pointers on Evich toward "v" values of Izhik
+
+# test for all "set" combinations
+set cell pRp 0 all u pSp[0]/u
+
+set cell pRp 1 all u multi
+values pSp[1]/u
+
+set cell pSp all all v multi
+values pRp[0]/v pRp[1]/v

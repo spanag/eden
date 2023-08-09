@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Based on: https://github.com/OpenSourceBrain/IzhikevichModel/blob/master/NeuroML2/SmallNetwork.nml -->
+
+<!-- Mimic Izh cells with split half-cells communicating through VariableRequirements -->
+<!-- TODO test on physical cells as well -->
+
+<neuroml id=" NML_EdenTestNetwork1">
+    <!-- Include core NeuroML2 ComponentType definitions -->
+    <Include file="Cells.xml"/>
+    <Include file="Networks.xml"/>
+    <Include file="Simulation.xml"/>
+	<Include file="PyNN.xml"/>
+    <ComponentType name="izhikevich2007Cell2"
+        extends="baseCellMembPotCap"
+        description="Cell based on the modified Izhikevich model in Izhikevich 2007, Dynamical systems in neuroscience, MIT Press">
+
+        <Parameter name="v0" dimension="voltage"/>
+
+        <!--
+        Defined in baseCellMembPotCap:
+        <Parameter name="C" dimension="capacitance"/>
+        -->
+        <Parameter name="k" dimension="conductance_per_voltage"/>
+
+        <Parameter name="vr" dimension="voltage"/>
+        <Parameter name="vt" dimension="voltage"/>
+        <Parameter name="vpeak" dimension="voltage"/>
+
+        <Parameter name="a" dimension="per_time"/>
+        <Parameter name="b" dimension="conductance"/>
+        <Parameter name="c" dimension="voltage"/>
+        <Parameter name="d" dimension="current"/>
+
+        <Exposure name="u" dimension="current"/>
+
+        <Dynamics>
+
+            <StateVariable name="v" dimension="voltage" exposure="v"/>
+            <StateVariable name="u" dimension="current" exposure="u"/>
+
+            <DerivedVariable name="iMemb" dimension="current" exposure="iMemb" value="k * (v-vr) * (v-vt) + iSyn - u"/>
+
+            <TimeDerivative variable="v" value="iMemb / C"/>
+            <TimeDerivative variable="u" value="a * (b * (v-vr) - u)"/>
+
+            <OnStart>
+                <StateAssignment variable="v" value="v0"/>
+                <StateAssignment variable="u" value="0"/>
+            </OnStart>
+
+            <OnCondition test="v .gt. vpeak">
+                <StateAssignment variable="v" value="c"/>
+                <StateAssignment variable="u" value="u + d"/>
+                <EventOut port="spike"/>
+            </OnCondition>
+
+        </Dynamics>
+
+    </ComponentType>
+    <ComponentType name="IzhikCell"
+        extends="baseCellMembPotCap">
+        <Parameter name="v0" dimension="voltage"/>
+        
+        <Parameter name="k" dimension="conductance_per_voltage"/>
+
+        <Parameter name="vr" dimension="voltage"/>
+        <Parameter name="vt" dimension="voltage"/>
+        <Parameter name="vpeak" dimension="voltage"/>
+
+        <Parameter name="c" dimension="voltage"/>
+        
+        <Exposure name="v" dimension="voltage"/>
+
+        <VariableRequirement name="u" dimension="current" />
+        <Dynamics>
+
+            <StateVariable name="v" dimension="voltage" exposure="v"/>
+
+            <DerivedVariable name="iMemb" dimension="current" exposure="iMemb" value="k * (v-vr) * (v-vt) + iSyn - u"/>
+
+            <TimeDerivative variable="v" value="iMemb / C"/>
+
+            <OnStart>
+                <StateAssignment variable="v" value="v0"/>
+            </OnStart>
+
+            <OnCondition test="v .gt. vpeak">
+                <StateAssignment variable="v" value="c"/>
+                <EventOut port="spike"/>
+            </OnCondition>
+
+        </Dynamics>
+
+    </ComponentType>
+    <ComponentType name="EvichCell">
+
+        <Parameter name="vr" dimension="voltage"/>
+        <Parameter name="vpeak" dimension="voltage"/>
+
+        <Parameter name="a" dimension="per_time"/>
+        <Parameter name="b" dimension="conductance"/>
+        <Parameter name="d" dimension="current"/>
+
+        <Exposure name="u" dimension="current"/>
+
+        <VariableRequirement name="v" dimension="voltage" />
+        <Dynamics>
+            <StateVariable name="u" dimension="current" exposure="u"/>
+            
+            <TimeDerivative variable="u" value="a * (b * (v-vr) - u)"/>
+            <OnStart>
+                <StateAssignment variable="u" value="0"/>
+            </OnStart>
+            <OnCondition test="v .gt. vpeak">
+                <StateAssignment variable="u" value="u + d"/>
+            </OnCondition>
+        </Dynamics>
+
+    </ComponentType>
+    
+    <expOneSynapse id="syn0" gbase="2nS" erev="0mV" tauDecay="2ms" />
+
+    <izhikevich2007Cell2 id="RS" v0 = "-60mV" C="100 pF" k = "3 nS_per_mV"
+                        vr = "-60 mV" vt = "-50 mV" vpeak = "50 mV" 
+                        a = "0.01 per_ms" b = "5 nS" c = "-60 mV" d = "400 pA"/>
+    <IzhikCell id="R" v0 = "-60mV" C="100 pF" k = "3 nS_per_mV"
+                        vr = "-60 mV" vt = "-50 mV" vpeak = "50 mV" 
+                        c = "-60 mV"/>
+    <EvichCell id="S" vr = "-60 mV" vpeak = "50 mV" 
+                        a = "0.01 per_ms" b = "5 nS" d = "400 pA"/>
+
+    <pulseGenerator id="pulse0" delay="0ms" duration="100ms" amplitude="0.9nA"/>
+
+    <network id="EdenTestNetwork">
+        <population id="popA" component="RS"  type="populationList" size="1">
+            <instance id="0">
+                <location x="0" y="0" z="0"/>
+            </instance>
+        </population>
+        
+        <population id="popB" component="RS"  type="populationList" size="1">
+            <instance id="0">
+                <location x="50" y="0" z="0"/>
+            </instance>
+        </population>
+        
+        <projection id="proj0" presynapticPopulation="popA" postsynapticPopulation="popB" synapse="syn0">
+            <connection id="0" preCellId="../popA/0/RS" postCellId="../popB/0/RS"/>
+        </projection>
+        
+        <inputList id="InputA" component="pulse0" population="popA">
+            <input id="0" target="../popA/0/RS" destination="synapses"/>
+        </inputList>
+        
+        <population id="pRp" component="R" size="2" />
+        <population id="pSp" component="S" size="2" />
+        
+        <projection id="projX" presynapticPopulation="pRp" postsynapticPopulation="pRp" synapse="syn0">
+            <connection id="0" preCellId="../pRp/0/R" postCellId="../pRp/1/R"/>
+        </projection>
+        
+        <inputList id="InputX" component="pulse0" population="pRp">
+            <input id="0" target="../pRp/0/R" destination="synapses"/>
+        </inputList>
+    
+    </network>
+    
+    
+    <Simulation id="sim1" length="10.03ms" step="0.010ms" target="EdenTestNetwork">
+		<OutputFile id="first" fileName="results.gen.txt">
+			<OutputColumn id="vA" quantity="popA[0]/v" />
+			<OutputColumn id="uA" quantity="popA[0]/u" />
+			<OutputColumn id="vB" quantity="popB[0]/v" />
+			<OutputColumn id="uB" quantity="popB[0]/u" />
+            <OutputColumn id="v0" quantity="pRp[0]/v" />
+            <OutputColumn id="u0" quantity="pSp[0]/u" />
+            <OutputColumn id="v1" quantity="pRp[1]/v" />
+            <OutputColumn id="u1" quantity="pSp[1]/u" />
+		</OutputFile>
+        
+        
+        <EdenCustomSetup filename="./EdenTest_Extension_VariableRequirement.txt"/>
+    </Simulation>
+    
+    <!-- Specify which component to run -->
+    <Target component="sim1"/>
+    
+</neuroml>
