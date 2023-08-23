@@ -133,6 +133,9 @@ static inline std::string accurate_string( double val ){
 	return tmps;
 }
 
+// Split URL into scheme and auth+path, if scheme is present (otherwise it's a "URL reference")
+bool GetUrlScheme(const std::string &url, std::string &scheme, std::string &auth_path);
+
 // Tokenize a string, as with String.split() in string-capable languages
 std::vector<std::string> string_split(const std::string& str, const std::string& delim);
 

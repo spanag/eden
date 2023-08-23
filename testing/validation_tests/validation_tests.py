@@ -33,6 +33,14 @@ tests = [
     ]
 },
 {
+    'type': 'half_vs_half',
+    'sim_file': 'neuroml/' + 'EdenTest_Extension_CustomIO.nml',
+    'validation_criteria':[
+        ["pop0[0]/v", "popX[0]/v", "exact"],
+        # ["pop0[1]/v", "popX[1]/v", "exact"],
+    ]
+},
+{
 	'type': 'validate_vs_neuron',
 	'sim_file': test_nml_dir + 'LEMS_EdenTest1.xml',
 	'validation_criteria': {

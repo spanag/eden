@@ -327,6 +327,8 @@ struct CollectionWithNames{
 	_NameIndexer names;
 	std::unordered_map<Int, const char *> names_by_id;
 	
+	size_t size() const { return contents.size(); }
+	bool empty() const { return contents.empty(); }
 	bool has(Int id) const{
 		return id >= 0 && id < (Int)contents.size();
 	}
@@ -496,7 +498,7 @@ struct Temperature{
 struct ScaleEntry{
 	const char* name; int pow_of_10; double scale; double offset;
 	
-	// works only for absolute linear scales! Do not use with non-kelvin temperatures or other weird offset units!
+	// operators work only for absolute linear scales! Do not use with non-kelvin temperatures or other weird offset units!
 	ScaleEntry operator*( const ScaleEntry &rhs ) const {
 		assert(offset == 0 && rhs.offset == 0);
 		ScaleEntry ret = { "Derived", pow_of_10 + rhs.pow_of_10, scale * rhs.scale, 0 };
@@ -525,7 +527,7 @@ struct ScaleEntry{
 		ScaleEntry ret = { "Derived", pow_of_10 - to.pow_of_10, scale / to.scale,  (offset - to.offset) / (to.scale * pow10(to.pow_of_10)) };
 		return ret;
 	}
-	Real ConvertTo( Real value, const ScaleEntry &to ) const {
+	double ConvertTo( double value, const ScaleEntry &to ) const {
 		return value * (scale / to.scale) * pow10(pow_of_10 - to.pow_of_10) + ( (offset - to.offset) / (to.scale * pow10(to.pow_of_10)) );
 	}
 }; // SI value = this value * scale * 10^pow_of_10 + offset
@@ -2104,6 +2106,23 @@ struct Network{
 		CollectionWithIds<Int> input_instances_seq;
 	};
 	
+	// experimental extension
+	// A TimeSeriesReader is a source of one or more time series, whose data is retrieved from various URL's,
+	// presented to the model as a collection of data points uniformly structured as collections of named scalars, evolving over time.
+	// the corresponding EventSetReader can be moved to the <Simulation> unlike this one, because waveforms need to be accessible in the LemsPath space, for VariableReferences and such.
+	struct TimeSeriesReader{
+		// each element in the time series is a multidimensional vector, with sub-elements of different dimensions
+		struct InputColumn{
+			Dimension dimension;
+			LemsUnit units;
+		};
+		// more of a "url reference" in that relative paths are also accepted
+		std::string source_url, data_format; // NB: to be parsed by the backend, for now, standardize LATER
+		CollectionWithNames<InputColumn> columns; // set of properties, same for each element
+		Int instances; // number of elements of the time series
+	};
+	
+	
 	Real temperature;
 	
 	CollectionWithNames<Population> populations;
@@ -2114,6 +2133,8 @@ struct Network{
 	// TODO add reverse index as well, for better debugging
 	CollectionWithNames<InputList> input_lists;
 	
+	// experimental extension
+	CollectionWithNames<TimeSeriesReader> data_readers;
 };
 
 // A NeuroML simulation, targeting a specific network
@@ -2222,6 +2243,7 @@ struct Simulation{
 			SYNAPSE,  // may be a LEMS component as well
 			INPUT, // an alternative way to access input instances
 			NETWORK, // quite silly but networks can be (extended by) LEMS components, may be used LATER
+			DATAREADER, // experimental extenbion
 			MAX // sentinel
 		};
 		
@@ -2312,6 +2334,12 @@ struct Simulation{
 			// LATER handle explicit connections if needed
 		};
 		
+		struct DataReaderPath : public InputInstanceQuantityPath{
+			Int read_seq; // reader in the network
+			Int inst_seq; // instance in the group
+			Int colu_seq; // property in the element
+		};
+		
 		Type type;
 		
 		union{
@@ -2321,6 +2349,7 @@ struct Simulation{
 			IonPoolPath pool;
 			SynapsePath synapse;
 			InputPath input;
+			DataReaderPath reader;
 		};
 		
 		// in the wider sense that it refers to something attached to a specific cell
@@ -2473,7 +2502,17 @@ struct Simulation{
 		};
 		std::vector<Statement> statements;	
 	};
-	
+	// An EventSetReader is a set of event sources, streamed from various sorts of URL's.
+	struct EventSetReader{
+		struct EventMapping{
+			Int source_port;
+			LemsEventPath destination;
+		};
+		std::string source_url; // NB: to be parsed by the backend, for now, standardize LATER
+		Int number_of_ports;
+		std::vector<LemsQuantityPath> event_destinations;
+		// TODO
+	};
 	// ---> fields
 	
 	Real length; // duration, that's how it's called in LEMS
@@ -2490,6 +2529,9 @@ struct Simulation{
 	
 	// extensions!
 	CustomSetup custom_init;
+	
+	CollectionWithNames<EventSetReader> event_readers; // FIXME
+	
 	
 	Simulation(){
 		seed_defined = false;

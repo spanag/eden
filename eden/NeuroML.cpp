@@ -133,6 +133,7 @@ std::string GetRelativeFilePath(const std::string &origin_path, const std::strin
 		// For each token, split by slash (may contain backslashes)
 		for( const auto token : tokens ){
 			// For each sub-token, split by backslash
+			// TODO for windows only?
 			for( const auto new_token : string_split( token,  "\\") ){
 				new_tokens.push_back(new_token);
 			}
@@ -1052,6 +1053,13 @@ bool Model::GetLemsQuantityPathType(const Network &net, const Simulation::LemsQu
 		
 		return GetLemsQuantityPathType_InputInstance(path.input, input, type, dimension);
 	}
+	// experimental extensions
+	else if(path.type == Simulation::LemsQuantityPath::DATAREADER){
+		const Network::TimeSeriesReader &reader = net.data_readers.get(path.reader.read_seq);
+		const Network::TimeSeriesReader::InputColumn &column = reader.columns.get(path.reader.colu_seq);
+		type = NamespaceThing::STATE; dimension = column.dimension;
+		return true;
+	}
 	else if(path.type == Simulation::LemsQuantityPath::NETWORK){
 		// not supported yet!
 		return false;
@@ -1217,6 +1225,11 @@ bool Model::LemsQuantityPathToString(const Network &net, const Simulation::LemsQ
 		const InputSource &input = input_sources.get(list.component);
 		return LemsQuantityPathToString(input, path.input, ret);
 	}
+	// experimental extensions
+	else if(type == Path::DATAREADER){
+		ret += net.data_readers.getName(path.reader.read_seq) + ("["+accurate_string(path.reader.inst_seq)+"]/") + net.data_readers.get(path.reader.read_seq).columns.getName(path.reader.colu_seq);
+		return true;
+	}
 	else{
 		printf("path to string: type %d not supported yet\n", (int)type);
 		return false;
@@ -1372,6 +1385,7 @@ bool Model::ParseLemsSegmentLocator(const ILogProxy &log, const std::vector<std:
 			if( morph.segments.size() == 1 ){
 				// set it to default
 				segment_id = 0;
+				path.fractionAlong = 0.5;
 			}
 			else{
 				std::string complaint = "target path needs segment ID, because cell has multiple segments. Setting to implicit default: segment ID = 0";
@@ -1382,6 +1396,7 @@ bool Model::ParseLemsSegmentLocator(const ILogProxy &log, const std::vector<std:
 				// TODO perhaps stop complaining after warning too many times
 				
 				segment_id = 0;
+				path.fractionAlong = 0.5;
 			}
 		}
 		
@@ -1862,6 +1877,42 @@ bool Model::ParseLemsQuantityPath(const ILogProxy &log, const char *qty_str, con
 		
 		return ParseLemsQuantityPath_SynapticComponent(log, syn, tokens, path.synapse, tokens_consumed);
 		// FIXME record a synapse to make sure it works
+	}
+	// experimental extensions
+	else if( (group_seq = net.data_readers.get_id(sId)) >= 0 ){
+		path.type = Simulation::LemsQuantityPath::DATAREADER;
+		const Network::TimeSeriesReader &reader = net.data_readers.get(group_seq);
+		
+		path.reader.read_seq = group_seq;
+		if(!ParseLemsGroupLocator(log, tokens, "data reader", net.data_readers, [](const auto &reader, Int id){return ( 0 <= id && id < reader.instances ) ? id : -1 ;}, path.reader.read_seq, path.reader.inst_seq, tokens_consumed)) return false;
+		// TODO add shortcut without group locator for single instance?
+		
+		// now branch according to property type
+		if(!(tokens_consumed+1 <= (Int)tokens.size())){
+			// if the elements have just one property, its name can be skipped
+			if(reader.columns.size() == 1){
+				path.reader.colu_seq = 0;
+				return true;
+			}
+			else{
+				log.error("incomplete path for datareader element");
+				return false;
+			}
+		}
+		else{
+			const char *sProp = tokens[tokens_consumed].c_str(); tokens_consumed++;
+			if(!(tokens_consumed == (Int)tokens.size())){
+				log.error("path for datareader element too large");
+				return false;
+			}
+			
+			path.reader.colu_seq = reader.columns.get_id(sProp);
+			if(path.reader.colu_seq < 0){
+				log.error("property %s not found in datareader %s", sProp, net.data_readers.getName(group_seq));
+				return false;
+			}
+			return true;
+		}
 	}
 	// parse them for upcoming refs
 	// and get type!
@@ -2514,6 +2565,24 @@ bool ParseAcrossSegOrSegGroup(const ImportLogger &log, const pugi::xml_node &eAp
 	}
 }
 
+// get the scaling factor that applies, compared to native units, for that unit name
+bool ValidateGetUnits(const ILogProxy &log, const DimensionSet &dimensions, const Dimension &dimension, const char *unit_name, LemsUnit &units){
+	if(!dimensions.Has(dimension)){
+		log.error("there are no specified %s units", dimensions.Stringify(dimension).c_str() );
+		return false;
+	}
+	for( auto scale : dimensions.GetUnits(dimension) ){
+		if(strcmp(unit_name, scale.name.c_str()) == 0){
+			units = scale;
+			return true;
+		}
+	}
+	//unit name not found in list!
+	std::string known_list; for( auto scale : dimensions.GetUnits(dimension) ) known_list += " ", known_list += scale.name;
+	log.error("unknown units: %s for %s (supported:%s)", unit_name, dimensions.Stringify(dimension).c_str(), known_list.c_str() );
+	return false;
+}
+
 //NeuroML physical quantities consist of a numeric, along with an unit name (such as meter, kilometer, etc.) qualifying the quantity the numeric represents. So NeuroML reader code has to check the unit name, to properly read the quantity.
 template<typename UnitType>
 bool ParseQuantity(const ImportLogger &log, const pugi::xml_node &eLocation, const char *attr_name,  Real &num){
@@ -2599,25 +2668,28 @@ bool ParseLemsQuantity(const ImportLogger &log, const pugi::xml_node &eLocation,
 		return false;
 	}
 	//then get the scaling factor that applies, compared to native units, for that unit name
-	if(!dimensions.Has(dimension)){
-		log.error(eLocation, "there are no specified %s units for attribute %s", dimensions.Stringify(dimension).c_str(), attr_name );
-		return false;
-	}
-	for( auto scale : dimensions.GetUnits(dimension) ){
-		if(strcmp(unit_name, scale.name.c_str()) == 0){
-			
-			num = scale.ConvertTo( pure_number, dimensions.GetNative(dimension) );
-			//printf("valll %f\n",num);
-			return true;
-		}
-	}
-	//unit name not found in list!
-	std::string known_list; for( auto scale : dimensions.GetUnits(dimension) ) known_list += " ", known_list += scale.name;
-	log.error(eLocation, "unknown %s attribute units: %s for %s (supported:%s)", attr_name, unit_name, dimensions.Stringify(dimension).c_str(), known_list.c_str() );
-	return false;
-	
+	LemsUnit scale = dimensions.GetNative(Dimension::Unity());
+	if(!ValidateGetUnits(LogWithElement(log,eLocation), dimensions, dimension, unit_name, scale)) return false;
+	num = scale.ConvertTo( pure_number, dimensions.GetNative(dimension) );
+	//printf("valll %f\n",num);
+	return true;
 }
 
+bool ParseDimensionAttribute(const ImportLogger &log, const pugi::xml_node &eTag, const DimensionSet &dimensions, Dimension &dimension, const char *sAttributeName = "dimension"){
+	auto sDimension = eTag.attribute(sAttributeName).value();
+	if(!*sDimension){
+		log.error(eTag, "%s attribute missing", sAttributeName); // TODO RequiredAttribute ?
+		return false;
+	}
+	
+	// find the dimension
+	if( !dimensions.Has(sDimension) ){
+		log.error(eTag, "unknown dimension %s", sDimension);
+		return false;
+	}
+	dimension = dimensions.Get(sDimension);
+	return true;
+}
 
 template<typename UnitType>
 bool ParseValueAcrossSegOrSegGroup(const ImportLogger &log, const pugi::xml_node &eAppliedOn, const char *attr_name, const Morphology &morph , ValueAcrossSegOrSegGroup &applied_on){
@@ -5844,6 +5916,74 @@ struct ImportState{
 				}
 				net.input_lists.add(list, list_name);
 			}
+			// extensions!
+			else if(strcmp(eNetEl.name(), "EdenTimeSeriesReader") == 0){
+				const auto &eRea = eNetEl;
+				
+				auto name = RequiredNmlId(log, eRea);
+				if(!name) return false;
+				if(net.data_readers.has(name)){
+					log.error(eRea, "%s %s already defined", eRea.name(), name);
+					return false;
+				}
+				
+				Network::TimeSeriesReader reader;
+				
+				const char *sHref = RequiredAttribute( log, eRea, "href");
+				if(!sHref) return false;
+				auto &url = reader.source_url;
+				url = sHref; // NB validate on backend, until the url format is standardized LATER (or even better, leave it up to the backend?)
+				
+				// XXX if it's a file url, much like the current behaviour of OutputFile, it's relative to the cwd of the program, not the file being parsed! TODO specify a way to selecthow to behave, or at least document --  filename
+				// here's a trick: use "no uri scheme" to mean "relative to xml file" and "file://" to mean "relative to working directory", TODO document it.
+				std::string scheme, auth_path;
+				if(!GetUrlScheme(url, scheme, auth_path)){
+					const char *loading_from_file = log.GetFilenameFromElement(eRea);
+					url = GetRelativeFilePath((loading_from_file ? loading_from_file : "."), url);
+				}
+				// else keep the url as is
+				
+				const char *sFormat = RequiredAttribute( log, eRea, "format");
+				if(!sFormat) return false;
+				reader.data_format = sFormat; // NB validate on backend, until the url format is standardized LATER (or even better, leave it up to the backend?)
+				
+				const char *sInstances = RequiredAttribute( log, eRea, "instances");
+				if(!sInstances) return false;
+				if(!( StrToL(sInstances, reader.instances) && reader.instances > 0 )){
+					log.error(eRea, " \"instances\" must be a positive integer, not %s", sInstances);
+					return false;
+				}
+				
+				for(const auto &eReaEl : eRea.children()){
+					if( strcmp(eReaEl.name(), "InputColumn") == 0 ){
+						
+						auto name = RequiredNmlId(log, eReaEl);
+						if(!name) return false;
+						if(reader.columns.has(name)){
+							log.error(eReaEl, "%s %s already defined in %s", eReaEl.name(), name, eRea.name());
+							return false;
+						}
+						
+						Network::TimeSeriesReader::InputColumn column = {Dimension::Unity(), dimensions.GetNative(Dimension::Unity())};
+						if(!ParseDimensionAttribute(log, eReaEl, dimensions, column.dimension)) return false;
+						const char *sUnits = RequiredAttribute( log, eReaEl, "units"); if(!sInstances) return false;
+						if(!ValidateGetUnits(LogWithElement(log,eReaEl), dimensions, column.dimension, sUnits, column.units)) return false;
+						
+						reader.columns.add(column, name); // yay!
+					}
+					else{
+						// unknown, ignore
+					}
+				}
+				
+				// one last consistency check
+				if(reader.columns.contents.empty()){
+					log.error(eRea, "%s must have one or more <InputColumn>s", eRea.name());
+					return false;
+				}
+				
+				net.data_readers.add(reader, name); // yay!
+			}
 			else{
 				// unknown, ignore
 			}
@@ -6640,7 +6780,7 @@ struct ImportState{
 		std::string filename_s = GetRelativeFilePath((loading_from_file ? loading_from_file : "."), sRelFilename);
 		const char *filename = filename_s.c_str();
 		
-		std::ifstream fin(filename, std::ios::binary);
+		std::ifstream fin(filename, std::ios::binary); // binary mode, to count CRLF as two bytes
 		// check if opening a file failed
 		if (fin.fail()) {
 			log.error(eSimEl, "could not open file \"%s\": %s", filename, strerror(errno));
@@ -6823,11 +6963,11 @@ struct ImportState{
 					log.error(lineno, units_token, "there are no specified %s units", dimensions.Stringify(dimension).c_str() );
 					return false;
 				}
-				bool units_ok = false;
+				bool units_ok = false; // TODO ValidateGetUnits
 				for( auto scale : dimensions.GetUnits(dimension) ){
 					if(unit_name == scale.name){
 						real_value_units = scale;
-						value = scale.ConvertTo( value, dimensions.GetNative(dimension) ); // adjust units right away, if it's a single value.  If it's multi, ajust as the values rows are being read. 
+						value = scale.ConvertTo( value, dimensions.GetNative(dimension) ); // adjust units right away, if it's a single value.  If it's multi, adjust as the values rows are being read. 
 						units_ok = true;
 						break;
 					}
@@ -8061,18 +8201,7 @@ struct ImportState{
 		};
 		
 		auto ParseBaseNamedProperty = [ &dimensions = dimensions ](const ImportLogger &log, const pugi::xml_node &eProp, ComponentType::BaseNamedProperty &prop_record){
-			auto dimension = eProp.attribute("dimension").value();
-			if(!*dimension){
-				log.error(eProp, "dimension attribute missing");
-				return false;
-			}
-			
-			// find the dimension
-			if( !dimensions.Has(dimension) ){
-				log.error(eProp, "unknown dimension %s", dimension);
-				return false;
-			}
-			prop_record.dimension = dimensions.Get(dimension);
+			if(!ParseDimensionAttribute(log, eProp, dimensions, prop_record.dimension)) return false;
 			return true;
 		};
 		

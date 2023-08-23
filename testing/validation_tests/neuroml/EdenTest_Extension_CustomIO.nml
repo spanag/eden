@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Mimic the effect of input generators with arbitrary time series sourced from URL's -->
+<!-- TODO add event IO and test for more combinarions of sources and targets -->
+<!-- TODO event sources as sources in syn projections -->
+<!-- TODO trigget synapses from pre cells and syn sources simultaneously -->
+<!-- LATER half gap junctions from timeseries, somehow -->
+
+<neuroml id=" NML_EdenTestNetwork1">
+    <!-- Include core NeuroML2 ComponentType definitions -->
+    <Include file="Cells.xml"/>
+    <Include file="Networks.xml"/>
+    <Include file="Simulation.xml"/>
+    
+    <!-- Example of an isolated, passive compartment; minimal sanity check --> 
+	<ionChannelHH id="passiveChan" conductance="10pS"/>
+    <biophysicalProperties id="bioPhys_Passive">
+        <membraneProperties>
+            <!-- <channelDensity id="leak" ionChannel="passiveChan" condDensity="3.0 S_per_m2" erev="-0mV" ion="non_specific"/>  -->
+            <spikeThresh value="-64.5 V"/>
+            <specificCapacitance value="1.0 uF_per_cm2"/>
+            <initMembPotential value="-65mV" />
+        </membraneProperties>
+        <intracellularProperties> <resistivity value="1 kohm_cm"/> </intracellularProperties>
+    </biophysicalProperties>
+    <cell id="PassiveCell" biophysicalProperties="bioPhys_Passive">
+        <morphology>
+			<segment id="0" name="soma">
+                <proximal x="0" y="0" z="0" diameter="17.841242"/> <!-- Gives a convenient surface area of 1000.0 sq.um -->
+                <distal x="0" y="0" z="0" diameter="17.841242"/>
+            </segment>
+        </morphology>
+    </cell>
+    
+    <ComponentType name="RefCurrentsource" extends="basePointCurrent"
+            description="Generates instantaneous current sourced from a VariableReference. Scaled by weight, if set">
+        <!-- <Property name="weight" dimension="none" defaultValue="1"/>  weight can be set in i guess? TODO -->
+        <!-- <Exposure name="i" dimension="current"/> -->
+        <VariableRequirement name="iPointed" dimension="current" />
+        <Dynamics>
+            <DerivedVariable name="i" dimension="current" exposure="i" value="iPointed"/>
+        </Dynamics>
+    </ComponentType>
+    
+    <RefCurrentsource id="inpX"/>
+    
+    <expOneSynapse id="syn0" gbase="10nS" erev="0V" tauDecay="0.5ms"/>
+    <pulseGenerator id="inp0" delay="10ms" duration="19.999ms" amplitude="0.05nA"/> <!-- TODO stop the current source on exactly the timestep, to match how it's necessary to be for streaming and such. -->
+    
+    <spikeGenerator id="InpS" period="6 ms"/>
+
+    <network id="EdenTestNetwork">
+        <population id="pop0" component="PassiveCell" size="2" />
+        <population id="popS" component="InpS" size="1" />
+        
+        <inputList id="inli0" component="inp0" population="pop0">
+            <inputW id="0" target="pop0[0]" destination="synapses" weight="1"/>
+        </inputList>
+        
+        <projection id="proj0" presynapticPopulation="popS" postsynapticPopulation="pop0" synapse="syn0">
+            <connection id="0" preCellId="0" postCellId="1"/>
+        </projection>
+        
+        
+        <population id="popX" component="PassiveCell" size="2" />
+        
+        <inputList id="inliX" component="inpX" population="popX">
+            <inputW id="0" target="popX[0]" destination="synapses" weight="1"/>
+        </inputList>
+        
+        <!-- Since the spike threshold is too high, the synapse can't get a spike from the pre cell, but it still can be triggered by an event source-->
+        <projection id="projX" presynapticPopulation="popX" postsynapticPopulation="popX" synapse="syn0">
+            <connection id="0" preCellId="0" postCellId="1"/>
+        </projection>
+        
+        <EdenTimeSeriesReader id="DataX"  href="./EdenTest_Extension_CustomIO_TimeSeries.txt" format="ascii_v0" instances="1" >
+            <InputColumn id="i" dimension="current" units="pA"/>
+        </EdenTimeSeriesReader>
+        
+    </network>
+    
+    <Simulation id="sim1" length="50.33ms" step="0.010ms" target="EdenTestNetwork">
+        <EdenCustomSetup filename="./EdenTest_Extension_CustomIO_CustomSetup.txt"/>
+        
+        <!-- TODO
+        <EdenEventSetReader href="./EdenTest_Extension_CustomIO_TimeSeries.txt" format="ascii_v0" ports="1" >
+            <EventMapping source_port="0" destination="projX[0]/post/spike"/>
+        </EdenEventSetReader> -->
+    
+		<OutputFile id="first" fileName="results.gen.txt">
+			<OutputColumn id="v00" quantity="pop0[0]/v" />
+			<!-- <OutputColumn id="v01" quantity="pop0[1]/v" /> -->
+			<OutputColumn id="vX0" quantity="popX[0]/v" />
+            <!-- <OutputColumn id="vX1" quantity="popX[1]/v" /> -->
+		</OutputFile>
+    </Simulation>
+    
+    <!-- Specify which component to run -->
+    <Target component="sim1"/>
+    
+</neuroml>

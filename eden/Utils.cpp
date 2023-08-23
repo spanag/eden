@@ -1,6 +1,8 @@
 #include "Common.h"
 
 #include <fstream> // for that precious getline
+#include <numeric>
+#include <regex>
 
 #if defined	(__linux__) || defined(__APPLE__)
 #include <sys/resource.h>
@@ -21,8 +23,16 @@ std::vector<std::string> string_split(const std::string& str, const std::string&
     return tokens;
 }
 
-double TimevalDeltaSec(const timeval &start, const timeval &end){
-	return (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) * 0.000001;
+// TODO separate auth from path as well i guess, parse all stadnard fields
+bool GetUrlScheme(const std::string &url, std::string &scheme, std::string &auth_path){
+	std::regex uri_scheme("^([A-Za-z][A-Za-z+.-]*):");
+	std::smatch scheme_matches;
+	
+	if(!std::regex_search(url, scheme_matches, uri_scheme)) return false;
+	
+	scheme = scheme_matches[1];
+	auth_path = scheme_matches.suffix();
+	return true;
 }
 
 bool GetLineColumnFromFile(const char *filename, const ptrdiff_t file_byte_offset, long long &line, long long &column){
@@ -61,66 +71,6 @@ bool GetLineColumnFromFile(const char *filename, const ptrdiff_t file_byte_offse
 	column = file_byte_offset - last_line + 1;
 	return true;
 }
-
-#if defined(__linux__) || defined(__APPLE__)
-int64_t getCurrentResidentSetBytes(){
-	int64_t ret = 0;
-	FILE* fp = fopen( "/proc/self/statm", "r" );
-	if(!fp) return 0;
-	
-	//second number should be resident size, in pages
-	int64_t resident_pages;
-	if ( fscanf( fp, "%*s %" SCNd64, &resident_pages ) == 1 ){
-		//input ok
-		ret = resident_pages * sysconf( _SC_PAGESIZE);
-	}
-	fclose( fp );
-	return ret;
-}
-int64_t getPeakResidentSetBytes(){
-	struct rusage rusage = {0};
-	getrusage( RUSAGE_SELF, &rusage );
-	// available from Linux 2.6.32 onward! OSX has this value in bytes not kilobytes!
-	return rusage.ru_maxrss * 1024LL;
-}
-int64_t getCurrentHeapBytes(){
-	//system("cat /proc/self/smaps");
-	int64_t ret = 0;
-	//since Linux 2.6.14
-	FILE* fp = fopen( "/proc/self/smaps", "r" );
-	if(!fp) return 0;
-	//search for the [heap] section, text processing in C yay!
-	char *buf = NULL;
-	size_t bufsize = 0;
-	char in[85];
-	while( !feof(fp) ){
-		if(getline(&buf, &bufsize, fp) < 1) goto CLEANUP;
-		
-		if( sscanf(buf, "%*s %*s %*s %*s %*s %84s\n",in) && !strcmp(in,"[heap]") ){
-			//printf("found heap section! %d\n",(int)feof(fp));
-			
-			while(!feof(fp)){
-				//if(getline(&buf, &bufsize, fp) < 1) goto CLEANUP;
-				
-				if(fscanf(fp,"%84s",in) && !strcmp(in, "Referenced:") ){
-					int64_t referenced_kilobytes;
-					//printf("referenced!\n");
-					if( fscanf(fp,"%" SCNd64, &referenced_kilobytes) ){
-						ret = referenced_kilobytes*1024;
-						goto CLEANUP;
-					}
-				}
-				//else printf("%s ",in);
-			}
-		}//else printf("%s ",buf);
-	}
-	
-	CLEANUP:
-	fclose(fp);
-	if(buf) free(buf);
-	return ret;
-}
-#endif
 
 void ReportErrorInFile_Base(FILE *error_log, const char *filename, const ptrdiff_t file_byte_offset, const char *format, va_list args){
 	//file complaint header
@@ -197,6 +147,70 @@ void ReportErrorInFile(FILE *error_log, const char *filename, const ptrdiff_t fi
 }
 
 
+double TimevalDeltaSec(const timeval &start, const timeval &end){
+	return (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) * 0.000001;
+}
+
+#if defined(__linux__) || defined(__APPLE__)
+int64_t getCurrentResidentSetBytes(){
+	int64_t ret = 0;
+	FILE* fp = fopen( "/proc/self/statm", "r" );
+	if(!fp) return 0;
+	
+	//second number should be resident size, in pages
+	int64_t resident_pages;
+	if ( fscanf( fp, "%*s %" SCNd64, &resident_pages ) == 1 ){
+		//input ok
+		ret = resident_pages * sysconf( _SC_PAGESIZE);
+	}
+	fclose( fp );
+	return ret;
+}
+int64_t getPeakResidentSetBytes(){
+	struct rusage rusage = {0};
+	getrusage( RUSAGE_SELF, &rusage );
+	// available from Linux 2.6.32 onward! OSX has this value in bytes not kilobytes!
+	return rusage.ru_maxrss * 1024LL;
+}
+int64_t getCurrentHeapBytes(){
+	//system("cat /proc/self/smaps");
+	int64_t ret = 0;
+	//since Linux 2.6.14
+	FILE* fp = fopen( "/proc/self/smaps", "r" );
+	if(!fp) return 0;
+	//search for the [heap] section, text processing in C yay!
+	char *buf = NULL;
+	size_t bufsize = 0;
+	char in[85];
+	while( !feof(fp) ){
+		if(getline(&buf, &bufsize, fp) < 1) goto CLEANUP;
+		
+		if( sscanf(buf, "%*s %*s %*s %*s %*s %84s\n",in) && !strcmp(in,"[heap]") ){
+			//printf("found heap section! %d\n",(int)feof(fp));
+			
+			while(!feof(fp)){
+				//if(getline(&buf, &bufsize, fp) < 1) goto CLEANUP;
+				
+				if(fscanf(fp,"%84s",in) && !strcmp(in, "Referenced:") ){
+					int64_t referenced_kilobytes;
+					//printf("referenced!\n");
+					if( fscanf(fp,"%" SCNd64, &referenced_kilobytes) ){
+						ret = referenced_kilobytes*1024;
+						goto CLEANUP;
+					}
+				}
+				//else printf("%s ",in);
+			}
+		}//else printf("%s ",buf);
+	}
+	
+	CLEANUP:
+	fclose(fp);
+	if(buf) free(buf);
+	return ret;
+}
+#endif
+
 //------------------> Windows specific util routines
 #ifdef _WIN32
 std::string DescribeErrorCode_Windows(DWORD error_code){
@@ -232,6 +246,8 @@ std::string DescribeErrorCode_Windows(DWORD error_code){
 	
 	return result_string;
 };
+
+// TODO std::string to std::wstring
 #endif
 
 //------------------> end Windows specific util routines

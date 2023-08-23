@@ -29,6 +29,8 @@ Parallel simulation engine for ODE-based models
 #include <set>
 #include <chrono>
 #include <numeric>
+#include <iterator>
+#include <sstream>
 
 #include "MMMallocator.h"
 
@@ -109,6 +111,21 @@ static void AppendToVector(CAppendTo &append_to, const CAppendThis &append_this)
 
 // LATER add a helper for single variables
 
+//TODO move this to common
+static bool StrToF( const char *str, double &F, bool ignore_whitespace = true ){
+	std::remove_reference< decltype(F) >::type ret;
+	char *pEnd;
+	errno = 0;
+	ret = strtod(str, &pEnd);
+	if(errno) return false; //the standard way of handling strtol etc.
+	while( *pEnd ){
+		if(!ignore_whitespace) return false;
+		if(!isspace(*pEnd)) return false;
+		pEnd++;
+	}
+	F = ret;
+	return true;
+}
 
 std::string presentable_string( double val ){
 	char tmps[100];
@@ -183,6 +200,24 @@ struct ILogSimpleProxy : public ILogProxy {
 		va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
 };
 
+template <typename Functor>
+inline void PerrorWrapped( const Functor &f ){
+	int errcode = errno;
+	f(errno);
+}
+inline void PerrorWrapped( const char *format, ... ){
+	va_list args; va_start(args, format);
+	int errcode = errno;
+	
+	int strsiz =  vsnprintf(NULL, 0, format, args);
+	char *buf = (char *) malloc(1 + strsiz);
+	vsnprintf(buf, strsiz, format, args);
+	// TODO move to common Say() or some other logging facility ...?
+	fprintf(stderr, "%s : %s\n", buf, strerror(errcode));
+	free((void *)buf); buf = NULL;
+	va_end (args);
+}
+
 //Linear interpolation from a -> b with respective parameter from 0 -> 1
 static Real Lerp(Real a, Real b, Real ratio){
 	return a + (b-a)*ratio;
@@ -244,13 +279,14 @@ bool GetCellLocationFromPath( const Network &net, const Simulation::LemsQuantity
 	|| path.type == Path::ION_POOL
 	){
 		loca = (Simulation::LemsSegmentLocator) path;
+		assert(loca.ok());
 	}
-	else if( path.type == Path::INPUT ){
+	else if( path.type == Path::Type::INPUT ){
 		Int inp_seq = net.input_lists.get(path.input.list_seq).input_instances_seq.atSeq(path.input.inst_seq);
 		const auto &inp = net.inputs[inp_seq];
 		loca = {.population = inp.population, .cell_instance = inp.cell_instance, .segment_seq = inp.segment, .fractionAlong = inp.fractionAlong};
 	}
-	else if( path.type == Path::SYNAPSE ){
+	else if( path.type == Path::Type::SYNAPSE ){
 		const auto &proj = net.projections.get(path.synapse.proj_seq);
 		const auto &conn = proj.connections.atSeq(path.synapse.conn_seq);
 		if(      path.synapse.location == Path::SynapsePath::Location::PRE  ){
@@ -260,6 +296,9 @@ bool GetCellLocationFromPath( const Network &net, const Simulation::LemsQuantity
 			loca = {proj.postsynapticPopulation, conn.postCell, conn.postSegment, conn.postFractionAlong};
 		}
 		else{ assert(false); return false; }
+	}
+	else if( path.type == Path::Type::DATAREADER ){
+		return false; // these exist outside cells
 	}
 	else{
 		assert(false); // for now i guess
@@ -311,7 +350,7 @@ struct SayWithPrefix : public ILogSimpleProxy {
 
 // references to the raw tables
 struct TabEntryRef{
-	long long table;
+	ptrdiff_t table;
 	int entry;
 	// could also use the compressed, encoded combination
 };
@@ -450,34 +489,41 @@ struct RawTables{
 struct EngineConfig{
 	
 	struct TrajectoryLogger {
-		
 		struct LogColumn{
-			
 			RawTablesLocator tabloc;
-			double scaleFactor; // in case of float values
-			
-			#ifdef USE_MPI
-			// int on_node;
-			LogColumn(){
-				// on_node = -1;
-			}
-			#endif
+			double scaleFactor; // in case of float values -- it can be a scaling factor only, because we use the linear kelvins internally and kelvins is the fundamental unit of temperature as well :D
 		};
-		
 		std::string logfile_path;
 		std::vector<LogColumn> columns;
-		
 	};
 	
+	// extensions!
+	struct TrajectoryReader{
+		struct InputColumn{
+			LemsUnit conversion_factor; // to turn into engine units -- what if someone asked for a variable in celsius or fahrenheit :D
+		};
+		
+		// size and layout of table is instances x columns, for now
+		RawTablesLocator tabloc; // NB: although entry doesn't matter, the whole table is being read! until LATER at least
+		
+		Int instances; // of elements with same set of columns
+		std::vector<InputColumn> columns;
+		std::string url, format;// TODO replace with explicit data structure ?
+	};
 	
 	long long work_items;
 	double t_initial; // in engine time units
 	double t_final;
 	float dt; // in engine time units
 	
+	// NeuroML-standard IO facilities
 	std::vector<TrajectoryLogger> trajectory_loggers;
 	
-	// for inter-node communication
+	// for added read/write to/from files and even other programs
+	std::vector<TrajectoryReader> timeseries_readers;
+	// TODO writer deluxe, and spikes also
+	
+	// for inter-node communication, TODO guard with ifdef ?
 	struct SendList_Impl{
 		
 		// std::vector<int> vpeer_positions_in_buffer;
@@ -485,7 +531,7 @@ struct EngineConfig{
 		
 		// entries for this are enumerated, and also resolved, internally in GenerateModel, based on the SendList
 		std::vector< RawTablesLocator > ref_locations;
-		
+		//spikes are triggered in buffer, they're automatically gathered
 		size_t spike_mirror_buffer;
 	};
 	struct RecvList_Impl{
@@ -497,8 +543,6 @@ struct EngineConfig{
 	};
 	std::map< int, SendList_Impl > sendlist_impls;
 	std::map< int, RecvList_Impl > recvlist_impls;
-	
-	//spikes are triggered in buffer, they're automatically gathered
 	
 };
 
@@ -1234,13 +1278,20 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		std::string name;
 	};
 	std::vector<CellInternalSignature> cell_sigs;
-	// Allocate empty signatures for neuron types, and start filling them in in multiple pases
+	// Allocate empty signatures for neuron types, and start filling them in in multiple passes
 	cell_sigs.resize(cell_types.contents.size());
+	
 	// LATER if this runs too slow, refactor to a more efficient data structure
 	std::unordered_map<Int, Int> input_seq_to_idid_instance;
 	
 	std::unordered_map< Int, std::unordered_map<Int, Int> > conn_seq_to_idid_instance_pre, conn_seq_to_idid_instance_post;
-	// TODO encapsulate in NetworkImplementation
+	
+	// keep a mapping from data readers to tables as well
+	struct DataReaderImplementation{
+		size_t table_seq;
+	};
+	std::map< Int, DataReaderImplementation > reader_impls;
+	// TODO encapsulate all the above in NetworkImplementation
 	
 	//------------------>  Determine just how neurons are discretised. This will aid in determining which synapses are located on which compartments.
 	printf("Analyzing cell morphologies...\n");
@@ -1689,6 +1740,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		}
 	}
 	
+	// TODO check for spike in/out as well HERE
+	
 	//------------------>  Scan synaptic projections, to aid cell type analysis
 	// TODO what about per-compartment splitting? //perhaps generate comparmtent-internal constants and then combine with synapses to generate code
 	
@@ -1711,6 +1764,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			id_id = syncomp_seq; // implement the devious trick here XXX
 		}
 		else id_id = Int(syn.type) - SynapticComponent::Type::MAX;
+		// printf("%s %ld\n", synaptic_components.getName( syncomp_seq ), (long)id_id);
 		return id_id;
 	};
 	std::vector< std::map<Int, IdListRle> > synaptic_component_types_per_cell_( cell_types.contents.size() );
@@ -1951,7 +2005,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			wig.prototype_state.push_back(default_value);
 			return Index;
 		}
-		size_t ConstI64( long long default_value, const std::string &for_what ) const {
+		virtual size_t ConstI64( long long default_value, const std::string &for_what ) const {
 			size_t Index = wig.tables_const_i64.size();
 			wig.tables_const_i64.push_back( CellInternalSignature::TableInfo(for_what) );
 			
@@ -2410,16 +2464,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				ret.statevars_to_states.push_back({Index, CellInternalSignature::ComponentSubSignature::Entry::ValueType::F32});
 			}
 			for(size_t seq = 0; seq < type.variable_requirements.contents.size(); seq++ ){
-				size_t Index = Add->ConstI64( 0, for_what + std::string(" VarReq ") + itos(seq) + " ("+dimensions.GetNative(type.variable_requirements.get(seq).dimension).name+")"); 
+				size_t Index = Add->ConstI64( 0, for_what + std::string(" VarReq ") + itos(seq) + " ("+dimensions.GetNative(type.variable_requirements.get(seq).dimension).name+")");
 				ret.varreqs_to_constints.push_back({Index, CellInternalSignature::ComponentSubSignature::Entry::ValueType::I64});
 			}
 			
 			return ret;
 		}
 		/*
-		
 		static void ApplySubsigToInstance(const ComponentType &type, const CellInternalSignature::ComponentSubSignature &subsig, const ISignatureAppender *Add){
-			// mutatesparametrization of components; singletons and multitudes are separately synapses and inputs, other parms are semi-standard
+			// mutates parametrization of components?; singletons and multitudes are separately synapses and inputs, other parms are semi-standard
 		}
 		*/
 		// Assume inputs have already been defined, this is what the component assigns itself (derived etc.)
@@ -2788,6 +2841,17 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		const ComponentType &comp_type = component_types.get(comp_instance.id_seq);
 		
 		const auto vals = DescribeLems::GetValues( comp_type, comp_instance );
+		// TODO eliminate prototype valus in subsigs when subsigs get consolidated into concrete types
+		// and somehow ensure that although information is sourced from the lems structure, all elements of the wig should be appended regardless! like the dummy inserted when there are no cf32 
+		// TODO handle this in a more elegant and robust! way by establishing if, and where, instances are being determined (are there common weights and such or not??) instead of adding the dummy here ad hoc
+		
+		// NB: special case: if there are no properties a dummy value is filled in properties_to_constants and CF32 of subsig, handle that here
+		// But! there are edge cases like a silentSynapse which could get its intstance count from Vpeer (though it doesn't matter in that case), and hence doesn't need or have a dummy
+			// printf("%s\n", component_types.getName(comp_instance.id_seq));
+		if(vals.properties.size() == 0 && !subsig.properties_to_constants.empty()){
+			assert(subsig.properties_to_constants.size() == 1);
+			tab_cf32[off_cf32 + subsig.properties_to_constants[0].index].push_back(NAN);
+		}
 		
 		for( size_t seq = 0; seq < vals.properties.size(); seq++ ){
 			tab_cf32[off_cf32 + subsig.properties_to_constants[seq].index].push_back(vals.properties.at(seq));
@@ -3292,12 +3356,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					
 				}
 				else if( syncomp.component.ok() ){
-					std::string for_what = for_that + " LEMS Synaptic Component";
-					
 					// allow loop to be overridden externally; don't use the all-in-one solution that includes its own loop
 					const ComponentInstance &compinst = syncomp.component;
 					const auto &comptype = model.component_types.get(compinst.id_seq);
 					CellInternalSignature::ComponentSubSignature &compsubsig = synimpl.synapse_component;
+					
+					
+					std::string for_what = for_that + " LEMS Synaptic Component " + model.component_types.getName(compinst.id_seq);
 					
 					synimpl.synapse_component = DescribeLems::AllocateSignature(model.dimensions, comptype, compinst, &AppendMulti, for_what);
 					code += DescribeLemsInline.TableInner( tab+"\t", for_what, comptype, compsubsig, require_line, ExposeFromLems(comptype)+expose_line, config.debug );
@@ -3372,7 +3437,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 			
 			// and common parts for all syn.components
-			
+			// printf("impl %ld %d %d\n", id_id, (int)needs_spike, (int)needs_Vpeer);
+			// if( fake_syn.component.ok() ) printf("impl %s\n", model.component_types.getName(fake_syn.component.id_seq));
 			// expose instances
 			if( needs_spike ){
 				sprintf(tmps, "	const long long Instances = local_state_table_i64_sizes[%zd]; //same for all parallel arrays\n", synimpl.Table_Trig ); ccde += tmps;
@@ -3673,7 +3739,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				}
 				else if( input_source.component.ok() ){
 	
-					std::string for_what = for_that + " LEMS Input";
+					std::string for_what = for_that + " LEMS Input "+ model.component_types.getName(input_source.component.id_seq);
 					
 					const auto &comptype = model.component_types.get(input_source.component.id_seq);
 				
@@ -7191,7 +7257,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			node = (Int) nodecode; return true;
 		}
 		else{
-			// FIXME with synapse paths and such
+			if( path.type == Simulation::LemsQuantityPath::DATAREADER ){
+				node = 0; // for now at least, LATER use a mapper to determine
+				return true;
+			}
+			// LATER with official LEMS synapse paths and such
 			return false;
 		}
 	};
@@ -7208,10 +7278,63 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	
 	#endif
 	
+	// take some decisions for file/stream IO as well
+	bool i_log_the_data = true;
+	
+	#ifdef USE_MPI
+	if( my_mpi.rank == 0 ){
+		
+		i_log_the_data = true;
+		// form the data structures, send requests for whatever is remote
+		
+	}
+	else{
+		i_log_the_data = false;
+		// wait for remote requests from logger node to emerge
+	}
+	#endif
+	
 	// first of all, create NULL tables for unset references to trip on ...
 	tabs.global_state_tabref_null = tabs.global_tables_state_f32_arrays.size();
 	tabs.                         global_tables_state_f32_arrays.emplace_back();
 	tabs.                         global_tables_state_f32_arrays[tabs.global_state_tabref_null].push_back(NAN);
+	
+	printf("Creating data inputs...\n");
+	if( i_log_the_data ){
+		// more fine grained decisions LATER
+		engine_config.timeseries_readers.resize( net.data_readers.size() );
+		for( Int dar_seq = 0; dar_seq < (Int) net.data_readers.size(); dar_seq++ ){
+			
+			auto &dar =  net.data_readers.get(dar_seq);
+			
+			EngineConfig::TrajectoryReader &reader = engine_config.timeseries_readers[dar_seq];
+			
+			reader.instances = dar.instances;
+			reader.url = dar.source_url;
+			reader.format = dar.data_format;
+			
+			// create a row for the reader, in tabs; one value per element per column
+			size_t value_mirror_table = tabs.global_tables_state_f32_arrays.size();
+			tabs.global_tables_state_f32_arrays.emplace_back();
+			tabs.global_tables_state_f32_arrays[value_mirror_table].assign(dar.instances * dar.columns.size(), NAN);
+			
+			reader_impls[dar_seq] = { value_mirror_table };
+			reader.tabloc = {(ptrdiff_t) value_mirror_table, 0, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::F32};
+			
+			// and fill in the scaling for columns
+			for( Int col_seq = 0; col_seq < (Int)dar.columns.size(); col_seq++ ){
+				const auto &col = dar.columns.get(col_seq);
+				
+				// TODO scales should be strictly defined for lems quantities !					
+				const LemsUnit native = dimensions.GetNative(col.dimension);
+				EngineConfig::TrajectoryReader::InputColumn column = { col.units.to(native) };
+								
+				// done with column
+				reader.columns.push_back(column);
+			}
+			
+		}
+	}
 	
 	printf("Creating populations...\n");
 	
@@ -8132,6 +8255,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	gettimeofday(&time_syns_end, NULL);
 	printf("Created synapses in %.4lf sec.\n",TimevalDeltaSec(time_syns_start, time_syns_end));
 	
+	// LATER move IO buffers as well as MPI mirrors to before allocating for the actual model, to see if more remapping can be done inline	
 	printf("Creating data outputs...\n");
 	
 	auto MustBePhysicalCell = [](const auto &log_error, const CellType &cell_type ){
@@ -8149,6 +8273,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		return true;
 	};
 	
+	// TODO move to before syn instnatiation, to allow for uniform path access
 	auto LocateEntryFromPath = [&]( const Simulation::LemsQuantityPath &path, RawTablesLocator &tabloc, const auto &log_error = printf ){
 		typedef Simulation::LemsQuantityPath::SynapsePath SynPath;
 		typedef Simulation::InputInstanceQuantityPath InpPath;
@@ -8563,7 +8688,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					const InpPath &path = basepath.cell.input;
 					
 					// NOTE: only inputs that don't generate current are allowed to be artificial cells, which rules out synapse children
-					// and also the only non lemsified input source atm
+					// and also the only non lemsified input source (ie explicit spike train) atm
 					if(path.type == InpPath::SYNAPSE){
 						log_error("internal error: lems quantity path for artificial cell that's actually an input source: refers to synapse child");
 						return false;
@@ -8600,6 +8725,17 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 			}
 		}
+		else if(path.type == Simulation::LemsQuantityPath::Type::DATAREADER){
+			const auto &basepath = path;
+			const Simulation::LemsQuantityPath::DataReaderPath &path = basepath.reader;
+			if(reader_impls.count(path.read_seq) < 1) return false;
+			
+			const auto &dar = net.data_readers.get(path.read_seq);
+			const auto &impl = reader_impls.at(path.read_seq);
+			
+			tabloc = {(ptrdiff_t) impl.table_seq, (int)(((Int)dar.columns.size() * path.inst_seq) + path.colu_seq), RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::F32};
+			return true;
+		}
 		else{
 			log_error("not supported yet : non-cell-based path type %d", path.type);
 			return false;
@@ -8616,8 +8752,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		const std::string &output_filepath;
 		LogInsideDataWriter(Int _c, const std::string &_s) : col_seq(_c), output_filepath(_s){}
 		void operator()(const char *format, va_list args) const {
-			std::string prefix = "data writer"+output_filepath+", column "+accurate_string(col_seq)+": "; // FIXME allow no printf % to be injected here!
-			vprintf((prefix+format).c_str(), args);
+			std::string prefix = "data writer "+output_filepath+", column "+accurate_string(col_seq)+": "; // FIXME allow no printf % to be injected here!
+			vprintf((prefix+format+"\n").c_str(), args);
 			// 1+vsnprintf(NULL, 0, fmt, args1) TODO
 		}
 		void operator()(const char *format, ...) const {
@@ -8627,21 +8763,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		void warning(const char *format, ...) const {
 			va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
 	};
-	
-	bool i_log_the_data = true;
-	
-	#ifdef USE_MPI
-	if( my_mpi.rank == 0 ){
-		
-		i_log_the_data = true;
-		// form the data structures, send requests for whatever is remote
-		
-	}
-	else{
-		i_log_the_data = false;
-		// wait for remote requests from logger node to emerge
-	}
-	#endif
 	
 	if( i_log_the_data ){
 		
@@ -8803,7 +8924,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				#ifdef USE_MPI
 				work_t work_unit = WorkUnitOrNode( loca.population, loca.cell_instance );
 				if( work_unit < 0 ){
-					continue; // another node will initialize this cell
+					continue; // another node will initialize this cell; TODO move this to specific targets to let cells be split LATER, essentially pull outside the artificial cell case
 				}
 				#else
 				// work_t work_unit = workunit_per_cell_per_population[loca.population][loca.cell_instance];
@@ -8869,16 +8990,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				path.input.list_seq = list_seq;
 				path.input.inst_seq = instance_seq;
 				
-				Simulation::LemsSegmentLocator loca;
-				if(!GetCellLocationFromPath(net, path, loca)){
-					log_error("error: could not locate cell"); return false;
-					return false;
-				}
 				#ifdef USE_MPI
-				work_t work_unit = WorkUnitOrNode( loca.population, loca.cell_instance );
-				if( work_unit < 0 ){
-					continue; // another node will initialize this cell
-				}
+				int path_node;
+				if(!LocateNodeForPath( path, path_node )) return false;
+				if( path_node != my_mpi.rank ) continue; // another node will initialize this cell
 				#endif
 				
 				RawTablesLocator tabloc;
@@ -8913,17 +9028,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				path.synapse.proj_seq = proj_seq;
 				path.synapse.conn_seq = instance_seq;
 				
-				// after debugging, move to if_mpi
-				Simulation::LemsSegmentLocator loca;
-				if(!GetCellLocationFromPath(net, path, loca)){
-					log_error("error: could not locate cell"); return false;
-					return false;
-				}
 				#ifdef USE_MPI
-				work_t work_unit = WorkUnitOrNode( loca.population, loca.cell_instance );
-				if( work_unit < 0 ){
-					continue; // another node will initialize this cell
-				}
+				int path_node;
+				if(!LocateNodeForPath( path, path_node )) return false;
+				if( path_node != my_mpi.rank ) continue; // another node will initialize this cell
 				#endif
 				
 				RawTablesLocator tabloc;
@@ -9564,7 +9672,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		for( int i = recv_list.vpeer_refs.size(); i < (int)value_mirror.size(); i++ ) value_mirror[i] = 4444;
 		
 		// NB walk through these requested values, in the same order they were requested in the recv list
-		long long value_mirror_table = recv_list_impl.value_mirror_buffer;
+		ptrdiff_t value_mirror_table = recv_list_impl.value_mirror_buffer;
 		int value_mirror_entry = 0;
 		
 		// first are the vpeer refs, remap them. iterate in the same way as they were requested, eg ascending order here 
@@ -9831,7 +9939,124 @@ int main(int argc, char **argv){
 	
 	// open the logs, one for each logger
 	std::vector<FILE *> trajectory_open_files;
-	for(auto logger : engine_config.trajectory_loggers){
+	
+	struct TimeseriesFrame{
+		RawTables::Table_F32 values;
+		double timestamp;
+		TimeseriesFrame(){ timestamp = -INFINITY; }
+	};
+	struct TimeseriesReader_File{
+		const EngineConfig::TrajectoryReader &reader;
+		
+		Int lines_read_so_far;
+		
+		std::string filename;
+		FILE *open_file;
+		TimeseriesFrame next_frame; // must be peeked to ensure that data up to that point are most recent
+		
+		TimeseriesReader_File(const EngineConfig::TrajectoryReader &_r, const std::string &_fn, FILE *_f): reader(_r), filename(_fn), open_file(_f){
+			lines_read_so_far = 0;
+		}
+		
+		bool LineToFrame(const std::string &line, TimeseriesFrame &frame){
+			
+			std::istringstream streamline(line);
+			std::vector<std::string> tokens{std::istream_iterator<std::string>(streamline), {}};
+			
+			Int value_tokens_to_read = reader.instances * (Int)reader.columns.size();
+			
+			Int provided_tokens = (Int)tokens.size(), expected_tokens = (1 + value_tokens_to_read);
+			if(provided_tokens != expected_tokens){
+				fprintf(stderr, "line %ld on file %s malformed: %ld tokens were given, expected %ld \n", 
+					(long)lines_read_so_far, filename.c_str(), (long)provided_tokens,  (long)expected_tokens);
+				return false;
+			}
+			
+			const ScaleEntry seconds = {"sec",  0, 1.0};
+			if(!StrToF(tokens[0].c_str(), frame.timestamp)){
+				fprintf(stderr, "file %s : line %ld : token %ld malformed: cannot parse \"%s\" as timestamp\n", 
+					filename.c_str(), (long)lines_read_so_far, (long) 0, tokens[0].c_str());
+				return false;
+			}
+			frame.timestamp = seconds.ConvertTo(frame.timestamp, Scales<Time>::native); // adjust units to native
+			
+			frame.values.resize(value_tokens_to_read);
+			
+			Int value_tokens_read = 0;
+			for(Int elm = 0; elm < reader.instances; elm++){
+				for(Int col = 0; col < (Int)reader.columns.size(); col++){
+					auto token_read = 1 + value_tokens_read;
+					const char *sToken = tokens[token_read].c_str();
+					double value = NAN;
+					if(!StrToF(sToken,value)){
+						fprintf(stderr, "file %s : line %ld : token %ld malformed: cannot parse \"%s\" as float value\n", 
+						filename.c_str(), (long)lines_read_so_far, (long)token_read,  sToken);
+						return false;
+					}
+					// adjust the value to engine units; the conversion factor is already derived as provided-to-native units, hence convert to identity scale
+					value = reader.columns[col].conversion_factor.ConvertTo(value, Scales<Dimensionless>::native);
+					
+					frame.values[value_tokens_read] = value; // TODO abstract the pattern away LATER: (elm * (Int)reader.columns.size()) + col
+					// or rather, parse the numbers and rescale them elsewhere? that's more confuding though?
+					
+					value_tokens_read++;
+				}
+			}
+			return true;
+		}
+		bool GetFrameLine(std::string &line){
+			char buf[BUFSIZ];
+			if(!IsActive()) return false;
+			while(1){
+				if(!fgets(buf, BUFSIZ, open_file)) break;
+				line += buf;
+				assert(!line.empty());
+				// if line ends with (CR)LF, strip and deliver the whole line
+				if(*line.rbegin() == '\n'){
+					line.pop_back();
+					if(*line.rbegin() == '\r') line.pop_back();
+					
+					break;
+				}
+			}
+			if(feof(open_file)){
+				if(line.empty()) return false;
+				// else, accept the last line of the file
+			}
+			else if(ferror(open_file)){
+				PerrorWrapped("error while reading file \"%s\"", filename.c_str());
+				// fall through anyway
+			}
+			lines_read_so_far++;
+			return true;
+		}
+		bool FetchFrame(){
+			std::string line;
+			if(!GetFrameLine(line)) return false;
+			TimeseriesFrame new_frame;
+			if(!LineToFrame(line, new_frame)) return false;
+			
+			// ingore non monotonic timestamps
+			if(!( next_frame.timestamp < new_frame.timestamp )) return false;
+			
+			// update the frame ! yay!
+			next_frame = new_frame;
+			return true;
+		}
+		
+		bool IsActive() const {
+			return bool(open_file) and not ( ferror(open_file) or feof(open_file) );
+		}
+		bool IsBad() const {
+			return not bool(open_file) or bool( ferror(open_file) );
+		}
+		void Close(){
+			fclose(open_file); open_file = NULL;
+		}
+	};
+	std::vector<TimeseriesReader_File> timeseries_readers;
+	
+	for(const auto &logger : engine_config.trajectory_loggers){
 		#ifdef USE_MPI
 		assert( my_mpi.rank == 0);
 		#endif
@@ -9844,6 +10069,42 @@ int main(int argc, char **argv){
 		}
 		trajectory_open_files.push_back(fout);
 	}
+	for(const auto &reader : engine_config.timeseries_readers){
+		#ifdef USE_MPI
+		assert( my_mpi.rank == 0);
+		#endif
+		const auto &url = reader.url, &format = reader.format;
+		if(format == "ascii_v0"){
+			// it's the only one supported for now
+		}
+		else{
+			printf("unknown data format %s for time series reader \"%s\"\n", format.c_str(), url.c_str() );
+			exit(1);
+		}
+		// convert URL reference to vars, enums and such
+		std::string filename;
+		std::string scheme, auth_path;
+		if(!GetUrlScheme(url, scheme, auth_path)){
+			// it's a file path, by default
+			filename = url;
+		}
+		else if(scheme == "file"){
+			filename = auth_path;
+		}
+		else{
+			printf("unknown URI scheme %s (suffix %s) for time series reader \"%s\"\n", scheme.c_str(), auth_path.c_str(), url.c_str() );
+			exit(1);
+		}
+		
+		FILE *fout = fopen( filename.c_str(), "rt"); // TODO what about pipes, should it be r+ ?
+		if(!fout){
+			auto errcode = errno;// NB: keep errno right away before it's overwritten
+			printf("Could not open time series input \"%s\" : %s\n", filename.c_str(), strerror(errcode) );
+			exit(1);
+		}
+		timeseries_readers.push_back({reader, filename, fout});
+	}
+	// TODO HERE move to nonblocking API for streams with feedback!
 	
 	// prepare engine for crunching
 	
@@ -10061,6 +10322,96 @@ int main(int argc, char **argv){
 		
 		bool initializing = step <= 0;
 		
+		// FIXME move writes here ?
+		if( !initializing ){
+			// input what needs to be input
+			
+			// time series: these are tricky in that the timestamp of the data to be read must be equal to, or after, the timestep to be run now.
+			// If the file has ended, values for the last timestamp are held.
+			// This allows variable sampling rates, which are very useful for both source related, and transfer volume trelated, reasons.  TODO hanble the ramificagions of reduced sampling rates.
+			// FIXME mention the slack as a good measure in the user guide.
+			// TODO put some epsilon in timestamp checking? will it be innocuous even when fooled? probably, if the sampling rate is too high... can be off by one frame at most...
+			for(size_t i = 0; i < engine_config.timeseries_readers.size(); i++){
+				#ifdef USE_MPI
+				assert(my_mpi.rank == 0);
+				#endif
+				auto &dar = engine_config.timeseries_readers[i];
+				auto &reader = timeseries_readers[i];
+				
+				// overwrite both stateNow and stateNext to avoid copying over on each timestep when swapping buffers.
+				// LATER do sth more generic for more than double buffering - or just overwrite on every step?
+				auto ApplyFrame = [&](){
+					auto SetState = [
+						&global_tables_stateNow_f32, &global_tables_stateNext_f32
+					]( const RawTablesLocator &tabloc, Real value ){
+						if(!(  tabloc.forma_type == RawTablesLocator::F32
+							&& tabloc.varia_type == RawTablesLocator::STATE
+							&& tabloc.layou_type == RawTablesLocator::TABLE
+						)){
+							printf("internal error: reader value not is not table state f32\n");
+							exit(2);
+						}
+						global_tables_stateNow_f32 [tabloc.table][tabloc.entry] = value;
+						global_tables_stateNext_f32[tabloc.table][tabloc.entry] = value;
+					};
+					
+					assert(!reader.next_frame.values.empty()); // or just do if not empty LATER, leave uninit'd ...
+					
+					auto tabloc = dar.tabloc;
+					for(int i = 0; i < (int)reader.next_frame.values.size(); i++){
+						tabloc.entry = i;
+						SetState(tabloc, reader.next_frame.values[i]);
+					}
+				};
+				
+				// read the data line: timestamp in sec followed by instances*columns numbers in specified scales
+				
+				// if it's time for the upcoming timestamp to take effect (and it hadn't been last timstamp, of course)
+				// then apply the timestamp and grab a new one?? FIXME tolerance!
+				// also: ignore timestanps which appear non monotonically
+				// bool fetched_new_frame = false;
+				bool applied_frame = false;
+				// TODO keep current frame as well, i guess
+				if(!reader.next_frame.values.empty() && reader.next_frame.timestamp <= time){
+					ApplyFrame();
+					applied_frame = true;
+				}
+				while(reader.next_frame.timestamp < time && reader.IsActive()){
+					// make more efficient LATER if needed, by skipping over based on timestamp or sth
+					if(true){
+						
+						bool fetch_ok = reader.FetchFrame();
+						if(reader.IsBad()){
+							fprintf(stderr, "Error encountered for reader with url %s , exiting\n", dar.url.c_str());
+							exit(1);
+						}
+						if(fetch_ok){
+							// fetched_new_frame = true;
+							if(!reader.next_frame.values.empty() && reader.next_frame.timestamp <= time){
+								ApplyFrame();
+								applied_frame = true;
+							}
+						}
+					}
+				}
+				// TODO put some expicit slack for timestamps to linger, like max_sampling_period, to allow more concurrency.
+				
+				// check for some problematic cases
+				if(reader.next_frame.timestamp < 0){
+					fprintf(stderr, "data reader with url %s had no valid samples, exiting\n", dar.url.c_str());
+					exit(1);
+				}
+				if(time == 0 && !applied_frame ){
+					fprintf(stderr, "data reader with url %s had no sample for t = 0, exiting\n", dar.url.c_str());
+					exit(1);
+				}
+				// TODO read the stamps for t = 0 before initializing !!! but then, how are hooked together? easily due to not running on init?? or mention to the guide that data will not ne cessarily be ready?? or just enfore an initial value?? initialization is ill defined anyway ...
+				// or rather, use the init file to take care of it?
+				
+				// done refreshing reader
+			}
+		}
+		
 		#ifdef USE_MPI
 		auto NetMessage_ToString = []( size_t buf_value_len, const auto &buf ){
 			std::string str;
@@ -10205,8 +10556,6 @@ int main(int argc, char **argv){
 				}
 				
 			}
-			// MPI_Finalize();
-			// 	exit(1);
 		} while( !all_received );
 		// and clear the progress flags
 		received_probes.assign( received_probes.size(), false );
@@ -10254,6 +10603,7 @@ int main(int argc, char **argv){
 				const ScaleEntry seconds = {"sec",  0, 1.0};
 				const double time_scale_factor = Scales<Time>::native.ConvertTo(1, seconds);
 				
+				// FIXME why not double??
 				float time_val = time * time_scale_factor;
 				column_fmt.write( time_val, tmps_column );
 				fprintf(fout, "%s", tmps_column);
@@ -10351,10 +10701,8 @@ int main(int argc, char **argv){
 	// done!
 	
 	// close loggers
-	for( auto &fout : trajectory_open_files ){
-		fclose(fout);
-		fout = NULL;
-	}
+	for( auto &fout : trajectory_open_files ){ fclose(fout); fout = NULL; }
+	for( auto &reader : timeseries_readers ){ reader.Close(); }
 	
 	gettimeofday(&run_end, NULL);
 	metadata.run_time_sec = TimevalDeltaSec(run_start, run_end);

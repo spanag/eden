@@ -1,0 +1,1 @@
+set input inliX 0 iPointed DataX[0]/i
