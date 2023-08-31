@@ -9,112 +9,76 @@ FROM scidash/scipy-notebook-plus
 #Libraries required for building NEURON from source
 #Also DO this part as root.
 USER root
-RUN apt-get update && apt-get install -y wget bzip2 ca-certificates default-jre default-jdk maven automake libtool  \
-                       wget python3 libpython3-dev libncurses5-dev libreadline-dev libgsl0-dev cython3 \
-                       python3-pip python3-numpy python3-scipy python3-matplotlib python3-mock \
-                       ipython3 python3-docutils \
-                       python3-mpi4py cmake ssh
+RUN apt-get update && apt-get install -y \
+    wget bzip2 ca-certificates default-jre default-jdk maven automake libtool cmake ssh\
+    libncurses5-dev libreadline-dev libgsl0-dev \
+    cython3 libpython3-dev python3-mock ipython3 python3-docutils \
+    python3-mpi4py
 
-
-#Do the rest of the build  as user:
-#This will create a more familiar environment to continue developing in.
-#with less of a need to chown and chmod everything done as root at dockerbuild completion
-
+#Do the rest of the build as user:
 USER jovyan
-# Use numpy 1.12.1 until quantities is compatible with 1.13.
-# RUN conda install -y scipy numpy==1.12.1 matplotlib
-RUN sudo chown -R jovyan /home/jovyan
-
-
-# TODO move these somewhere else
-ENV HOME /home/jovyan
-ENV PATH /opt/conda/bin:/opt/conda/bin/conda:/opt/conda/bin/python:$PATH
 
 # Test matplotlib, just check if it is imported ok
 RUN python -c "import matplotlib"
 #Install General MPI, such that mpi4py can later bind with it.
-
-
 # ---> MPI is actually already installed in previous image
 
 # ---> Install NEURON
 WORKDIR $HOME
 
-ARG NEURON_VERSION=7.7
-ARG NEURON_VERSIONED=nrn-${NEURON_VERSION}
-
-# could make stderr more quiet or sth, to suppress output while building
-RUN \
-  wget http://www.neuron.yale.edu/ftp/neuron/versions/v${NEURON_VERSION}/${NEURON_VERSIONED}.tar.gz && \
-  tar -xzf ${NEURON_VERSIONED}.tar.gz && \
-  rm ${NEURON_VERSIONED}.tar.gz
-
-WORKDIR $HOME/${NEURON_VERSIONED}
-ENV PATH /usr/bin/python3/python:/opt/conda/bin:/opt/conda/bin/conda:/opt/conda/bin/python:$PATH
-RUN ./configure --prefix=`pwd` --with-paranrn --without-iv --with-nrnpython=/opt/conda/bin/python3
-RUN sudo make all && \
-   make install
-   
-RUN make all
-RUN make install
-
-WORKDIR src/nrnpython
-RUN python setup.py install
-ENV NEURON_HOME $HOME/${NEURON_VERSIONED}/x86_64
-ENV PATH $NEURON_HOME/bin:$PATH
-
+ARG NEURON_VERSION=8.2.2
+RUN python3 -m pip install neuron==${NEURON_VERSION}
+RUN which nrnivmodl nrniv; echo $PATH
+# NEURON_HOME is needed by NML tooling
+# but ENV can't be determined from inside the container being built https://github.com/moby/moby/issues/29110
+# ENV NEURON_HOME $(realpath $(dirname $(which nrniv))/..)
+ENV NEURON_HOME=/opt/conda
 
 # ---> Install NeuroML tools
 USER root
-# required for libNeuroML
-RUN apt-get install -y python-lxml python3-pip python-dev python3-setuptools
+# required for h5 ?
+RUN sudo apt-get install -y libhdf5-dev
+# required for libNeuroML ?
+# RUN apt-get install -y python3-lxml python3-pip python3-setuptools
 
 USER jovyan
-RUN sudo chown -R jovyan /home/jovyan
-WORKDIR $HOME
+RUN python3 -m pip install tables>=3.3.0
 
-RUN pip3 install --upgrade pip
-RUN pip3 install --upgrade virtualenv
+# ---> Install NeuroML tool reqs
+USER jovyan
 
-# to get from pypi (not recommended)
-# RUN pip install pyNeuroML==0.3.11
-
-# Get the original source code
+RUN python3 -m pip install libneuroml==0.5.3 pyneuroml==1.0.10
+# or ...Get the original source code
+# WORKDIR $HOME
 # Could also download just the branch to be used,
 # in case no other branch is needed elsewhere.
-# But picking the branch is realted to the specific commit, so it's a bit laborious and error-friendly.
-RUN git clone https://github.com/NeuralEnsemble/libNeuroML.git
-RUN git clone https://github.com/NeuroML/pyNeuroML.git
+# But picking the branch is related to the specific commit, so it's a bit laborious and error-friendly.
+# RUN git clone https://github.com/NeuralEnsemble/libNeuroML.git
 
-# NOTE: building jNeuroML fails, at building the 'injecting plugin'
-# so we actually use pyNeuroML's bundled jar instead.
-# RUN git clone https://github.com/NeuroML/jNeuroML
-# WORKDIR jNeuroML
-# RUN git checkout development
-# RUN ls -ltr *.py
-# RUN python getNeuroML.py
+# # NOTE: building jNeuroML fails, at building the 'injecting plugin'
+# # so we actually use pyNeuroML's bundled jar instead.
+# # RUN git clone https://github.com/NeuroML/jNeuroML
+# # WORKDIR jNeuroML
+# # RUN git checkout development; ls -ltr *.py
+# # RUN python getNeuroML.py
 
 # Build from source code
-
-WORKDIR $HOME/libNeuroML
+# WORKDIR $HOME/libNeuroML
 # 2021-03 version
-RUN git checkout 632c1bce797d44308d5ec8246c0aac360c862f1a
+# RUN git checkout 632c1bce797d44308d5ec8246c0aac360c862f1a
+# RUN python3 -m pip install . -r requirements.txt
 
-RUN python3 -m pip install . -r requirements.txt
-
-WORKDIR $HOME/pyNeuroML
+# WORKDIR $HOME/pyNeuroML
 # 2021-03 version
-RUN git checkout 9e070467498c57d4244d44f9996bb8e0eecc5dc3
+# RUN git checkout 9e070467498c57d4244d44f9996bb8e0eecc5dc3
+# RUN python3 -m pip install .RUN 
 
-RUN python3 -m pip install .
-
-
-# Check if packages are imported OK
-WORKDIR $WORK_HOME
-
-RUN python3 -c "import neuroml"
+# Check if packages work OK
 RUN python3 -c "import neuroml; from pyneuroml import pynml"
-
+# run an example as well
+WORKDIR $HOME
+RUN git clone --depth=1 https://github.com/NeuroML/pyNeuroML.git
+WORKDIR $WORK_HOME
 RUN ExampleDir=$(mktemp -d); cp -r ~/pyNeuroML/examples/ $ExampleDir; cd $ExampleDir/examples; python run_jneuroml_plot_matplotlib.py -nogui <&-
 
 # TODO more testing on NeuroML examples, to verify it's working properly (like with Poisson sources and such)

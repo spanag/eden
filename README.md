@@ -142,9 +142,7 @@ If Docker is installed and accessible to the user, an automated testing suite ca
 
 ## Dockerfile
 
-A demonstration-ready Docker image is available, using the Dockerfile on this top-level directory.
-
-Beside EDEN, the demo image also contains the following:
+A demonstration-ready Docker image is available. Beside EDEN, the demo image also contains the following:
 
 - Jupyter Notebook
 - NEURON simulator package, also for neural-network simulations
@@ -152,11 +150,11 @@ Beside EDEN, the demo image also contains the following:
 
 To use, first build the Docker image: 
 
-	docker build -t eden_demo .
+	make -f testing/linux/docker/Makefile docker_test_env
 
 To run the Docker image:
 
-	docker run -it --name eden_demo_book -v ~/user_work_folder:/home/jovyan/work -p 8888:8888 --rm eden_demo
+	docker run -it --name eden_demo_book -v ~/user_work_folder:/home/jovyan/work -p 8888:8888 --rm eden_test
 
 (`user_work_folder` can be replaced by any folder the user is working on; this is where user files will be read from, and work done using the image will be stored)
 

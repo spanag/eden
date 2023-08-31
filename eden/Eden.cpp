@@ -284,7 +284,7 @@ bool GetCellLocationFromPath( const Network &net, const Simulation::LemsQuantity
 	else if( path.type == Path::Type::INPUT ){
 		Int inp_seq = net.input_lists.get(path.input.list_seq).input_instances_seq.atSeq(path.input.inst_seq);
 		const auto &inp = net.inputs[inp_seq];
-		loca = {.population = inp.population, .cell_instance = inp.cell_instance, .segment_seq = inp.segment, .fractionAlong = inp.fractionAlong};
+		loca = Simulation::LemsSegmentLocator(inp.population, inp.cell_instance, inp.segment, inp.fractionAlong);
 	}
 	else if( path.type == Path::Type::SYNAPSE ){
 		const auto &proj = net.projections.get(path.synapse.proj_seq);
