@@ -1100,7 +1100,7 @@ struct ComponentType{
 	
 	CoreType extends;
 	
-	static std::list<std::string> eternal_strings; // not necessary thanks to persistent import context, use that or make a NameTable struct LATER
+	// static std::list<std::string> eternal_strings; // not necessary thanks to persistent import context, use that or make a NameTable struct LATER
 	
 	
 	// Constants may not be defined for each instance separately.
@@ -1127,6 +1127,7 @@ struct ComponentType{
 	CommonRequirements common_requirements;
 	CollectionWithNames<Exposure> exposures;
 	CommonExposures common_exposures;
+	// FIXME forbid input ant output ports from having the same name!
 	CollectionWithNames<EventPortIn> event_inputs;
 	CommonEventInputs common_event_inputs;
 	CollectionWithNames<EventPortOut> event_outputs;
@@ -2107,9 +2108,9 @@ struct Network{
 	};
 	
 	// experimental extension
+	// EventSetReader can't be moved to the <Simulation> becuase it needs to be a spike source for projections, just like waveforms need to be accessible in the LemsPath space, for VariableReferences and such.
 	// A TimeSeriesReader is a source of one or more time series, whose data is retrieved from various URL's,
 	// presented to the model as a collection of data points uniformly structured as collections of named scalars, evolving over time.
-	// the corresponding EventSetReader can be moved to the <Simulation> unlike this one, because waveforms need to be accessible in the LemsPath space, for VariableReferences and such.
 	struct TimeSeriesReader{
 		// each element in the time series is a multidimensional vector, with sub-elements of different dimensions
 		struct InputColumn{
@@ -2122,6 +2123,16 @@ struct Network{
 		Int instances; // number of elements of the time series
 	};
 	
+	// An EventSetReader is a set of event sources, streamed from various sorts of URL's.
+	struct EventSetReader{
+		struct Port{
+			// modalities of events LATER
+		};
+		// more of a "url reference" in that relative paths are also accepted
+		std::string source_url, data_format; // NB: to be parsed by the backend, for now, standardize LATER
+		CollectionWithNames<Port> ports; // set of output ports, same for each element
+		Int instances; // number of elements of the group of event sets
+	};
 	
 	Real temperature;
 	
@@ -2135,6 +2146,7 @@ struct Network{
 	
 	// experimental extension
 	CollectionWithNames<TimeSeriesReader> data_readers;
+	CollectionWithNames<EventSetReader> event_readers; // FIXME
 };
 
 // A NeuroML simulation, targeting a specific network
@@ -2334,7 +2346,7 @@ struct Simulation{
 			// LATER handle explicit connections if needed
 		};
 		
-		struct DataReaderPath : public InputInstanceQuantityPath{
+		struct DataReaderPath{
 			Int read_seq; // reader in the network
 			Int inst_seq; // instance in the group
 			Int colu_seq; // property in the element
@@ -2387,8 +2399,14 @@ struct Simulation{
 	struct InputInstanceEventPath : public MayBeLemsInstanceEventPath{
 		enum Type{
 			NONE,
+			NATIVE, // all spiking ones are lemsified for now, or timed
+			// SYNAPSE, // not used for standalone input sources
 			LEMS // for a LEMS component
 		}type;
+		
+		enum NativeEntry{
+			SPIKE,
+		}native_entry;
 		
 		// nothing else to add, for now
 	};
@@ -2398,28 +2416,39 @@ struct Simulation{
 			NONE,
 			CELL, // artificial point neurons
 			SEGMENT,
+			// INPUT, not yet supported due to being tabular...
+			// TODO more if needed
+			EVENTREADER, // extension
 			MAX // sentinel
 		};
+		
 		struct Cell : public MayBeLemsInstanceEventPath{
 			// applicable only to LEMS, only LEMS applies here -- at least for now?
 			enum Type{
 				NONE,
 				INPUT, // for a cell that's actually an input
+				// NATIVE, // they all have lems representations for now
 				LEMS
 			}type;
 			
 			InputInstanceEventPath input; // in case
 			// nothing else to add
 		};
+		
 		struct Segment{
 			enum Type{
 				NONE,
 				SPIKE, // 'spike' is always defined for a point neuron or physical compartment
-				LEMS,
 				MAX // sentinel
 			};
 			
 			Type type;
+		};
+		
+		struct Reader{
+			Int read_seq; // reader in the network
+			Int inst_seq; // instance in the group
+			Int port_seq; // port in the element
 		};
 		
 		Type type;
@@ -2427,6 +2456,7 @@ struct Simulation{
 		union{
 			Cell cell;
 			Segment segment;
+			Reader reader;
 		};
 		
 		LemsEventPath(){
@@ -2455,7 +2485,7 @@ struct Simulation{
 			TIME_ID,
 			ID_TIME
 		} format; // as seen in https://github.com/LEMS/jLEMS/blob/development/src/main/java/org/lemsml/jlems/core/type/simulation/EventWriter.java#L18
-		CollectionWithNames<EventSelection> outputs;
+		CollectionWithIds<EventSelection> outputs;
 	};
 	
 	// extensions!
@@ -2502,17 +2532,6 @@ struct Simulation{
 		};
 		std::vector<Statement> statements;	
 	};
-	// An EventSetReader is a set of event sources, streamed from various sorts of URL's.
-	struct EventSetReader{
-		struct EventMapping{
-			Int source_port;
-			LemsEventPath destination;
-		};
-		std::string source_url; // NB: to be parsed by the backend, for now, standardize LATER
-		Int number_of_ports;
-		std::vector<LemsQuantityPath> event_destinations;
-		// TODO
-	};
 	// ---> fields
 	
 	Real length; // duration, that's how it's called in LEMS
@@ -2529,9 +2548,6 @@ struct Simulation{
 	
 	// extensions!
 	CustomSetup custom_init;
-	
-	CollectionWithNames<EventSetReader> event_readers; // FIXME
-	
 	
 	Simulation(){
 		seed_defined = false;
@@ -2571,19 +2587,42 @@ struct Model{
 	bool GetLemsQuantityPathType_InputInstance(const Simulation::InputInstanceQuantityPath &path, const InputSource &input, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const;
 	bool GetLemsQuantityPathType(const Network &net, const Simulation::LemsQuantityPath &path, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const;
 	
+	void LemsSegmentLocatorToString(const Network &net, const Simulation::LemsSegmentLocator &path, std::string &ret) const;
+	
 	bool LemsQuantityPathToString(const ComponentInstance &inst, const Simulation::LemsInstanceQuantityPath &path, std::string &ret) const;
 	bool LemsQuantityPathToString(const SynapticComponent &syn, const Simulation::SynapticComponentQuantityPath &path, std::string &ret) const;
 	bool LemsQuantityPathToString(const InputSource &input, const Simulation::InputInstanceQuantityPath &path, std::string &ret) const;
 	bool LemsQuantityPathToString(const ArtificialCell &cell, const Simulation::LemsQuantityPath::CellPath &path, std::string &ret) const;
 	bool LemsQuantityPathToString(const Network &net, const Simulation::LemsQuantityPath &path, std::string &ret) const;
+	inline std::string LemsQuantityPathToStringOrEmpty(const Network &net, const Simulation::LemsQuantityPath &path) const {
+		std::string ret; if(LemsQuantityPathToString(net, path, ret)) return ret; else return "";}
 	
 	bool ParseLemsSegmentLocator(const ILogProxy &log, const std::vector<std::string> tokens, const Network &net, Simulation::LemsSegmentLocator &path, Int &tokens_consumed) const;
+	
 	bool ParseLemsQuantityPathInComponent(const ILogProxy &log, const ComponentInstance &instance, const std::vector<std::string> &tokens, Simulation::LemsInstanceQuantityPath &lems_instance_qty_path, Int &tokens_consumed ) const;
 	bool ParseLemsQuantityPath_SynapticComponent(const ILogProxy &log, const SynapticComponent &syn, const std::vector<std::string> &tokens, Simulation::SynapticComponentQuantityPath &path, Int &tokens_consumed ) const;
 	bool ParseLemsQuantityPath_InputInstance(const ILogProxy &log, const InputSource &input, const std::vector<std::string> &tokens, Simulation::InputInstanceQuantityPath &path, Int &tokens_consumed ) const;
 	bool ParseLemsQuantityPath_ArtificialCell(const ILogProxy &log, const ArtificialCell &cell,  const std::vector<std::string> &tokens, Simulation::LemsQuantityPath::CellPath &path_cell, Int &tokens_consumed) const;
 	bool ParseLemsQuantityPath_CellProperty(const ILogProxy &log, const CellType &cell_type, const std::vector<std::string> &tokens, Simulation::LemsQuantityPath &path, Int &tokens_consumed ) const;
 	bool ParseLemsQuantityPath(const ILogProxy &log, const char *qty_str, const Network &net, Simulation::LemsQuantityPath &path) const;
+	
+	bool GetLemsEventPathType(const Simulation::LemsInstanceEventPath &path, const ComponentInstance &compinst, Simulation::LemsInstanceEventPath::Type &type) const;
+	bool GetLemsEventPathType(const Simulation::InputInstanceEventPath &path, const InputSource &input, Simulation::LemsInstanceEventPath::Type &type) const;
+	bool GetLemsEventPathType(const Network &net, const Simulation::LemsEventPath &path, Simulation::LemsInstanceEventPath::Type &type) const;
+	
+	bool LemsEventPathToString(const ComponentInstance &inst, const Simulation::LemsInstanceEventPath &path, std::string &ret) const;
+	bool LemsEventPathToString(const InputSource &input, const Simulation::InputInstanceEventPath &path, std::string &ret) const;
+	bool LemsEventPathToString(const ArtificialCell &cell, const Simulation::LemsEventPath::Cell &path, std::string &ret) const;
+	bool LemsEventPathToString(const Network &net, const Simulation::LemsEventPath &path, std::string &ret) const;
+	inline std::string LemsEventPathToStringOrEmpty(const Network &net, const Simulation::LemsEventPath &path) const {
+		std::string ret; if(LemsEventPathToString(net, path, ret)) return ret; else return "";}
+	
+	bool ParseLemsEventPathInComponent(const ILogProxy &log, const ComponentInstance &instance, const std::vector<std::string> &tokens, Simulation::LemsInstanceEventPath &lems_instance_qty_path, Int &tokens_consumed ) const;
+	bool ParseLemsEventPath_InputInstance(const ILogProxy &log, const InputSource &input, const std::vector<std::string> &tokens, Simulation::InputInstanceEventPath &path, Int &tokens_consumed ) const;
+	bool ParseLemsEventPath_ArtificialCell(const ILogProxy &log, const ArtificialCell &cell,  const std::vector<std::string> &tokens, Simulation::LemsEventPath::Cell &path_cell, Int &tokens_consumed) const;
+	bool ParseLemsEventPath_CellProperty(const ILogProxy &log, const CellType &cell_type, const std::vector<std::string> &tokens, Simulation::LemsEventPath &path, Int &tokens_consumed ) const;
+	// NB: port name is simply appended to the lemspath, if not NULL
+	bool ParseLemsEventPath(const ILogProxy &log, const char *sPath, const char *port_name_or_null, const Network &net, Simulation::LemsEventPath &path) const;
 	
 	Model(){ target_simulation = -1; }
 };

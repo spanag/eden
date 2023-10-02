@@ -37,13 +37,17 @@
 			<OutputColumn id="v_cell" quantity="pop0/2/MultiCompCell/1/bioPhys1/membraneProperties/naChans/naChan/m/q"/>
 		</OutputFile>
 		
-		<EventOutputFile id="spikeone" fileName="resultspikes.txt" format="ID_TIME">
-            <EventSelection id="thatone" select="pop0[2]/0" eventPort="spike"/> 
+    <!-- TODO jNML does not support recording a spike more than once, this must be fixed or different sources must be used in each file! -->
+		<EventOutputFile id="spikeoen" fileName="resultspieks.txt" format="ID_TIME">
+            <EventSelection id="-5" select="pop0/2/MultiCompCell/0" eventPort="spike"/> 
 		</EventOutputFile>
-		<EventOutputFile id="spiketwo" fileName="resultspikes.txt" format="TIME_ID">
-            <EventSelection id="thisone" select="pop0/2/MultiCompCell/0" eventPort="spike"/> 
-		</EventOutputFile>
-		
+		<!-- <EventOutputFile id="spikeone" fileName="resultspikes.txt" format="TIME_ID">
+            <EventSelection id="4" select="pop0/2/MultiCompCell/0" eventPort="spike"/> 
+		</EventOutputFile> -->
+		<!-- <EventOutputFile id="spiketwo" fileName="resultspiek2.txt" format="ID_TIME">
+            <EventSelection id="7876" select="pop0[2]/0" eventPort="spike"/> 
+		</EventOutputFile> -->
+    
     </Simulation>
 
 </Lems>

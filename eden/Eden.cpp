@@ -191,14 +191,26 @@ struct FixedWidthNumberPrinter{
 
 // logging
 struct ILogSimpleProxy : public ILogProxy {
-	virtual void operator()(const char *format, va_list args) const  = 0;
+	virtual void vLog(const char *format, va_list args) const  = 0;
 	void operator()(const char *format, ...) const {
-		va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
+		va_list args; va_start(args, format);  vLog(format, args); va_end(args); }
 	void error(const char *format, ...) const {
-		va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
+		va_list args; va_start(args, format);  vLog(format, args); va_end(args); }
 	void warning(const char *format, ...) const {
-		va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
+		va_list args; va_start(args, format);  vLog(format, args); va_end(args); }
 };
+struct PrintfProxy : public ILogSimpleProxy{
+	mutable FILE *file;
+	virtual void vLog(const char *format, va_list args) const{
+	int strsiz =  vsnprintf(NULL, 0, format, args);
+	char *buf = (char *) malloc(1 + strsiz);
+	vsnprintf(buf, 1 + strsiz, format, args);
+	// TODO move to common Say() or some other logging facility ...?
+	fprintf(file, "%s\n", buf);
+	free((void *)buf); buf = NULL;
+	}
+	PrintfProxy(FILE *_f):file(_f){}
+} printf_stderr = {stderr};
 
 template <typename Functor>
 inline void PerrorWrapped( const Functor &f ){
@@ -211,7 +223,7 @@ inline void PerrorWrapped( const char *format, ... ){
 	
 	int strsiz =  vsnprintf(NULL, 0, format, args);
 	char *buf = (char *) malloc(1 + strsiz);
-	vsnprintf(buf, strsiz, format, args);
+	vsnprintf(buf, 1 + strsiz, format, args);
 	// TODO move to common Say() or some other logging facility ...?
 	fprintf(stderr, "%s : %s\n", buf, strerror(errcode));
 	free((void *)buf); buf = NULL;
@@ -308,6 +320,24 @@ bool GetCellLocationFromPath( const Network &net, const Simulation::LemsQuantity
 	return loca.ok();
 }
 
+bool GetCellLocationFromPath( const Network &net, const Simulation::LemsEventPath &path, Simulation::LemsSegmentLocator &loca ){
+	typedef Simulation::LemsEventPath Path;
+	
+	if( path.type == Path::CELL
+	|| path.type == Path::SEGMENT 
+	){
+		loca = (Simulation::LemsSegmentLocator) path;
+		assert(loca.ok());
+	}
+	else if( path.type == Path::Type::EVENTREADER ){
+		return false; // these exist outside cells
+	}
+	else{
+		assert(false); // for now i guess
+		return false;
+	}
+	return loca.ok();
+}
 // MPI context, just a few globals like world size, rank etc.
 #ifdef USE_MPI
 struct MpiContext{
@@ -333,12 +363,12 @@ void Say( const char *format, ... ){
 template<typename Functor>
 struct SayWithPrefix : public ILogSimpleProxy {
 	const Functor fun;
-	void operator()(const char *format, va_list args) const {
+	void vLog(const char *format, va_list args) const {
 		// https://stackoverflow.com/questions/9941987/there-are-no-arguments-that-depend-on-a-template-parameter
 		std::string prefix = this->fun();
 		int strsiz =  vsnprintf(NULL, 0, format, args);
 		char *buf = (char *) malloc(1 + strsiz);
-		vsnprintf(buf, strsiz, format, args);
+		vsnprintf(buf, 1 + strsiz, format, args);
 		Say("%s%s%s", prefix.c_str(), (prefix.empty()?"":" "), buf);
 		free((void *)buf); buf = NULL;
 	}
@@ -375,6 +405,7 @@ struct RawTablesLocator : public TabEntryRef{
 };
 
 typedef long long TabEntryRef_Packed;
+// TODO hide all use, use instead a multiple dispatch among the implementations involved
 auto GetEncodedTableEntryId = []( long long global_idx_T_dest_table, long long entry_idx_T_dest ){
 	// pack 1 trillion tables -> 16 million entries into 64bit indexes, upgrade if needed LATER
 	
@@ -411,7 +442,6 @@ auto EncodeF32ToI32( float f ){
 // initial states, internal constants, connectivity matrices, iteration function pointers and everything
 // so crunching can commence
 struct RawTables{
-	
 	const static size_t ALIGNMENT = 32;
 	
 	typedef std::vector< float, _mm_Mallocator<float, ALIGNMENT> > Table_F32;
@@ -483,6 +513,20 @@ struct RawTables{
 				return global_tables_const_i64_arrays[tabloc.table][tabloc.entry]; }
 		}
 	}
+	void AppendSingleI64(const RawTablesLocator &tabloc, long long value){
+		assert(tabloc.entry == 0);
+		assert(tabloc.forma_type == RawTablesLocator::FormatType::I64);
+		if(tabloc.layou_type == RawTablesLocator::LayoutType::FLAT){
+			assert(tabloc.varia_type == RawTablesLocator::VariableType::CONST);
+			global_constints.push_back(value);
+		}
+		else{ // if(tabloc.layou_type == RawTablesLocator::LayoutType::TABLE){
+			if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+				global_tables_state_i64_arrays[tabloc.table].push_back(value); }
+			else{ // if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+				global_tables_const_i64_arrays[tabloc.table].push_back(value); }
+		}
+	}
 };
 
 // and more information that is needed for the engine
@@ -495,6 +539,20 @@ struct EngineConfig{
 		};
 		std::string logfile_path;
 		std::vector<LogColumn> columns;
+	};
+	struct EventLogger{
+		struct LogColumn{
+			RawTablesLocator tabloc;
+			long id;
+		};
+		enum Format{
+			NONE
+			,NEUROML_ID_TIME
+			,NEUROML_TIME_ID
+		}format;
+		std::string logfile_path;
+		std::vector<LogColumn> columns; // for now, this just maps to the same spike_mirror_buffer + std::iota(len(columns))
+		// size_t spike_mirror_buffer; // redundant for now
 	};
 	
 	// extensions!
@@ -510,6 +568,17 @@ struct EngineConfig{
 		std::vector<InputColumn> columns;
 		std::string url, format;// TODO replace with explicit data structure ?
 	};
+	struct EventSetReader{
+		struct Port{
+			// nothing to hold for now
+		};
+		// size and layout of table is instances x columns, for now
+		std::vector< RawTablesLocator > spike_destination_tables; // per instances x columns
+		
+		Int instances; // of elements with same set of columns
+		std::vector<Port> ports;
+		std::string url, format;// TODO replace with explicit data structure ?
+	};
 	
 	long long work_items;
 	double t_initial; // in engine time units
@@ -518,10 +587,11 @@ struct EngineConfig{
 	
 	// NeuroML-standard IO facilities
 	std::vector<TrajectoryLogger> trajectory_loggers;
+	std::vector<EventLogger> event_loggers;
 	
 	// for added read/write to/from files and even other programs
 	std::vector<TrajectoryReader> timeseries_readers;
-	// TODO writer deluxe, and spikes also
+	std::vector<EventSetReader  > event_sets_readers;
 	
 	// for inter-node communication, TODO guard with ifdef ?
 	struct SendList_Impl{
@@ -538,8 +608,8 @@ struct EngineConfig{
 		size_t value_mirror_buffer;
 		ptrdiff_t value_mirror_size;
 		// refs to mirror_buffer in table accesses, as well as off-table trajectory loggers, are resolved
-		
-		std::vector< std::vector<TabEntryRef_Packed> > spike_destinations;
+		// use a more spiker-implementation-related reference LATER
+		std::vector< std::vector<RawTablesLocator> > spike_destinations;
 	};
 	std::map< int, SendList_Impl > sendlist_impls;
 	std::map< int, RecvList_Impl > recvlist_impls;
@@ -875,8 +945,21 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				Table_Weight = -1;
 			}
 		};
+		// TODO merge with syncomp implementation
+		struct SpikeRecvingImplementation{
+			size_t Table_Trig;  // for spiking synapses & hybrids
+			// these may be optional later
+			ptrdiff_t Table_Delay; // for spiking synapses & hybrids
+			ptrdiff_t Table_NextSpike;  // pending spike queue for spiking synapses & hybrids. LATER will hold more than one spike.
+			// possibly delay in sender LATER, depends on formulation
+			
+			SpikeRecvingImplementation(){
+				Table_Trig = -1; Table_Delay = Table_NextSpike = -1;
+			}
+			// what TODO with multiple spike-sending things in a compartment ??
+		};
 		struct SpikeSendingImplementation{
-			// if a native type
+			// if a complicated type (ie always)
 			ptrdiff_t Table_SpikeRecipients;
 			// possibly delay in sender LATER, depends on formulation
 			
@@ -1061,7 +1144,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				// TODO hash
 				// TODO perhaps create a structure subset, that is enough to generate the code and differentiate the codes
-				
+				CompartmentDefinition(){ spike_output = false; }
 			};
 			std::vector< CompartmentDefinition > comp_definitions;
 			
@@ -1181,6 +1264,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			std::map< Int, SynapticComponentImplementation > synapse; // per synapse type id_id
 			
 			SpikeSendingImplementation spiker; // just one for the present model of spike-sending
+			
+			// NB: due to their tabular nature, these are not allocated inline! They are allocated specially for atrificial cells, for now.
+			std::map<int, SpikeRecvingImplementation> lems__inports_to_trigvecs;
+			std::map<int, SpikeSendingImplementation> lems_outports_to_sendvecs;
 			
 			// if a LEMS component
 			//ComponentValueSignature input_component_values;
@@ -1740,20 +1827,37 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		}
 	}
 	
-	// TODO check for spike in/out as well HERE
-	
-	//------------------>  Scan synaptic projections, to aid cell type analysis
+	//------------------>  Scan synaptic projections and event loggers, to aid cell type analysis
 	// TODO what about per-compartment splitting? //perhaps generate comparmtent-internal constants and then combine with synapses to generate code
 	
-	// Gather all pre- and post- synaptic components applicable on a cell type
-	// todo name bijection
-	// per cell, set of segments
-	std::vector< std::set<Int> > spiking_outputs_per_cell_( cell_types.contents.size() );
-	std::vector< std::set<Int> > spiking_outputs_per_cell_per_compartment( cell_types.contents.size() );
+	// also TODO for loose stuff like eventconnections
+	// LATER when some state variables may be elided, sample the loggers here as well to decide on it
 	
-	// per cell, per segment, list of components
-	// for aggregation of tabular types TODO refactor
-	// clashes with deduplication of constants
+	// check for spike in/out as well
+	std::vector< std::set<Int> > spiking_outputs_per_cell_per_compartment( cell_types.contents.size() );
+	// HERE make sure it's all types of event writers!!
+	for( Int evw_seq = 0; evw_seq < (Int)sim.event_writers.contents.size(); evw_seq++ ){
+		const auto &evw = sim.event_writers.get(evw_seq);
+		for( Int col_seq = 0; col_seq < (Int)evw.outputs.size(); col_seq++ ){
+			const auto &col = evw.outputs.atSeq(col_seq);
+			const auto &path = col.selection;
+			Simulation::LemsSegmentLocator loca;
+			if(!GetCellLocationFromPath(net, path, loca)) continue;
+			if(path.type == Simulation::LemsEventPath::CELL
+			|| path.type == Simulation::LemsEventPath::SEGMENT ){
+				const auto &pop = net.populations.get(loca.population);
+				Int comp_seq = GetCompSeqForCell( cell_types.get( pop.component_cell ), cell_sigs[pop.component_cell ], loca.segment_seq , loca.fractionAlong  );
+				assert(comp_seq >= 0);
+				// NB: ignore whether the port is 'spike' for now, LATER all event ports will be scanned for instead of just 'spike'
+				spiking_outputs_per_cell_per_compartment[pop.component_cell].insert(comp_seq );
+			}
+			else{
+				assert(false); return false; // LATER
+			}
+		}
+	}
+	
+	// Gather all pre- and post- synaptic components applicable on a cell type
 	auto GetSynapseIdId = [ &synaptic_components ]( Int syncomp_seq ){
 		const SynapticComponent &syn = synaptic_components.get( syncomp_seq );
 		Int id_id;
@@ -1767,6 +1871,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// printf("%s %ld\n", synaptic_components.getName( syncomp_seq ), (long)id_id);
 		return id_id;
 	};
+	// per cell, per segment, list of components
+	// for aggregation of tabular types TODO refactor
+	// clashes with deduplication of constants
 	std::vector< std::map<Int, IdListRle> > synaptic_component_types_per_cell_( cell_types.contents.size() );
 	std::vector< std::map<Int, IdListRle> > synaptic_component_types_per_cell_per_compartment( cell_types.contents.size() );
 	
@@ -1839,8 +1946,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			keyval.second.Compact();
 		}
 	}
-	// TODO also scan event logging for emitters
-	// LATER perhaps also scan trajectory loggers too, for MPI or what? just preserve the dependencies
 	
 	//------------------>  Analyze cell types
 	
@@ -6498,8 +6603,52 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					return;
 				}
 			};
-			
-			
+			// FIXME handle each event independently!!
+			// TODO weighted events, oh dear? only if brian supports them i guess, otherwise let it stay for a while
+			// FIXME also delays on inputs! HERE AddDelay
+			auto ImplementspikeRecver_OpenEnd = [&config](
+				const std::string &flagname,
+				const SignatureAppender_Table &AppendMulti,
+				const std::string &for_what,
+				CellInternalSignature::SpikeRecvingImplementation &recver,
+				std::string &code
+			){
+				// table_Trig HERE, let's see if it works without them...
+				// const Table_Delay state Table_NextSpike
+				assert(false);
+				return true;
+			};
+			auto AllocateEventPortsAsComptype = [&AppendMulti, &ImplementspikeRecver_OpenEnd, ImplementSpikeSender](
+				const std::string &for_what, const ComponentType &comptype, CellInternalSignature::ArtificialCell &aig,
+				std::string & added_spike_recv_code, std::string &added_spike_send_code
+			){
+				for(Int port_seq = 0; port_seq < (Int)comptype.event_inputs .size(); port_seq++){
+					continue; //
+					// if(comptype.common_event_outputs.spike_in == port_seq) continue; // it is allocated explicitly?
+					// char Lems_eventin_%ld = %s;
+					if( !ImplementspikeRecver_OpenEnd(
+						("Lems_eventin_"+std::to_string(port_seq)).c_str(),
+						AppendMulti,
+						for_what+" in port "+std::to_string(port_seq),
+						aig.lems__inports_to_trigvecs[port_seq], added_spike_recv_code // HERE ccde and openend
+					) ) return false;
+					// FIXME allocate delays as well!!!
+					// direct naked input is not implemented (as a multi recipient), thus all lems in ports are allocated here
+				}
+				for(Int port_seq = 0; port_seq < (Int)comptype.event_outputs.size(); port_seq++){
+					if(comptype.common_event_outputs.spike_out == port_seq) continue; // it is allocated explicitly
+					if( !ImplementSpikeSender(
+						("!!Lems_evout_+"+std::to_string(port_seq)).c_str(),
+						AppendMulti,
+						for_what+" out port "+std::to_string(port_seq),
+						aig.lems_outports_to_sendvecs[port_seq], added_spike_send_code
+					) ) return false;
+				}
+				return true;
+			};
+			std::string added_spike_recv_code, added_spike_send_code;
+			// could use comptype_seq instead
+			const ComponentType *comptype_used = NULL;
 			if( cell.type == ArtificialCell::SPIKE_SOURCE ){
 				
 				// Now things are about to get ugly, because inputs are typically implemented as tables (and being able to specialize is important for performance)
@@ -6577,8 +6726,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					// NB: right now the frontend supports only pure lems components, or native spike list, as cells. Hence syn inputs are excluded.
 					if( input.component.ok() ){
 						const ComponentInstance &comp_inst = input.component;
+						const auto &comptype = model.component_types.get(comp_inst.id_seq);
+						comptype_used = &comptype;
 						ccde += tab+"{\n";
-				
+						
+						// allocate the in/out tables explicitly
+						if(!AllocateEventPortsAsComptype(for_what, comptype, aig, ccde, added_spike_send_code)) return false;
+						
 						ccde += DescribeLemsInline.SingleInstance( comp_inst, tab, for_what, aig.component, config.debug );
 						
 						ccde += tab+"spike_out_flag |= Lems_eventout_spike;\n";
@@ -6597,8 +6751,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				if( cell.component.ok() ){
 					const auto &compinst = cell.component;
 					const auto &comptype = model.component_types.get(compinst.id_seq);
+					comptype_used = &comptype;
 					
 					aig.component = DescribeLems::AllocateSignature(model.dimensions, comptype, compinst, &AppendSingle, for_what + " LEMS");
+					
+					// allocate the in/out tables explicitly
+					if(!AllocateEventPortsAsComptype(for_what, comptype, aig, ccde, added_spike_send_code)) return false;
 					
 				}
 				else{
@@ -6653,7 +6811,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					auto &component = aig.component;
 					
 					ccde += tab+"// LEMS assigned\n";
-					std::string lemscode = DescribeLems::Assigned(comptype, model.dimensions, component, &AppendSingle_CellScope, for_what, tab, cell_wig.random_call_counter, config.debug && 0 );
+					std::string lemscode = DescribeLems::Assigned(comptype, model.dimensions, component, &AppendSingle, for_what, tab, cell_wig.random_call_counter, config.debug && 0 );
 					ccde += lemscode;
 					
 					// also add integration code here, to finish with component code (and get event outputs !)
@@ -6687,7 +6845,17 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					for_what,
 					aig.spiker, ccde
 				) ) return false;
+				// now clone this to the lems component implementations as well
+				if(comptype_used){
+					const auto &comptype = *comptype_used;
+					auto outport_seq = comptype.common_event_outputs.spike_out;
+					if(outport_seq >= 0){
+						aig.lems_outports_to_sendvecs[outport_seq] = aig.spiker;
+					}
+				}
+				
 			}
+			ccde += added_spike_send_code;
 			
 			EmitWorkItemRoutineFooter( sig.code );
 			EmitKernelFileFooter( sig.code );
@@ -6989,7 +7157,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	
 	
 	// symbolic reference to some point, on some neuron, under NeuroML
-	// TODO replace with LemsQuantityPath or equivalent
+	// NB: should thois be replaced by LemsSegmentLocator, or saty to show how to use an alternative identifier? ... it doesn't make mauch sense becuase it is no more, no less than a LemsSemgnetLocator in this case. TODO eliminate.
 	// what should be done with fractionalong vs ? one workaround is to know the discretization beforehand and use the middle of each compartment as discrete fractionAlong (it's not like it's practical to vary things if the discrete element is the same i guess?)
 	struct PointOnCellLocator{
 		Int population;
@@ -7040,6 +7208,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		static PointOnCellLocator from(const Simulation::LemsSegmentLocator &loca){
 			return PointOnCellLocator{loca.population, loca.cell_instance, loca.segment_seq, loca.fractionAlong};
 		}
+		Simulation::LemsSegmentLocator toLems() const {
+			return {population, cell_instance, segment, fractionAlong};;
+		}
 	};
 	
 	#ifdef USE_MPI
@@ -7085,14 +7256,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 	};
 	
-	
 	// list of what this node sends to peers that need it
 	struct SendList{
 		// Order in vectors is same as order in sent packet
 		// (and is the order that the receiver requested)
 		std::vector<PointOnCellLocator> vpeer_sources;
 		std::vector<Simulation::LemsQuantityPath> value_refs;
-		std::vector<PointOnCellLocator> spike_sources;
+		std::vector<Simulation::LemsEventPath> spike_sources;
 	};
 	
 	// list of what this node needs from other peers
@@ -7101,8 +7271,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// existing references to state variables, to be remapped to the mirror buffers according to type and point on cell
 		std::map< PointOnCellLocator, std::vector< TabEntryRef_Packed > > vpeer_refs;
 		
+		// set of spikes to send, for whatever purpose
+		
 		// positions of trigger buffers, to be updated by spikes originating from points on cell
-		std::map< PointOnCellLocator, std::vector< TabEntryRef_Packed > > spike_refs;
+		std::map< std::string, std::vector<RawTablesLocator> > spike_refs;
 		
 		// it gets complicated here, because there are so far two resolution targets: int64 refs within tables, and logger refs outside them.
 		// Keep a std::set to be the full set of vars requested(?), and two std::maps for the specific cases.
@@ -7131,18 +7303,25 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		long long entry = table.size();
 		
-		TabEntryRef_Packed packed_id = GetEncodedTableEntryId( glob_tab_Vpeer, entry );
-		
-		recv_lists[remote_node].vpeer_refs[loc].push_back(packed_id);	
+		TabEntryRef_Packed packed_id = GetEncodedTableEntryId( glob_tab_Vpeer, entry );		
+		recv_lists[remote_node].vpeer_refs[loc].push_back(packed_id);
+		// RawTablesLocator tabloc = {(ptrdiff_t) glob_tab_Vpeer, (int)entry, RawTablesLocator::TABLE, RawTablesLocator::CONST, RawTablesLocator::I64};
+		// recv_lists[remote_node].vpeer_refs[loc].push_back(tabloc);
 		
 		long long temp_id = -100 - remote_node;
+		// if(!SetVpeerPacked(, temp_id)) return false; // while there is a single implementation of the way, there is a sense in setting explict i64 ... or not?
+		
 		table.push_back(temp_id);
 		
 		return true;
 	};
-	auto AppendRemoteDependency_Spike = [ &recv_lists ]( const PointOnCellLocator &loc, int remote_node, TabEntryRef_Packed trig_buf_ref ){
-		// printf("remotespike %d, %s, %llx, %zd\n", remote_node, loc.toPresentableString().c_str(), trig_buf_ref, recv_lists[remote_node].spike_refs[loc].size() );
-		recv_lists[remote_node].spike_refs[loc].push_back(trig_buf_ref);	
+	auto AppendRemoteDependency_Spike = [ &recv_lists, &model, &net ]( const Simulation::LemsEventPath &path, int remote_node, const RawTablesLocator &tabloc ){
+		std::string sPath;
+		if(!model.LemsEventPathToString(net, path, sPath)){
+			printf("recvlist add spike to string failed\n");
+			return false;
+		}
+		recv_lists[remote_node].spike_refs[sPath].push_back(tabloc);	
 		
 		return true;
 	};
@@ -7176,7 +7355,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	// Unfortunately, this means all nodes need to consider the existence of neuron Global ID's of all peers
 	// LATER make a file format that enables fully distributed loading, through pre-processed domain decomposition (using e.g. METIS, or Scotch)
 	
-	// Mapping of neuron GIDs <-> ( nodes, work items, PointOnCellLocator's )
+	// Mapping of neuron GIDs <-> ( nodes, work items, PointOnCellLocators or paths )
 	
 	std::map< Int, int > neuron_gid_to_node;	
 	std::vector< std::map<Int, Int> > neuron_gid_per_cell_per_population( net.populations.contents.size() );
@@ -7185,7 +7364,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	std::map< Int, work_t > neuron_gid_to_workitem;
 	
 	// similar to PointOnCellLocator
-	// XXX refactor better
+	// TODO SOON refactor better
 	struct CellLocator_PopInst {
 		Int pop_seq;
 		Int inst_seq;
@@ -7249,19 +7428,32 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		return ret;
 	};
 	
-	auto LocateNodeForPath = [&net, &GetRemoteNode_FromPopInst]( const Simulation::LemsQuantityPath &path, int &node ){
+	auto LocateNodeForSegLoc = [&net, &GetRemoteNode_FromPopInst]( const auto &path, int &node ){
 		Simulation::LemsSegmentLocator loca;
-		if( GetCellLocationFromPath(net, path, loca) ){
-			Int nodecode = GetRemoteNode_FromPopInst(loca.population, loca.cell_instance);
-			if(nodecode == ~0xABadD00d) return false;
-			node = (Int) nodecode; return true;
-		}
+		if( !GetCellLocationFromPath(net, path, loca) ) return false;
+		Int nodecode = GetRemoteNode_FromPopInst(loca.population, loca.cell_instance);
+		if(nodecode == ~0xABadD00d) assert(false);
+		node = (Int) nodecode;
+		return true;
+	};
+	auto LocateNodeForPath = [&net, &LocateNodeForSegLoc]( const Simulation::LemsQuantityPath &path, int &node ){
+		if( LocateNodeForSegLoc(path, node) ) return true;
 		else{
 			if( path.type == Simulation::LemsQuantityPath::DATAREADER ){
 				node = 0; // for now at least, LATER use a mapper to determine
 				return true;
 			}
 			// LATER with official LEMS synapse paths and such
+			return false;
+		}
+	};
+	auto LocateNodeForEventPath = [&net, &LocateNodeForSegLoc]( const Simulation::LemsEventPath &path, int &node ){
+		if( LocateNodeForSegLoc(path, node) ) return true;
+		else{
+			if( path.type == Simulation::LemsEventPath::EVENTREADER ){
+				node = 0; // for now at least, LATER use a mapper to determine
+				return true;
+			}
 			return false;
 		}
 	};
@@ -7274,7 +7466,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	// so only a realized population -> work items mapping needs to be maintained
 	
 	std::vector< std::vector<size_t> >  workunit_per_cell_per_population( net.populations.contents.size() ); // will extend to include compartments, somehow LATER
-	// GetLocalWorkItem_FromPopInst
+	// TODO unify GetLocalWorkItem_FromPopInst to get work unit or negative? vs workunitornode...
 	
 	#endif
 	
@@ -7333,6 +7525,27 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				reader.columns.push_back(column);
 			}
 			
+		}
+		
+		engine_config.event_sets_readers.resize( net.event_readers.size() );
+		for( Int evr_seq = 0; evr_seq < (Int) net.event_readers.size(); evr_seq++ ){
+			
+			auto &evr =  net.event_readers.get(evr_seq);
+			EngineConfig::EventSetReader &reader = engine_config.event_sets_readers[evr_seq];
+			
+			reader.instances = evr.instances;
+			reader.url = evr.source_url;
+			reader.format = evr.data_format;
+			for( Int por_seq = 0; por_seq < (Int)evr.ports.size(); por_seq++ ) reader.ports.emplace_back();
+			// and fill in the destination lists
+			for( Int inst_seq = 0; inst_seq < evr.instances; inst_seq++ ){
+				for( Int por_seq = 0; por_seq < (Int)evr.ports.size(); por_seq++ ){
+					// create a row for the reader, in tabs; one row per element x port
+					size_t dest_table = tabs.global_tables_const_i64_arrays.size();
+					tabs.global_tables_const_i64_arrays.emplace_back();
+					reader.spike_destination_tables.push_back({(ptrdiff_t) dest_table, 0, RawTablesLocator::TABLE, RawTablesLocator::CONST, RawTablesLocator::I64});
+				}
+			}
 		}
 	}
 	
@@ -7648,6 +7861,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				Tau  .push_back(syn.exp.tauDecay);
 				
 				Grel.push_back(0); // LATER initialize the synapses somehow
+	
 				
 				//could re-use globals LATER
 				break;
@@ -7718,18 +7932,66 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		}
 		
 	};
-	auto GetCompartmentSpikerImplementation = [ &cell_types ]( const CellInternalSignature &sig, Int celltype_seq, Int seg_seq, Real fractionAlong ){
+	// LATER with more varied types, as objects with virtual interfaces, or sth
+	// typedef RawTablesLocator SpikeSendImplRef;
+	// typedef RawTablesLocator SpikeRecvImplRef;
+	
+	// add target to the source's on fire list
+	auto AddSpikeTarget = [&tabs](const RawTablesLocator &source_tabloc, const RawTablesLocator &target_tabloc, const ILogSimpleProxy &log_error = printf_stderr ){
+		// printf("source %s\n", source_tabloc.Stringify().c_str());
+		// printf("target %s\n", target_tabloc.Stringify().c_str());
+		if(!(  source_tabloc.layou_type == RawTablesLocator::LayoutType::TABLE 
+			&& source_tabloc.varia_type == RawTablesLocator::VariableType::CONST 
+			&& source_tabloc.forma_type == RawTablesLocator::FormatType::I64 ))
+			{ log_error("event source tabloc not a table int64 const!"); return false; }
+		if(!(source_tabloc.entry == 0))
+			{ log_error("event source tabloc not nonzero entry!"); return false; }
+		if(!(  target_tabloc.layou_type == RawTablesLocator::LayoutType::TABLE 
+			&& target_tabloc.varia_type == RawTablesLocator::VariableType::STATE 
+			&& target_tabloc.forma_type == RawTablesLocator::FormatType::I64 ))
+			{ log_error("event target tabloc not a table int64 state!"); return false; }
+		// TODO check the target type as well? 
+		auto packed_id = GetEncodedTableEntryId(target_tabloc.table, target_tabloc.entry);
+		tabs.global_tables_const_i64_arrays[source_tabloc.table].push_back( packed_id );
+		return true;
+	};
+	/*
+	// set target's pointer to the source value
+	auto SetVpeerPacked = [&tabs](const RawTablesLocator &source_tabloc, const RawTablesLocator &target_tabloc, const ILogSimpleProxy &log_error = printf_stderr ){
+		if(!( source_tabloc.varia_type == RawTablesLocator::VariableType::STATE 
+			&& source_tabloc.forma_type == RawTablesLocator::FormatType::F32 ))
+			{ log_error("vpeer source tabloc not a float state!"); return false; }
+		if(!( target_tabloc.varia_type == RawTablesLocator::VariableType::CONST 
+			&& target_tabloc.forma_type == RawTablesLocator::FormatType::I64 ))
+			{ log_error("vpeer target tabloc not a int64 const!"); return false; }
+		auto packed_id = GetEncodedTableEntryId(source_tabloc.table, source_tabloc.entry);
+		tabs.GetSingleI64(target_tabloc) = ( packed_id );
+		return true;
+	};
+	*/
+	auto PathToCellSpiker = [&model, &net](const Simulation::LemsSegmentLocator &loca, Simulation::LemsEventPath &spiker_path, const ILogProxy &log = printf_stderr){
+		std::string string_path;
+		model.LemsSegmentLocatorToString(net, loca, string_path);
+		string_path += "/spike"; // it's convenient that the spike emitter has the same name everywhere, unlike v which could be V as well
+		printf("eifni %s\n", string_path.c_str());
+		return model.ParseLemsEventPath(log, string_path.c_str(), NULL, net, spiker_path);
+	};
+	// TODO move to more general aux
+	/*
+	auto PathToVpeer = [&cell_types](Int celltype_seq, const Simulation::LemsSegmentLocator &loca){
+		Simulation::LemsQuantityPath path;
+		(Simulation::LemsSegmentLocator &) path = loca;
 		const CellType &cell_type = cell_types.get(celltype_seq);
 		if( cell_type.type == CellType::PHYSICAL ){
-			auto comp_seq = sig.physical_cell.compartment_discretization.GetCompartmentForSegmentLocation(seg_seq, fractionAlong);
-			return sig.physical_cell.comp_implementations.at(comp_seq).spiker;
+			path.type = Simulation::LemsQuantityPath::Type::SEGMENT;
+			path.segment.type = Simulation::LemsQuantityPath::Segmentpath::Type::VOLTAGE;
 		}
 		else{
-			return sig.artificial_cell.spiker;
+			
+			comp_type.common_exposures.membrane_voltage
 		}
-		
 	};
-	
+	*/
 	auto GetCompartmentVoltageStatevarIndex = [ &cell_types ]( const CellInternalSignature &sig, Int celltype_seq, Int seg_seq, Real fractionAlong ){
 		const CellType &cell_type = cell_types.get(celltype_seq);
 		if( cell_type.type == CellType::PHYSICAL ){
@@ -7742,24 +8004,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	};
 	
 	#ifdef USE_MPI
-	// Variants of GetXxxImplementation, including ???
-	auto GetCompartmentSpikerImplementation_Global = [ &net, &cell_sigs, &tabs, &GetLocalWorkItem_FromPopInst, &GetCompartmentSpikerImplementation ]( const PointOnCellLocator &loc, size_t &spiker_table_idx ){
-		
-		const auto &pop = net.populations.get(loc.population);
-		// TODO for split cell
-		auto celltype_seq = pop.component_cell;
-		const CellInternalSignature &sig = cell_sigs.at(celltype_seq);
-		
-		ptrdiff_t work_unit = GetLocalWorkItem_FromPopInst( loc.population, loc.cell_instance );
-		assert( work_unit >= 0 ); // LATER make fallible ?
-		
-		ptrdiff_t local_offset = GetCompartmentSpikerImplementation( sig, celltype_seq, loc.segment, loc.fractionAlong ).Table_SpikeRecipients;
-		assert( local_offset >= 0 );
-		
-		spiker_table_idx = tabs.global_table_const_i64_index[work_unit] + local_offset;
-		
-		return true;
-	};
+	// Variants of GetXxxImplementation, including ??? TODO remove since they should be the same whether mpi or not?
+	// TODO merge with its only caller i guess
 	auto GetCompartmentVoltageStatevarIndex_Global = [ &net, &cell_sigs, &tabs, &GetLocalWorkItem_FromPopInst, &GetCompartmentVoltageStatevarIndex ]( const PointOnCellLocator &loc ){
 		const auto &pop = net.populations.get(loc.population);
 		// TODO for split cell
@@ -7776,488 +8022,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		return global_idx_V_peer;
 	};
 	#endif
-	// create connectivity after cells are instantiated, for simplicity:
-	
-	// also populate the inputs
-	printf("Creating inputs...\n");
-	
-	timeval time_inps_start, time_inps_end;
-	gettimeofday(&time_inps_start, NULL);
-	
-	for(size_t inp_seq = 0; inp_seq < net.inputs.size(); inp_seq++){
-		const auto &inp = net.inputs[inp_seq];
-		// printf("input cell %ld seq %ld\n", (Int)inp.cell_instance, (Int)inp.segment );
-		const auto &source = input_sources.get(inp.component_type);
-		const auto &pop = net.populations.get(inp.population);
-		
-		// get Cell type/Compartment instance
-		const auto &sig = cell_sigs[pop.component_cell];
-		
-		//get work unit from type/population/instance
-		#ifdef USE_MPI
-		
-		ptrdiff_t work_unit = GetLocalWorkItem_FromPopInst( inp.population, inp.cell_instance );
-		if( work_unit < 0 ) continue;
-		
-		#else
-		
-		size_t work_unit = workunit_per_cell_per_population[inp.population][inp.cell_instance];
-		// branch for whole cell or compartment LATER
-		#endif
-		
-		const auto &inpimps = GetCompartmentInputImplementations(sig, pop.component_cell, inp.segment, inp.fractionAlong);
-		
-		// get Input type
-		Int id_id = GetInputIdId( inp.component_type );
-		
-		if( !inpimps.count(id_id) ){
-			printf("Internal error: No input implementation for input type %ld\n", id_id);
-			return false;
-		}
-		const CellInternalSignature::InputImplementation &inpimp = inpimps.at(id_id);
-		
-		// consider the common tables such as weight
-		const auto off_cf32 = tabs.global_table_const_f32_index[work_unit];
-		// const auto off_sf32 = tabs.global_table_state_f32_index[work_unit];
-		const auto off_si64 = tabs.global_table_state_i64_index[work_unit];
-		auto &tab_cf32 = tabs.global_tables_const_f32_arrays;
-		// auto &tab_sf32 = tabs.global_tables_state_f32_arrays;
-		auto &tab_si64 = tabs.global_tables_state_i64_arrays;
-		
-		// TODO something about the LEMS weight property, or ignore it if LEMS does so
-		float weight = inp.weight;
-		if( !std::isfinite(weight) ) weight = 1;
-		// NB use this as the only reliable counter (until weights get elided LATER). TODO implement an instance counter per id_id instead.
-		RawTables::Table_F32 &weights = tab_cf32[ off_cf32 + inpimp.Table_Weight ];
-		input_seq_to_idid_instance[inp_seq] = (Int) weights.size();
-		weights.push_back(weight);
-		
-		// helpers
-		auto PopulateSpikeList = [ &tab_cf32, &off_cf32, &tab_si64, &off_si64 ]( const auto &spike_list, auto &inpimp ){
-			// append spike list to the common vector, also a sentinel to avoid checking the indices
-			// also append a start and an initial position
-			RawTables::Table_F32 &times = tab_cf32[off_cf32 + inpimp.Table_SpikeListTimes];
-			//RawTables::Table_F32 &starts = tab_ci64[off_ci64 + inpimp.Table_SpikeListStarts];
-			RawTables::Table_I64 &positions = tab_si64[off_si64 + inpimp.Table_SpikeListPos];
-			
-			positions.push_back( times.size() );
-			
-			for( auto spike : spike_list ) times.push_back( spike.time_of_occurrence );
-			times.push_back( FLT_MAX ); // sentinel value
-			
-		};
-		
-		// could re-use globals LATER
-		if(id_id < 0){
-			InputSource::Type core_id = InputSource::Type(id_id + InputSource::Type::MAX);
-			
-			switch(core_id){
-				
-			case InputSource::Type::PULSE :{
-				
-				RawTables::Table_F32 &Imax = tab_cf32[off_cf32 + inpimp.Table_Imax];
-				RawTables::Table_F32 &start = tab_cf32[off_cf32 + inpimp.Table_Delay];
-				RawTables::Table_F32 &duration = tab_cf32[off_cf32 + inpimp.Table_Duration];
-				
-				Imax.push_back(source.amplitude);
-				start.push_back(source.delay);
-				duration.push_back(source.duration);
-				
-				break;
-			}
-			case InputSource::Type::SPIKE_LIST :{
-				
-				PopulateSpikeList( source.spikes, inpimp );
-				
-				break;
-			}
-			default:
-				// internal error
-				printf("populate: Unknown input core_id %d\n", core_id);
-				return false;
-			}
-		}
-		else{
-			if(
-				source.type == InputSource::Type::TIMED_SYNAPTIC
-				|| source.type == InputSource::Type::POISSON_SYNAPSE
-				|| source.type == InputSource::Type::POISSON_SYNAPSE_TRANSIENT
-			){
-				
-				if( source.type == InputSource::Type::TIMED_SYNAPTIC ){
-					PopulateSpikeList( source.spikes, inpimp );
-				}
-				else if(
-					source.type == InputSource::Type::POISSON_SYNAPSE
-					|| source.type == InputSource::Type::POISSON_SYNAPSE_TRANSIENT
-				){
-					DescribeLems_AppendTableEntry( work_unit, source.component, inpimp.component );
-				}
-				else{
-					printf("internal error: input component %ld append for what sort of firing synapse input? \n", id_id);
-					return false;
-				}
-				
-				// and append comp. signature to tables of same type
-				const auto &syn = synaptic_components.get(source.synapse);
-				if( !AppendSyncompInternals( syn, GetSynapseIdId(source.synapse), work_unit, inpimp.synimpl, tabs ) ) return false;
-				
-			}
-			else if( source.component.ok() ){
-				DescribeLems_AppendTableEntry( work_unit, source.component, inpimp.component );
-			}
-			else{
-				printf("internal error: populate unknown input id %ld\n", id_id);
-				return false;
-			}
-		}
-		
-	}
-	
-	gettimeofday(&time_inps_end, NULL);
-	printf("Created inputs in %.4lf sec.\n",TimevalDeltaSec(time_inps_start, time_inps_end));
-	
-	// also populate the synapses
-	// place the append syncomp lambda somewhere here LATER
-	printf("Creating synapses...\n");
-	
-	timeval time_syns_start, time_syns_end;
-	gettimeofday(&time_syns_start, NULL);
-	
-	for(size_t proj_seq = 0; proj_seq < net.projections.contents.size(); proj_seq++){
-		
-		// printf("Projection %zd of %zd \n", proj_seq, net.projections.contents.size() );
-		
-		const auto &proj = net.projections.contents.at(proj_seq);
-		const auto &prepop = net.populations.get(proj.presynapticPopulation);
-		const auto &postpop = net.populations.get(proj.postsynapticPopulation);
-		
-		// get Cell type/Compartment instance. TODO remove?
-		const auto &presig = cell_sigs[prepop.component_cell];
-		const auto &postsig = cell_sigs[postpop.component_cell];
-		
-		auto AppendSynapticComponentEntries = [
-			&model, &prepop, &AppendSyncompInternals, &GetSynapseIdId,
-			&GetCompartmentSynapseImplementations, &GetCompartmentSpikerImplementation, &GetCompartmentVoltageStatevarIndex
-			#ifdef USE_MPI
-			, &AppendRemoteDependency_Vpeer, &AppendRemoteDependency_Spike
-			#endif
-		](
-			const SynapticComponent &syn, Int syncomp_seq, const Network::Projection::Connection &conn,
-			const PointOnCellLocator &mine_loc,
-			const PointOnCellLocator &peer_loc,
-			work_t work_unit, const CellInternalSignature &sig, Int mine_cell_type_seq,
-			work_t peer_work_unit,const CellInternalSignature &peer_sig, Int peer_cell_type_seq,
-			Int &new_instance_seq, RawTables &tabs
-		){
-			new_instance_seq = -1;
-			// TODO perhaps early exit if local work item is remote
-			// branch for whole cell or compartment LATER
-			
-			Int id_id = GetSynapseIdId( syncomp_seq );
-			
-			const bool needs_spike = syn.HasSpikeIn(model.component_types);
-			const bool needs_Vpeer = syn.HasVpeer(model.component_types);
-			
-			// get weight value early on, just in case remote may need it ...?
-			Real weight = conn.weight;
-			if( !std::isfinite(weight) ) weight = 1;
-			
-			// get the underlying mechanism
-			// TODO might not exist, if this node doesn't work with this cell type
-			const auto &synimps = GetCompartmentSynapseImplementations( mine_loc );
-			if(!synimps.count(id_id)){
-				printf("Internal error: No impl signature for type %ld\n", id_id);
-				printf("Synimps: " );
-				for( auto keyval : synimps ) printf("%ld ", keyval.first );
-				printf("\n" );
-				return false;
-			}
-			const CellInternalSignature::SynapticComponentImplementation &synimpl = synimps.at(id_id);
-			
-			// also add weight
-			auto AddWeight = [ &tabs ]( work_t work_unit, const auto &synimpl, Real weight, Int &new_instance_seq ){
-				if( work_unit < 0 ){
-					return true; // not on this node
-				}
-				const auto off_cf32 = tabs.global_table_const_f32_index[work_unit];
-				auto      &tab_cf32 = tabs.global_tables_const_f32_arrays;
-				auto &weights = tab_cf32[ off_cf32 + synimpl.Table_Weight ];
-				
-				new_instance_seq = (Int) weights.size(); // TODO move to dedicated variable! along with cell_sigs, could be called netimpl
-				
-				weights.push_back(weight);
-				return true;
-			};
-			bool uses_weight = true; // might be elided LATER, be careful to maintain the per instance cross references
-			if( uses_weight ) AddWeight( work_unit, synimpl, weight, new_instance_seq );
-			
-			if( needs_Vpeer ){
-				
-				auto AddGap = [ 
-					&GetCompartmentVoltageStatevarIndex
-					#ifdef USE_MPI
-					, &AppendRemoteDependency_Vpeer
-					#endif
-				](
-					const SynapticComponent &syn,
-					work_t work_unit, const CellInternalSignature::SynapticComponentImplementation &synimpl, //const CellInternalSignature &sig, Int comp_seq,
-					work_t peer_work_unit,const CellInternalSignature &peer_sig, Int peer_cell_type_seq,
-					const PointOnCellLocator &peer_loc,					
-					auto &tabs
-				){
-					
-					if( work_unit < 0 ){
-						return true; // not mine, let the need to send emerge
-					}
-					
-					
-					const auto off_ci64 = tabs.global_table_const_i64_index[work_unit];
-					auto &tab_ci64 = tabs.global_tables_const_i64_arrays;
-					
-					auto glob_tab_Vpeer = off_ci64 + synimpl.Table_Vpeer;
-					
-					RawTables::Table_I64 &Vpeer = tab_ci64.at(glob_tab_Vpeer);
-					
-					// if it exists on this node
-					#if USE_MPI
-					if( peer_work_unit < 0 ){
-						
-						int node_peer = ~(peer_work_unit);
-						// get the value from remote peer
-						if( !AppendRemoteDependency_Vpeer( peer_loc, node_peer, glob_tab_Vpeer ) ) return false;
-						return true;
-					}
-					#endif
-					// otherwise it's local
-					// TODO use single 
-					ptrdiff_t local_idx_V_peer = GetCompartmentVoltageStatevarIndex( peer_sig, peer_cell_type_seq, peer_loc.segment, peer_loc.fractionAlong );
-						
-					if( local_idx_V_peer < 0 ){
-						printf("internal error: gap junction realization: Cell type %ld has no Vpeer\n",peer_cell_type_seq );
-						return false;
-					}
-					
-					// get reference to where peer's voltage is located
-					ptrdiff_t global_idx_V_peer = tabs.global_state_f32_index[peer_work_unit] + local_idx_V_peer;
-					TabEntryRef_Packed global_tabentry = GetEncodedTableEntryId( tabs.global_state_tabref, global_idx_V_peer);
-					
-					Vpeer.push_back(global_tabentry);
-					
-					return true;
-				};
-				
-				if( !AddGap(syn, work_unit, synimpl, peer_work_unit, peer_sig, peer_cell_type_seq, peer_loc, tabs) ) return false;
-			}
-			
-			if( needs_spike ){
-				// LATER validate conditions one more time:
-				// pre-synaptic must have a spike output port
-				// post-synaptic must have a spike input
-				
-				auto AddDelay = [ &tabs ]( work_t work_unit, const auto &synimpl, Real delay ){
-					if( work_unit < 0 ){
-						return true; // not on this node
-					}
-					const auto off_cf32 = tabs.global_table_const_f32_index[work_unit];
-					auto      &tab_cf32 = tabs.global_tables_const_f32_arrays;
-					const auto off_sf32 = tabs.global_table_state_f32_index[work_unit];
-					auto      &tab_sf32 = tabs.global_tables_state_f32_arrays;
-					
-					tab_cf32[ off_cf32 + synimpl.Table_Delay ].push_back(delay);
-					tab_sf32[ off_sf32 + synimpl.Table_NextSpike ].push_back(-INFINITY);
-					
-					return true;
-				};
-				
-				// delay is common for all 
-				bool uses_delay = true;
-				if( uses_delay ){
-					
-					Real delay = conn.delay;
-					if( !std::isfinite(conn.delay) ) delay = 0;
-					
-					AddDelay( work_unit, synimpl, delay );
-				}
-				
-				
-				auto AddChemPrePost = [
-					&prepop, &GetCompartmentSpikerImplementation
-					#ifdef USE_MPI
-					, &AppendRemoteDependency_Spike
-					#endif
-				](
-					const SynapticComponent &syn,
-					work_t post_work_unit, const CellInternalSignature::SynapticComponentImplementation &post_synimpl,
-					work_t pre_work_unit,const CellInternalSignature &pre_sig, Int pre_cell_type_seq,
-					const PointOnCellLocator &pre_loc,
-					auto &tabs
-				){
-					
-					if( post_work_unit < 0 ){
-						return true; // not mine, let it be resolved on spike-receiver demands later on
-					}
-					
-					// and now add the entries to the post syn table
-					auto AddPost = [ ]( auto &tabs, work_t work_unit, const auto &synimpl){
-						
-						const auto off_si64 = tabs.global_table_state_i64_index[work_unit];
-						auto &tab_si64 = tabs.global_tables_state_i64_arrays;
-						
-						RawTables::Table_I64 &Trig  = tab_si64.at(off_si64 + synimpl.Table_Trig );
-						Trig.push_back(0); // perhaps compress trigger table LATER
-						
-						return true;
-					};
-					
-					//post has trig buf, gives idx to sender
-					
-					// and where the spike target is located in each post-synaptic work item
-						
-					//TODO change for split cell? just find the compartment responsible
-					
-					long long global_idx_T_dest_table = tabs.global_table_state_i64_index[post_work_unit] + post_synimpl.Table_Trig; 
-					// printf("yyyyyy %lld %lld %lld\n\n\n", post_work_unit, tabs.global_table_state_i64_index[post_work_unit], global_idx_T_dest_table );
-					long long entry_idx_T_dest = tabs.global_tables_state_i64_arrays[global_idx_T_dest_table].size(); // TODO change to reflect when handling mask, perhaps encapsulate
-					auto packed_id = GetEncodedTableEntryId( global_idx_T_dest_table, entry_idx_T_dest );
-					
-					if( !AddPost( tabs, post_work_unit, post_synimpl) ) return false;
-					
-					#ifdef USE_MPI
-					if( pre_work_unit < 0 ){
-						
-						// needs to ask for spike input from pre, and keep the map from packed received input to buf
-						int node_pre = ~(pre_work_unit); // TODO refactor
-						if( !AppendRemoteDependency_Spike( pre_loc, node_pre, packed_id ) ) return false;
-						return true;
-					}
-					#endif
-					// local pre, needs idx from sender
-						
-					// XXX do this for emergent remote ones too
-					
-					// Spike output is required to exist on pre compartment
-					const auto &preimp = GetCompartmentSpikerImplementation( pre_sig, pre_cell_type_seq, pre_loc.segment, pre_loc.fractionAlong );
-					if( preimp.Table_SpikeRecipients < 0 ){
-						printf("Internal error: No spike send for celltype %ld seg %ld fractionAlong %g %zd\n", prepop.component_cell, pre_loc.segment, pre_loc.fractionAlong, preimp.Table_SpikeRecipients);
-						return false;
-					}
-					
-					RawTables::Table_I64 &Spike_recipients = tabs.global_tables_const_i64_arrays.at(tabs.global_table_const_i64_index.at(pre_work_unit) + preimp.Table_SpikeRecipients);
-					
-					Spike_recipients.push_back(packed_id);
-					
-					return true;
-				};
-				
-				if( !AddChemPrePost(syn, work_unit, synimpl, peer_work_unit, peer_sig, peer_cell_type_seq, peer_loc, tabs) ) return false;
-			};
-			
-			if( work_unit >= 0 ){
-				// and join them, implementing internal mech. just once
-				if( !AppendSyncompInternals( syn, id_id, work_unit, synimpl, tabs ) ) return false;
-			}
-			
-			
-			return true; // yay!
-		};
-		
-		for(size_t conn_seq = 0; conn_seq < proj.connections.contents.size(); conn_seq++){
-			const auto &conn = proj.connections.contents[conn_seq];
-			
-			// printf("Connection %zd of %zd \n", conn_seq, proj.connections.contents.size() ); fflush(stdout);
-			
-			const PointOnCellLocator pre_loc  = { proj.presynapticPopulation , conn.preCell , conn.preSegment , conn.preFractionAlong  }; // XXX refactor into GetPre or sth
-			const PointOnCellLocator post_loc = { proj.postsynapticPopulation, conn.postCell, conn.postSegment, conn.postFractionAlong };
-			
-			//get work unit from type/population/instance. TODO replace with something better, using work_unit only when applicable. (eg split cell)
-			
-			#ifdef USE_MPI
-			
-			work_t work_unit_pre  = WorkUnitOrNode( proj.presynapticPopulation , conn.preCell  );
-			work_t work_unit_post = WorkUnitOrNode( proj.postsynapticPopulation, conn.postCell );
-			
-			#else 
-			
-			work_t work_unit_pre = workunit_per_cell_per_population[proj.presynapticPopulation][conn.preCell];
-			work_t work_unit_post = workunit_per_cell_per_population[proj.postsynapticPopulation][conn.postCell];
-			
-			#endif
-			
-			// printf("connnn %lx %ld\n", work_unit_pre, work_unit_post); fflush(stdout);
-			
-			// now populate the synaptic components in the raw tables
-			if(conn.type == Network::Projection::Connection::SPIKING){
-				// TODO validate conditions:
-				// pre-synaptic must have a spike output port
-				// post-synaptic must have a spike input
-				
-				const SynapticComponent &syn = synaptic_components.get(conn.synapse);
-				
-				if( !AppendSynapticComponentEntries(
-					syn, conn.synapse, conn,
-					post_loc, pre_loc,
-					work_unit_post, postsig, postpop.component_cell,
-					work_unit_pre , presig , prepop.component_cell ,
-					conn_seq_to_idid_instance_post[proj_seq][conn_seq], tabs
-				) ) return false;
-			}
-			else if(conn.type == Network::Projection::Connection::ELECTRICAL){
-				// same behaviour for pre-and post-synaptic
-				// Vpeer is required, and it always exists for physical compartments
-				
-				const SynapticComponent &syn = synaptic_components.get(conn.synapse);
-				
-				if( !AppendSynapticComponentEntries(
-					syn, conn.synapse, conn,
-					post_loc, pre_loc,
-					work_unit_post, postsig, postpop.component_cell,
-					work_unit_pre , presig , prepop.component_cell ,
-					conn_seq_to_idid_instance_pre [proj_seq][conn_seq], tabs
-				) ) return false;
-				if( !AppendSynapticComponentEntries(
-					syn, conn.synapse, conn,
-					pre_loc, post_loc,
-					work_unit_pre , presig , prepop.component_cell ,
-					work_unit_post, postsig, postpop.component_cell,
-					conn_seq_to_idid_instance_post[proj_seq][conn_seq], tabs
-				) ) return false;	
-			}
-			else if(conn.type == Network::Projection::Connection::CONTINUOUS){
-				// anything goes, really
-				const SynapticComponent &syn_pre  = synaptic_components.get(conn.continuous.preComponent );
-				const SynapticComponent &syn_post = synaptic_components.get(conn.continuous.postComponent);
-				
-				if( !AppendSynapticComponentEntries(
-					syn_post, conn.continuous.postComponent, conn,
-					post_loc, pre_loc,
-					work_unit_post, postsig, postpop.component_cell,
-					work_unit_pre , presig , prepop.component_cell ,
-					conn_seq_to_idid_instance_pre [proj_seq][conn_seq], tabs
-				) ) return false;
-				if( !AppendSynapticComponentEntries(
-					syn_pre , conn.continuous.preComponent , conn,
-					pre_loc, post_loc,
-					work_unit_pre , presig , prepop.component_cell ,
-					work_unit_post, postsig, postpop.component_cell,
-					conn_seq_to_idid_instance_post[proj_seq][conn_seq], tabs
-				) ) return false;
-			}
-			else{
-				printf("internal error: populate unknown synapse type projection %zd instance %zd\n", proj_seq, conn_seq);
-				return false;
-			}
-			// printf("conndone %zd %zd\n", proj_seq, conn_seq); fflush(stdout);
-		}
-		
-	}
-	
-	gettimeofday(&time_syns_end, NULL);
-	printf("Created synapses in %.4lf sec.\n",TimevalDeltaSec(time_syns_start, time_syns_end));
-	
-	// LATER move IO buffers as well as MPI mirrors to before allocating for the actual model, to see if more remapping can be done inline	
-	printf("Creating data outputs...\n");
-	
 	auto MustBePhysicalCell = [](const auto &log_error, const CellType &cell_type ){
 		if( cell_type.type != CellType::PHYSICAL ){
 			log_error("internal error: channel path on non-physical cell");
@@ -8273,8 +8037,64 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		return true;
 	};
 	
-	// TODO move to before syn instnatiation, to allow for uniform path access
-	auto LocateEntryFromPath = [&]( const Simulation::LemsQuantityPath &path, RawTablesLocator &tabloc, const auto &log_error = printf ){
+	// is both input and output, input is format, variable, layout type and subentry on entry,
+	auto MapCellWorkitemSubentryToLocation = [](const auto &log_error, const RawTables &tabs, work_t work_unit, RawTablesLocator &tabloc){
+		
+		if(tabloc.layou_type == RawTablesLocator::LayoutType::FLAT){
+			// offset the entry, overwrithe the table to global flat
+			if(tabloc.forma_type == RawTablesLocator::FormatType::F32){
+				if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+					tabloc.table = tabs.global_state_tabref;
+					tabloc.entry += (int) tabs.global_state_f32_index[work_unit];
+					return true;
+				}
+				else if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+					tabloc.table = tabs.global_const_tabref;
+					tabloc.entry += (int) tabs.global_const_f32_index[work_unit];
+					return true;
+				}
+				else{ assert(false); return false; }
+			}
+			else if(tabloc.forma_type == RawTablesLocator::FormatType::I64){
+				if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+					tabloc.table = tabs.global_cinst_tabref;
+					tabloc.entry += (int) tabs.global_const_i64_index[work_unit];
+					return true;
+				}
+				log_error("internal error: flat subentry state i64 not supported yet");
+				return false;
+			}
+			else{ assert(false); return false; }
+		}
+		else if(tabloc.layou_type == RawTablesLocator::LayoutType::TABLE){
+			// keep the entry, offset the table
+			if(tabloc.forma_type == RawTablesLocator::FormatType::F32){
+				if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+					tabloc.table += tabs.global_table_state_f32_index[work_unit];
+					return true;
+				}
+				else if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+					tabloc.table += tabs.global_table_const_f32_index[work_unit];
+					return true;
+				}
+				else{ assert(false); return false; }
+			}
+			else if(tabloc.forma_type == RawTablesLocator::FormatType::I64){
+				if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+					tabloc.table += tabs.global_table_state_i64_index[work_unit];
+					return true;
+				}
+				else if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+					tabloc.table += tabs.global_table_const_i64_index[work_unit];
+					return true;
+				}
+				else{ assert(false); return false; }
+			}
+			else{ assert(false); return false; }
+		}
+		else{ assert(false); return false; }
+	};
+	auto LocateEntryFromPath = [&]( const Simulation::LemsQuantityPath &path, RawTablesLocator &tabloc, const auto &log_error = printf_stderr ){
 		typedef Simulation::LemsQuantityPath::SynapsePath SynPath;
 		typedef Simulation::InputInstanceQuantityPath InpPath;
 		typedef RawTablesLocator::VariableType VariaType;
@@ -8312,63 +8132,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 			
 		};
-		// is both input and output, input is format, variable, layout type and subentry on entry,
-		auto MapCellWorkitemSubentryToLocation = [](const auto &log_error, const RawTables &tabs, work_t work_unit, RawTablesLocator &tabloc){
-			
-			if(tabloc.layou_type == RawTablesLocator::LayoutType::FLAT){
-				// offset the entry, overwrithe the table to global flat
-				if(tabloc.forma_type == RawTablesLocator::FormatType::F32){
-					if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
-						tabloc.table = tabs.global_state_tabref;
-						tabloc.entry += (int) tabs.global_state_f32_index[work_unit];
-						return true;
-					}
-					else if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
-						tabloc.table = tabs.global_const_tabref;
-						tabloc.entry += (int) tabs.global_const_f32_index[work_unit];
-						return true;
-					}
-					else{ assert(false); return false; }
-				}
-				else if(tabloc.forma_type == RawTablesLocator::FormatType::I64){
-					if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
-						tabloc.table = tabs.global_cinst_tabref;
-						tabloc.entry += (int) tabs.global_const_i64_index[work_unit];
-						return true;
-					}
-					log_error("internal error: flat subentry state i64 not supported yet");
-					return false;
-				}
-				else{ assert(false); return false; }
-			}
-			else if(tabloc.layou_type == RawTablesLocator::LayoutType::TABLE){
-				// keep the entry, offset the table
-				if(tabloc.forma_type == RawTablesLocator::FormatType::F32){
-					if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
-						tabloc.table += tabs.global_table_state_f32_index[work_unit];
-						return true;
-					}
-					else if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
-						tabloc.table += tabs.global_table_const_f32_index[work_unit];
-						return true;
-					}
-					else{ assert(false); return false; }
-				}
-				else if(tabloc.forma_type == RawTablesLocator::FormatType::I64){
-					if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
-						tabloc.table += tabs.global_table_state_i64_index[work_unit];
-						return true;
-					}
-					else if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
-						tabloc.table += tabs.global_table_const_i64_index[work_unit];
-						return true;
-					}
-					else{ assert(false); return false; }
-				}
-				else{ assert(false); return false; }
-			}
-			else{ assert(false); return false; }
-		};
 		
 		Simulation::LemsSegmentLocator loca;
 		if( GetCellLocationFromPath(net, path, loca) ){
@@ -8401,8 +8164,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			int32_t comp_seq = -1;
 			if( cell_type.type == CellType::PHYSICAL ){
 				if( loca.segment_seq >= 0 ){
-					comp_seq = GetCompSeqForCell(cell_type, sig, loca.segment_seq, loca.fractionAlong); // NB: LEMS refs lack fractionAlong for now, test if it's been fixed HERE
-					// TODO add fractionAlong to path
+					comp_seq = GetCompSeqForCell(cell_type, sig, loca.segment_seq, loca.fractionAlong); // NB: LEMS refs used to lack fractionAlong for now, keep an eye on if it's been fixed
 					if(comp_seq < 0){
 						log_error("internal error: could not resolve on segment path");// should not happen as of now, guard for when this case happens LATER
 						return false;
@@ -8702,6 +8464,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						log_error("internal error: lems quantity path for artificial cell that's actually an input source: none native");
 						return false;
 					}
+					// XXX due to confusion sion issues stemming from the lems input's role as a component with possibly vpeer? they are are allocated as aig.component, inpimpl.component is not used yet !! but native inputs are implemented as usual, TODO fix
 					if(!LocateSubentryFromComponentPath(log_error, source.component, aig.component, path.lems_quantity_path, tabloc.varia_type, tabloc.forma_type, tabloc.entry)) return false;
 				}
 				else{
@@ -8745,30 +8508,707 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		return true;
 	};
 	
+	auto LocateEntryFromEventPath = [&]( const Simulation::LemsEventPath &path, RawTablesLocator &tabloc, const ILogSimpleProxy &log_error = printf_stderr ){
+		typedef Simulation::InputInstanceEventPath InpPath;
+		typedef RawTablesLocator::VariableType VariaType;
+		typedef RawTablesLocator::FormatType FormaType;
+		// printf("locating for path %s\n", model.LemsEventPathToStringOrEmpty(net,path).c_str());
+		Simulation::LemsSegmentLocator loca;
+		if( GetCellLocationFromPath(net, path, loca) ){
+			const auto &pop = net.populations.get(loca.population);
+			const auto &cell_type = cell_types.get(pop.component_cell);
+			
+			// get work item for this neuron here, or perhaps further on when compartments are work items
+			#ifdef USE_MPI
+			work_t work_unit = WorkUnitOrNode( loca.population, loca.cell_instance );
+			if( work_unit < 0 ) return false; // TODO return node name or leave it to the caller? where should the domain decomposition be checked
+			// TODO leave the check to the caller?
+			#else
+			work_t work_unit = workunit_per_cell_per_population[loca.population][loca.cell_instance];
+			if( work_unit < 0 ) return false; // TODO check the indices as well!
+			#endif
+			
+			// get sig for said neuron, to properly manipulate the work item
+			const auto &sig = cell_sigs[pop.component_cell];
+			
+			// commonly used paths (evidence mounts to use parent class form commonish things like inputs and synapses)
+			
+			// otherwise cell-type-specific paths
+			
+			// NB currently, all cell-facing references have a valid reference to segment. (That is 0 for artificial cells.)
+			// But this could not always hold LATER...
+			// This is moved in this scope tentatively, to avoid copy pasting deeper in
+			int32_t comp_seq = -1;
+			if( cell_type.type == CellType::PHYSICAL ){
+				if( loca.segment_seq >= 0 ){
+					comp_seq = GetCompSeqForCell(cell_type, sig, loca.segment_seq, loca.fractionAlong);
+					if(comp_seq < 0){
+						log_error("internal error: could not resolve on segment path");// should not happen as of now, guard for when this case happens LATER
+						return false;
+					}
+				}
+				else{
+					log_error("internal error: missing segment # on locator");// should not happen as of now, guard for when this case happens LATER
+					return false;
+				}
+			}
+			// XXX deduplicate!
+			typedef Simulation::LemsEventPath Path;
+			switch(path.type){
+			case Path::Type::SEGMENT: {
+				typedef Path::Segment SegPath;
+				if(!MustBePhysicalCell(log_error, cell_type)) return false;
+				// const PhysicalCell &cell = cell_type.physical;
+				auto &pig = sig.physical_cell;
+				
+				switch(path.segment.type){
+					
+					case SegPath::Type::SPIKE: {
+						// printf("locate spik cell %ld seg %ld comp %d\n", (Int)loca.cell_instance, (Int)loca.segment_seq, (int) comp_seq );
+						tabloc.layou_type = RawTablesLocator::LayoutType::TABLE;
+						tabloc.varia_type = RawTablesLocator::VariableType::CONST;
+						tabloc.forma_type = RawTablesLocator::FormatType::I64;
+						// TODO map subentry maybe?
+						size_t global_idx_targets = tabs.global_table_const_i64_index[work_unit] + pig.comp_implementations.at(comp_seq).spiker.Table_SpikeRecipients; // LATER change for split cell?
+						printf("offset %d ->  %d\n", (int)work_unit, (int)tabs.global_table_const_i64_index[work_unit]);
+						tabloc.table = global_idx_targets;
+						tabloc.entry = 0; // TODO use negative maybe?
+						return true;
+					}
+					default: {
+						log_error("segment-located event path not supported yet");
+						return false;
+					}
+				}
+				
+				break;
+			}
+			case Path::Type::CELL:{
+				
+				auto LocateSubentryFromCellComponentPath = [&component_types](const auto &log_error, const ComponentInstance &compinst, const CellInternalSignature::ArtificialCell &aig, const Simulation::LemsInstanceEventPath &lemspath, RawTablesLocator::VariableType &varia_type, RawTablesLocator::FormatType &forma_type, auto &subentry){
+					
+					// Int comp_type_seq = compinst.id_seq;
+					// const ComponentType &comp_type = component_types.get(comp_type_seq);
+					const auto &event_port_seq = lemspath.event_port_seq;
+					
+					if( lemspath.type == Simulation::LemsInstanceEventPath::Type::IN ){
+						varia_type = RawTablesLocator::VariableType::STATE;
+						forma_type = RawTablesLocator::FormatType::I64;
+						if(!aig.lems__inports_to_trigvecs.count(event_port_seq)){
+							log_error("internal error: no spike in implementation for comptype %s port %d", component_types.getName(compinst.id_seq), (int)event_port_seq);
+							assert(false); return false;
+						}
+						subentry = aig.lems__inports_to_trigvecs.at(event_port_seq).Table_Trig;
+						return true;
+					}
+					else if( lemspath.type == Simulation::LemsInstanceEventPath::Type::OUT ){
+						varia_type = RawTablesLocator::VariableType::CONST;
+						forma_type = RawTablesLocator::FormatType::I64;
+						if(!aig.lems_outports_to_sendvecs.count(event_port_seq)){
+							log_error("internal error: no spike out implementation for comptype %s port %d", component_types.getName(compinst.id_seq), (int)event_port_seq);
+							assert(false); return false;
+						}
+						subentry = aig.lems_outports_to_sendvecs.at(event_port_seq).Table_SpikeRecipients;
+						return true;
+					}
+					else{
+						assert(false); return false;
+					}
+				};
+				if(!MustBeArtificialCell(log_error, cell_type)) return false;
+				const ArtificialCell &cell = cell_type.artificial;
+				auto &aig = sig.artificial_cell;
+				
+				tabloc.layou_type = RawTablesLocator::LayoutType::TABLE; tabloc.table = -1; tabloc.entry = -1; // we know this for all in/out vecs until LATER?
+				tabloc.table = -1;
+				// TODO wrap this in GetCellsubentry or sth?
+				if(path.cell.type == Path::Cell::Type::INPUT){
+					Int source_seq = cell_type.artificial.spike_source_seq;
+					const InputSource &source = input_sources.get(source_seq);
+					
+					// NOTE: only inputs that don't generate current are allowed to be artificial cells, which rules out synapse children
+					// and also the only non lemsified input source (ie explicit spike train) atm
+					if(path.cell.input.type == InpPath::NATIVE){
+						switch(path.cell.input.native_entry){
+							case InpPath::SPIKE:{
+								tabloc.varia_type = VariaType::CONST;
+								tabloc.forma_type = FormaType::I64;
+								tabloc.table = aig.spiker.Table_SpikeRecipients;
+								tabloc.entry = 0; // TODO negative or too high cookie maybe?
+							break;}
+							default: assert(false); return false;
+						}
+					}
+					else if(path.cell.input.type == InpPath::LEMS){
+						if( !source.component.ok() ){
+							log_error("internal error: lems event path for artificial cell that's actually an input component: but it's native instead!");
+							return false;
+						}
+						if(!LocateSubentryFromCellComponentPath(log_error, source.component, aig, path.cell.input.lems_event_path, tabloc.varia_type, tabloc.forma_type, tabloc.table)) return false;
+						tabloc.entry = 0; // TODO negative or too high cookie maybe?
+					}
+					else{
+						log_error("internal error: lems event path for artificial cell that's actually an input source: refers to not native or lems");
+						assert(false); return false;
+					}
+				}
+				else{
+					if( !cell.component.ok() ){
+						log_error("internal error: lems event path for artificial cell: none native");
+						return false;
+					}
+					if(!LocateSubentryFromCellComponentPath(log_error, cell.component, aig, path.cell.lems_event_path, tabloc.varia_type, tabloc.forma_type, tabloc.table)) return false;
+					tabloc.entry = 0; // TODO use negative maybe?
+				}
+				
+				// TODO in physical cells, remember the offsets for deduplicated compartments! pig.comp_implementations wait... isn't that done by calcium already?
+				if(!MapCellWorkitemSubentryToLocation(log_error, tabs, work_unit, tabloc)) return false;
+				// printf("tabloc %s\n", tabloc.Stringify().c_str());
+				return true;
+			}
+			default: {
+				log_error("not supported yet : cell-based event path type %d", path.type);
+				return false;
+			}
+			}
+		}
+		else if(path.type == Simulation::LemsEventPath::Type::EVENTREADER){
+			if(!i_log_the_data) return false; // or check if spike_destination_tables is empty
+			const auto &basepath = path;
+			const Simulation::LemsEventPath::Reader &path = basepath.reader;
+			
+			const auto &dar = net.event_readers.get(path.read_seq);
+			
+			tabloc = engine_config.event_sets_readers[path.read_seq]
+				.spike_destination_tables[((Int)dar.ports.size() * path.inst_seq) + path.port_seq]; 
+			return true;
+		}
+		else{
+			log_error("not supported yet : non-cell-based path type %d", path.type);
+			return false;
+		}
+	};
+	
+	// create connectivity after cells are instantiated, for simplicity:
+	
+	// also populate the inputs
+	printf("Creating inputs...\n");
+	
+	timeval time_inps_start, time_inps_end;
+	gettimeofday(&time_inps_start, NULL);
+	
+	for(size_t inp_seq = 0; inp_seq < net.inputs.size(); inp_seq++){
+		const auto &inp = net.inputs[inp_seq];
+		// printf("input cell %ld seq %ld\n", (Int)inp.cell_instance, (Int)inp.segment );
+		const auto &source = input_sources.get(inp.component_type);
+		const auto &pop = net.populations.get(inp.population);
+		
+		// get Cell type/Compartment instance
+		const auto &sig = cell_sigs[pop.component_cell];
+		
+		//get work unit from type/population/instance
+		#ifdef USE_MPI
+		
+		ptrdiff_t work_unit = GetLocalWorkItem_FromPopInst( inp.population, inp.cell_instance );
+		if( work_unit < 0 ) continue;
+		
+		#else
+		
+		size_t work_unit = workunit_per_cell_per_population[inp.population][inp.cell_instance];
+		// branch for whole cell or compartment LATER
+		#endif
+		
+		const auto &inpimps = GetCompartmentInputImplementations(sig, pop.component_cell, inp.segment, inp.fractionAlong);
+		
+		// get Input type
+		Int id_id = GetInputIdId( inp.component_type );
+		
+		if( !inpimps.count(id_id) ){
+			printf("Internal error: No input implementation for input type %ld\n", id_id);
+			return false;
+		}
+		const CellInternalSignature::InputImplementation &inpimp = inpimps.at(id_id);
+		
+		// consider the common tables such as weight
+		const auto off_cf32 = tabs.global_table_const_f32_index[work_unit];
+		// const auto off_sf32 = tabs.global_table_state_f32_index[work_unit];
+		const auto off_si64 = tabs.global_table_state_i64_index[work_unit];
+		auto &tab_cf32 = tabs.global_tables_const_f32_arrays;
+		// auto &tab_sf32 = tabs.global_tables_state_f32_arrays;
+		auto &tab_si64 = tabs.global_tables_state_i64_arrays;
+		
+		// TODO something about the LEMS weight property, or ignore it if LEMS does so
+		float weight = inp.weight;
+		if( !std::isfinite(weight) ) weight = 1;
+		// NB use this as the only reliable counter (until weights get elided LATER). TODO implement an instance counter per id_id instead.
+		RawTables::Table_F32 &weights = tab_cf32[ off_cf32 + inpimp.Table_Weight ];
+		input_seq_to_idid_instance[inp_seq] = (Int) weights.size();
+		weights.push_back(weight);
+		
+		// helpers
+		auto PopulateSpikeList = [ &tab_cf32, &off_cf32, &tab_si64, &off_si64 ]( const auto &spike_list, auto &inpimp ){
+			// append spike list to the common vector, also a sentinel to avoid checking the indices
+			// also append a start and an initial position
+			RawTables::Table_F32 &times = tab_cf32[off_cf32 + inpimp.Table_SpikeListTimes];
+			//RawTables::Table_F32 &starts = tab_ci64[off_ci64 + inpimp.Table_SpikeListStarts];
+			RawTables::Table_I64 &positions = tab_si64[off_si64 + inpimp.Table_SpikeListPos];
+			
+			positions.push_back( times.size() );
+			
+			for( auto spike : spike_list ) times.push_back( spike.time_of_occurrence );
+			times.push_back( FLT_MAX ); // sentinel value
+			
+		};
+		
+		// could re-use globals LATER
+		if(id_id < 0){
+			InputSource::Type core_id = InputSource::Type(id_id + InputSource::Type::MAX);
+			
+			switch(core_id){
+				
+			case InputSource::Type::PULSE :{
+				
+				RawTables::Table_F32 &Imax = tab_cf32[off_cf32 + inpimp.Table_Imax];
+				RawTables::Table_F32 &start = tab_cf32[off_cf32 + inpimp.Table_Delay];
+				RawTables::Table_F32 &duration = tab_cf32[off_cf32 + inpimp.Table_Duration];
+				
+				Imax.push_back(source.amplitude);
+				start.push_back(source.delay);
+				duration.push_back(source.duration);
+				
+				break;
+			}
+			case InputSource::Type::SPIKE_LIST :{
+				
+				PopulateSpikeList( source.spikes, inpimp );
+				
+				break;
+			}
+			default:
+				// internal error
+				printf("populate: Unknown input core_id %d\n", core_id);
+				return false;
+			}
+		}
+		else{
+			if(
+				source.type == InputSource::Type::TIMED_SYNAPTIC
+				|| source.type == InputSource::Type::POISSON_SYNAPSE
+				|| source.type == InputSource::Type::POISSON_SYNAPSE_TRANSIENT
+			){
+				
+				if( source.type == InputSource::Type::TIMED_SYNAPTIC ){
+					PopulateSpikeList( source.spikes, inpimp );
+				}
+				else if(
+					source.type == InputSource::Type::POISSON_SYNAPSE
+					|| source.type == InputSource::Type::POISSON_SYNAPSE_TRANSIENT
+				){
+					DescribeLems_AppendTableEntry( work_unit, source.component, inpimp.component );
+				}
+				else{
+					printf("internal error: input component %ld append for what sort of firing synapse input? \n", id_id);
+					return false;
+				}
+				
+				// and append comp. signature to tables of same type
+				const auto &syn = synaptic_components.get(source.synapse);
+				if( !AppendSyncompInternals( syn, GetSynapseIdId(source.synapse), work_unit, inpimp.synimpl, tabs ) ) return false;
+				
+			}
+			else if( source.component.ok() ){
+				DescribeLems_AppendTableEntry( work_unit, source.component, inpimp.component );
+			}
+			else{
+				printf("internal error: populate unknown input id %ld\n", id_id);
+				return false;
+			}
+		}
+		
+	}
+	
+	gettimeofday(&time_inps_end, NULL);
+	printf("Created inputs in %.4lf sec.\n",TimevalDeltaSec(time_inps_start, time_inps_end));
+	
+	// also populate the synapses
+	// place the append syncomp lambda somewhere here LATER
+	printf("Creating synapses...\n");
+	
+	timeval time_syns_start, time_syns_end;
+	gettimeofday(&time_syns_start, NULL);
+	
+	for(size_t proj_seq = 0; proj_seq < net.projections.contents.size(); proj_seq++){
+		
+		// printf("Projection %zd of %zd \n", proj_seq, net.projections.contents.size() );
+		
+		const auto &proj = net.projections.contents.at(proj_seq);
+		const auto &prepop = net.populations.get(proj.presynapticPopulation);
+		const auto &postpop = net.populations.get(proj.postsynapticPopulation);
+		
+		// get Cell type/Compartment instance. TODO remove?
+		const auto &presig = cell_sigs[prepop.component_cell];
+		const auto &postsig = cell_sigs[postpop.component_cell];
+		
+		auto AppendSynapticComponentEntries = [
+			&model, &net, &AppendSyncompInternals,
+			&GetSynapseIdId, &GetCompartmentSynapseImplementations, 
+			&PathToCellSpiker, &AddSpikeTarget, &LocateEntryFromEventPath,
+			&GetCompartmentVoltageStatevarIndex
+			#ifdef USE_MPI
+			, &AppendRemoteDependency_Vpeer, &AppendRemoteDependency_Spike
+			#endif
+		](
+			const SynapticComponent &syn, Int syncomp_seq, const Network::Projection::Connection &conn,
+			const PointOnCellLocator &mine_loc,
+			const PointOnCellLocator &peer_loc,
+			work_t work_unit, const CellInternalSignature &sig, Int mine_cell_type_seq,
+			work_t peer_work_unit,const CellInternalSignature &peer_sig, Int peer_cell_type_seq,
+			Int &new_instance_seq, RawTables &tabs
+		){
+			new_instance_seq = -1;
+			// TODO perhaps early exit if local work item is remote
+			// branch for whole cell or compartment LATER
+			
+			Int id_id = GetSynapseIdId( syncomp_seq );
+			
+			const bool needs_spike = syn.HasSpikeIn(model.component_types);
+			const bool needs_Vpeer = syn.HasVpeer(model.component_types);
+			
+			// get weight value early on, just in case remote may need it ...?
+			Real weight = conn.weight;
+			if( !std::isfinite(weight) ) weight = 1;
+			
+			// get the underlying mechanism
+			// TODO might not exist, if this node doesn't work with this cell type
+			const auto &synimps = GetCompartmentSynapseImplementations( mine_loc );
+			if(!synimps.count(id_id)){
+				printf("Internal error: No impl signature for type %ld\n", id_id);
+				printf("Synimps: " );
+				for( auto keyval : synimps ) printf("%ld ", keyval.first );
+				printf("\n" );
+				return false;
+			}
+			const CellInternalSignature::SynapticComponentImplementation &synimpl = synimps.at(id_id);
+			
+			// also add weight
+			auto AddWeight = [ &tabs ]( work_t work_unit, const auto &synimpl, Real weight, Int &new_instance_seq ){
+				if( work_unit < 0 ){
+					return true; // not on this node
+				}
+				const auto off_cf32 = tabs.global_table_const_f32_index[work_unit];
+				auto      &tab_cf32 = tabs.global_tables_const_f32_arrays;
+				auto &weights = tab_cf32[ off_cf32 + synimpl.Table_Weight ];
+				
+				new_instance_seq = (Int) weights.size(); // TODO move to dedicated variable! along with cell_sigs, could be called netimpl
+				
+				weights.push_back(weight);
+				return true;
+			};
+			bool uses_weight = true; // might be elided LATER, be careful to maintain the per instance cross references
+			if( uses_weight ) AddWeight( work_unit, synimpl, weight, new_instance_seq );
+			
+			if( needs_Vpeer ){
+				
+				auto AddGap = [ 
+					&GetCompartmentVoltageStatevarIndex
+					#ifdef USE_MPI
+					, &AppendRemoteDependency_Vpeer
+					#endif
+				](
+					const SynapticComponent &syn,
+					work_t work_unit, const CellInternalSignature::SynapticComponentImplementation &synimpl, //const CellInternalSignature &sig, Int comp_seq,
+					work_t peer_work_unit,
+					const CellInternalSignature &peer_sig, 
+					Int peer_cell_type_seq,
+					const PointOnCellLocator &peer_loc,					
+					// const LemsSegmentLocator &peer_loca,					
+					auto &tabs
+				){
+					// auto peer_path = GetPathToVpeerFromLoca(peer_loca);
+					if( work_unit < 0 ){
+						return true; // not mine, let the need to send emerge
+					}
+					
+					
+					const auto off_ci64 = tabs.global_table_const_i64_index[work_unit];
+					auto &tab_ci64 = tabs.global_tables_const_i64_arrays;
+					
+					auto glob_tab_Vpeer = off_ci64 + synimpl.Table_Vpeer;
+					
+					RawTables::Table_I64 &Vpeer = tab_ci64.at(glob_tab_Vpeer);
+					
+					// if it exists on this node
+					#if USE_MPI
+					if( peer_work_unit < 0 ){
+						
+						int node_peer = ~(peer_work_unit);
+						// get the value from remote peer
+						if( !AppendRemoteDependency_Vpeer( peer_loc, node_peer, glob_tab_Vpeer ) ) return false;
+						// NB: the backref was added on, and there is nothing else non-intenral to fill, hence: return now, or not ... LATER
+						return true;
+					}
+					#endif
+					// otherwise it's local
+					// TODO use single?
+					// RawTablesLocator peer_tabloc;
+					// if(!LocateEntryFromPath(peer_path, peer_tabloc)){
+					// 	printf("internal error: gap junction realization: cannot locate Vpeer voltage for path %s\n", model.LemsQuantityPathToStringOrEmpty(net, peer_path).c_str() );
+					// 	return false;
+					// }
+					ptrdiff_t local_idx_V_peer = GetCompartmentVoltageStatevarIndex( peer_sig, peer_cell_type_seq, peer_loc.segment, peer_loc.fractionAlong );
+					if( local_idx_V_peer < 0 ){
+						printf("internal error: gap junction realization: cannot locate Vpeer voltage for loc %s\n", peer_loc.toPresentableString().c_str() );
+						return false;
+					}
+					
+					// get reference to where peer's voltage is located
+					ptrdiff_t global_idx_V_peer = tabs.global_state_f32_index[peer_work_unit] + local_idx_V_peer;
+					TabEntryRef_Packed global_tabentry = GetEncodedTableEntryId( tabs.global_state_tabref, global_idx_V_peer);
+					
+					// TODO move these to before mpi check, and remove the pushing from it, so that the tabloc is the same.
+					Vpeer.push_back(global_tabentry);
+					// RawTablesLocator target_tabloc = {(ptrdiff_t)glob_tab_Vpeer, (int) Vpeer.size()-1, RawTablesLocator::TABLE, RawTablesLocator::CONST, RawTablesLocator::I64};
+					
+					// if(!SetVpeerPacked(peer_tabloc, target_tabloc))return false;
+					
+					return true;
+				};
+				
+				if( !AddGap(syn, work_unit, synimpl, peer_work_unit, peer_sig, peer_cell_type_seq, peer_loc, tabs) ) return false;
+			}
+			
+			if( needs_spike ){
+				// LATER validate conditions one more time:
+				// pre-synaptic must have a spike output port
+				// post-synaptic must have a spike input
+				
+				auto AddDelay = [ &tabs ]( work_t work_unit, const auto &synimpl, Real delay ){
+					if( work_unit < 0 ){
+						return true; // not on this node
+					}
+					const auto off_cf32 = tabs.global_table_const_f32_index[work_unit];
+					auto      &tab_cf32 = tabs.global_tables_const_f32_arrays;
+					const auto off_sf32 = tabs.global_table_state_f32_index[work_unit];
+					auto      &tab_sf32 = tabs.global_tables_state_f32_arrays;
+					
+					tab_cf32[ off_cf32 + synimpl.Table_Delay ].push_back(delay);
+					tab_sf32[ off_sf32 + synimpl.Table_NextSpike ].push_back(-INFINITY);
+					
+					return true;
+				};
+				
+				// delay is common for all 
+				bool uses_delay = true;
+				if( uses_delay ){
+					
+					Real delay = conn.delay;
+					if( !std::isfinite(conn.delay) ) delay = 0;
+					
+					AddDelay( work_unit, synimpl, delay );
+				}
+				
+				
+				auto AddChemPrePost = [
+					&model, &net,
+					&PathToCellSpiker, &LocateEntryFromEventPath, &AddSpikeTarget
+					#ifdef USE_MPI
+					, &AppendRemoteDependency_Spike
+					#endif
+				](
+					const SynapticComponent &syn,
+					work_t post_work_unit, const CellInternalSignature::SynapticComponentImplementation &post_synimpl,
+					work_t pre_work_unit,const CellInternalSignature &pre_sig, Int pre_cell_type_seq,
+					const PointOnCellLocator &pre_loc,
+					auto &tabs
+				){
+					
+					if( post_work_unit < 0 ){
+						return true; // not mine, let it be resolved on spike-receiver demands later on
+					}
+					
+					// and now add the entries to the post syn table
+					auto AddPost = [ ]( auto &tabs, work_t work_unit, const auto &synimpl){
+						
+						const auto off_si64 = tabs.global_table_state_i64_index[work_unit];
+						auto &tab_si64 = tabs.global_tables_state_i64_arrays;
+						
+						RawTables::Table_I64 &Trig  = tab_si64.at(off_si64 + synimpl.Table_Trig );
+						Trig.push_back(0); // perhaps compress trigger table LATER
+						
+						return true;
+					};
+					
+					//post has trig buf, gives idx to sender
+					
+					// and where the spike target is located in each post-synaptic work item
+						
+					//TODO change for split cell? just find the compartment responsible
+					
+					long long global_idx_T_dest_table = tabs.global_table_state_i64_index[post_work_unit] + post_synimpl.Table_Trig; 
+					// printf("yyyyyy %lld %lld %lld\n\n\n", post_work_unit, tabs.global_table_state_i64_index[post_work_unit], global_idx_T_dest_table );
+					long long entry_idx_T_dest = tabs.global_tables_state_i64_arrays[global_idx_T_dest_table].size(); // TODO change to reflect when handling mask, perhaps encapsulate
+					// for path resolution, all synpases have to be accessible TODO ... and type safety can be resolved like it's done for projections
+					RawTablesLocator target_tabloc = {(ptrdiff_t)global_idx_T_dest_table, (int)entry_idx_T_dest, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::I64};
+					// auto packed_id = GetEncodedTableEntryId( global_idx_T_dest_table, entry_idx_T_dest );
+					
+					// TODO maybe AddSpikeTarget should handle this as well?
+					if( !AddPost( tabs, post_work_unit, post_synimpl) ) return false;
+					
+					// now attach to 
+					Simulation::LemsEventPath source_path;
+					if(!PathToCellSpiker(pre_loc.toLems(), source_path, printf_stderr)) return false;
+					
+					#ifdef USE_MPI
+					if( pre_work_unit < 0 ){
+						
+						// needs to ask for spike input from pre, and keep the map from packed received input to buf
+						int node_pre = ~(pre_work_unit); // TODO refactor
+						if( !AppendRemoteDependency_Spike( source_path, node_pre, target_tabloc ) ) return false;
+						return true;
+					}
+					#endif
+					// local pre, needs idx from sender
+					// Spike output is required to exist on pre compartment
+					// const auto &preimp = GetCompartmentSpikerImplementation( pre_sig, pre_cell_type_seq, pre_loc.segment, pre_loc.fractionAlong );
+					// preimp.Table_SpikeRecipients < 0
+					RawTablesLocator source_tabloc = {0};
+					if(!LocateEntryFromEventPath(source_path, source_tabloc)){
+						std::string s;
+						printf("Internal error: No spike send for %d %s\n", (int)model.LemsEventPathToString(net, source_path, s), s.c_str());
+						return false;
+					}
+					if(!AddSpikeTarget(source_tabloc, target_tabloc)) return false;
+					// RawTables::Table_I64 &Spike_recipients = tabs.global_tables_const_i64_arrays.at(tabs.global_table_const_i64_index.at(pre_work_unit) + preimp.Table_SpikeRecipients);
+					
+					// Spike_recipients.push_back(packed_id); // TODO make a wrapper for the underlying table or sth ... or at least tabloc?
+					
+					return true;
+				};
+				
+				if( !AddChemPrePost(syn, work_unit, synimpl, peer_work_unit, peer_sig, peer_cell_type_seq, peer_loc, tabs) ) return false;
+			};
+			
+			if( work_unit >= 0 ){
+				// and join them, implementing internal mech. just once
+				if( !AppendSyncompInternals( syn, id_id, work_unit, synimpl, tabs ) ) return false;
+			}
+			
+			
+			return true; // yay!
+		};
+		
+		for(size_t conn_seq = 0; conn_seq < proj.connections.contents.size(); conn_seq++){
+			const auto &conn = proj.connections.contents[conn_seq];
+			
+			// printf("Connection %zd of %zd \n", conn_seq, proj.connections.contents.size() ); fflush(stdout);
+			
+			const PointOnCellLocator pre_loc  = { proj.presynapticPopulation , conn.preCell , conn.preSegment , conn.preFractionAlong  }; // XXX refactor into GetPre or sth
+			const PointOnCellLocator post_loc = { proj.postsynapticPopulation, conn.postCell, conn.postSegment, conn.postFractionAlong };
+			
+			//get work unit from type/population/instance. TODO replace with something better, using work_unit only when applicable. (eg split cell)
+			
+			#ifdef USE_MPI
+			
+			work_t work_unit_pre  = WorkUnitOrNode( proj.presynapticPopulation , conn.preCell  );
+			work_t work_unit_post = WorkUnitOrNode( proj.postsynapticPopulation, conn.postCell );
+			
+			#else 
+			
+			work_t work_unit_pre = workunit_per_cell_per_population[proj.presynapticPopulation][conn.preCell];
+			work_t work_unit_post = workunit_per_cell_per_population[proj.postsynapticPopulation][conn.postCell];
+			
+			#endif
+			
+			// printf("connnn %lx %ld\n", work_unit_pre, work_unit_post); fflush(stdout);
+			
+			// now populate the synaptic components in the raw tables
+			if(conn.type == Network::Projection::Connection::SPIKING){
+				// TODO validate conditions:
+				// pre-synaptic must have a spike output port
+				// post-synaptic must have a spike input
+				
+				const SynapticComponent &syn = synaptic_components.get(conn.synapse);
+				
+				if( !AppendSynapticComponentEntries(
+					syn, conn.synapse, conn,
+					post_loc, pre_loc,
+					work_unit_post, postsig, postpop.component_cell,
+					work_unit_pre , presig , prepop.component_cell ,
+					conn_seq_to_idid_instance_post[proj_seq][conn_seq], tabs
+				) ) return false;
+			}
+			else if(conn.type == Network::Projection::Connection::ELECTRICAL){
+				// same behaviour for pre-and post-synaptic
+				// Vpeer is required, and it always exists for physical compartments
+				
+				const SynapticComponent &syn = synaptic_components.get(conn.synapse);
+				
+				if( !AppendSynapticComponentEntries(
+					syn, conn.synapse, conn,
+					post_loc, pre_loc,
+					work_unit_post, postsig, postpop.component_cell,
+					work_unit_pre , presig , prepop.component_cell ,
+					conn_seq_to_idid_instance_pre [proj_seq][conn_seq], tabs
+				) ) return false;
+				if( !AppendSynapticComponentEntries(
+					syn, conn.synapse, conn,
+					pre_loc, post_loc,
+					work_unit_pre , presig , prepop.component_cell ,
+					work_unit_post, postsig, postpop.component_cell,
+					conn_seq_to_idid_instance_post[proj_seq][conn_seq], tabs
+				) ) return false;	
+			}
+			else if(conn.type == Network::Projection::Connection::CONTINUOUS){
+				// anything goes, really
+				const SynapticComponent &syn_pre  = synaptic_components.get(conn.continuous.preComponent );
+				const SynapticComponent &syn_post = synaptic_components.get(conn.continuous.postComponent);
+				
+				if( !AppendSynapticComponentEntries(
+					syn_post, conn.continuous.postComponent, conn,
+					post_loc, pre_loc,
+					work_unit_post, postsig, postpop.component_cell,
+					work_unit_pre , presig , prepop.component_cell ,
+					conn_seq_to_idid_instance_pre [proj_seq][conn_seq], tabs
+				) ) return false;
+				if( !AppendSynapticComponentEntries(
+					syn_pre , conn.continuous.preComponent , conn,
+					pre_loc, post_loc,
+					work_unit_pre , presig , prepop.component_cell ,
+					work_unit_post, postsig, postpop.component_cell,
+					conn_seq_to_idid_instance_post[proj_seq][conn_seq], tabs
+				) ) return false;
+			}
+			else{
+				printf("internal error: populate unknown synapse type projection %zd instance %zd\n", proj_seq, conn_seq);
+				return false;
+			}
+			// printf("conndone %zd %zd\n", proj_seq, conn_seq); fflush(stdout);
+		}
+		
+	}
+	
+	gettimeofday(&time_syns_end, NULL);
+	printf("Created synapses in %.4lf sec.\n",TimevalDeltaSec(time_syns_start, time_syns_end));
+	
+	// LATER move IO buffers as well as MPI mirrors to before allocating for the actual model, to see if more remapping can be done inline	
+	printf("Creating data outputs...\n");
+	
 	// add the loggers
-	struct LogInsideDataWriter : public ILogProxy {
-		// const LogCustomFile &log;
+	struct LogInsideDataWriter : public ILogSimpleProxy {
 		const Int col_seq;
 		const std::string &output_filepath;
 		LogInsideDataWriter(Int _c, const std::string &_s) : col_seq(_c), output_filepath(_s){}
-		void operator()(const char *format, va_list args) const {
+		void vLog(const char *format, va_list args) const {
 			std::string prefix = "data writer "+output_filepath+", column "+accurate_string(col_seq)+": "; // FIXME allow no printf % to be injected here!
 			vprintf((prefix+format+"\n").c_str(), args);
 			// 1+vsnprintf(NULL, 0, fmt, args1) TODO
 		}
-		void operator()(const char *format, ...) const {
-			va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
-		void error(const char *format, ...) const {
-			va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
-		void warning(const char *format, ...) const {
-			va_list args; va_start(args, format);  operator()(format, args); va_end(args); }
 	};
 	
 	if( i_log_the_data ){
 		
 		engine_config.trajectory_loggers.resize( sim.data_writers.contents.size() );
 		for( Int daw_seq = 0; daw_seq < (Int)sim.data_writers.contents.size(); daw_seq++ ){
-			
 			auto &daw = sim.data_writers.get(daw_seq);
 			
 			EngineConfig::TrajectoryLogger &logger = engine_config.trajectory_loggers[daw_seq];
@@ -8788,8 +9228,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				if(!LocateNodeForPath( path, path_node )) return false;
 				if( path_node != my_mpi.rank ){
 					assert( my_mpi.rank == 0 ); // for now at least...
-					// column.on_node = path_node;
-					
 					if( !AppendRemoteDependency_DataWriter( path, path_node, {daw_seq, col_seq} ) ) return false;
 				} else
 				#endif
@@ -8811,7 +9249,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				if( path_node == my_mpi.rank )
 				#endif
 				// XXX should non writing nodes calculate these? it should be redundant now
-				if( !LocateEntryFromPath(path, column.tabloc, log_proxy ) ) return false; // once more to use the new path
+				if( !LocateEntryFromPath(path, column.tabloc, log_proxy ) ) return false; // once more to use the re-parsed path, for debugging
 				if(column.tabloc.forma_type != RawTablesLocator::F32){ log_proxy("not a float value!"); return false; }
 				
 				// and add scaling factor for output
@@ -8836,8 +9274,68 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 		}
 	}
-	// TODO add event writers
-	
+	// add event writers
+	if( i_log_the_data ){
+		engine_config.event_loggers.resize( sim.event_writers.size() );
+		for( Int evw_seq = 0; evw_seq < (Int)sim.event_writers.contents.size(); evw_seq++ ){
+			const auto &evw = sim.event_writers.get(evw_seq);
+			auto &logger = engine_config.event_loggers[evw_seq];
+			LogInsideDataWriter log_proxy{0, evw.fileName};
+			
+			logger.logfile_path = evw.fileName;
+			if(evw.format == Simulation::EventWriter::TIME_ID) logger.format = EngineConfig::EventLogger::Format::NEUROML_TIME_ID;
+			else if(evw.format == Simulation::EventWriter::ID_TIME) logger.format = EngineConfig::EventLogger::Format::NEUROML_ID_TIME;
+			else{ log_proxy("invalid logger format type: %d", (int)evw.format); assert(false); return false; }
+			
+			// create a row for the writer, in tabs; one sxpike slot per element per column
+			size_t spike_target_table = tabs.global_tables_state_i64_arrays.size(); // SOON allow for multi spikke implementation
+			tabs.global_tables_state_i64_arrays.emplace_back();
+			tabs.global_tables_state_i64_arrays[spike_target_table].assign(evw.outputs.size(), 0);
+			// LATER bother with table size or sth ...
+			for( Int col_seq = 0; col_seq < (Int)evw.outputs.size(); col_seq++ ){
+				const auto &col = evw.outputs.atSeq(col_seq);
+				const auto &path = col.selection;
+				LogInsideDataWriter log_proxy{col_seq, evw.fileName};
+				
+				EngineConfig::EventLogger::LogColumn column;
+				column.id = evw.outputs.getId(col_seq);
+				auto &tabloc = column.tabloc; tabloc = {(ptrdiff_t)spike_target_table, (int)col_seq, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::I64};
+				
+				#ifdef USE_MPI
+				int path_node;
+				if(!LocateNodeForEventPath( path, path_node )) return false;
+				if( path_node != my_mpi.rank ){
+					assert( my_mpi.rank == 0 ); // for now at least...
+					if( !AppendRemoteDependency_Spike( path, path_node, tabloc ) ) return false;
+				} else
+				#endif
+				{
+				// if the event source is local, add a connection from the source to this tabloc (otherwise it's handled as a dependency, see above)
+				RawTablesLocator source_tabloc;
+				if(!LocateEntryFromEventPath(path, source_tabloc, log_proxy)) return false;
+				{
+				// XXX move this sanity check from here but keep somewhere, ifdef DEBUG or so
+				std::string s, sNew;
+				Simulation::LemsEventPath newpath;
+				if(!model.LemsEventPathToString(net, path, s)){ log_proxy("path to string failed!"); return false;}
+				if(!model.ParseLemsEventPath(log_proxy, s.c_str(), NULL, net, newpath)){ log_proxy("path to string %s to path failed!", s.c_str()); return false;}
+				if(!model.LemsEventPathToString(net, newpath, sNew)){ log_proxy("path to string %s to path to string failed!", s.c_str()); return false;}
+				if(s != sNew){ log_proxy("path to string %s is not the same as %s!", s.c_str(), sNew.c_str()); return false;}
+				const auto &path = newpath; // let's see if this triggers any bugs
+				#ifdef USE_MPI
+				if( path_node == my_mpi.rank )
+				#endif
+				if( !LocateEntryFromEventPath(path, source_tabloc, log_proxy ) ) return false; // once more to use the re-parsed path, for debugging
+				}
+				
+				if(!AddSpikeTarget(source_tabloc, tabloc, log_proxy)) return false;
+				
+				// done with column
+				logger.columns.push_back(column);
+				}
+			}
+		}
+	}
 	
 	// Now apply customsetup parameter override statements (if not done early on)
 	
@@ -8847,13 +9345,19 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	for( Int statement_seq = 0; statement_seq < (int)statements.size(); statement_seq++ ){
 		const Simulation::CustomSetup::Statement &set = statements[statement_seq];
 		// printf("stmt %d\n", (int)statement_seq);
-		struct LogSetStmtInsideGroup{
+		struct LogSetStmtInsideGroup : public ILogSimpleProxy{
 			Int statement_seq; Int instance_seq; std::string item_type;
-			void operator()(const char *format, ...) const {
-				va_list args; va_start(args, format);
+			LogSetStmtInsideGroup(Int _s, Int _i, const std::string &_it)
+				:statement_seq(_s),instance_seq(_i),item_type(_it){}
+			// void operator()(const char *format, ...) const {
+			// for some reason operator()(const char *format, ...) is not inherited from ILogSimpleProxy, oh well, duplicate it.
+			// void operator()(const char *format, ...) const {
+				// va_list args; va_start(args, format);  yee(format, args); va_end(args); }
+			void vLog(const char *format, va_list args) const {
+				// va_list args; va_start(args, format);
 				std::string prefix = "Setup statement "+accurate_string(statement_seq)+", "+item_type+": "; // NOTE allow no printf % to be injected here!
 				vprintf((prefix+format).c_str(), args);
-				va_end(args);
+				// va_end(args);
 			}
 		};
 		
@@ -8926,8 +9430,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				if( work_unit < 0 ){
 					continue; // another node will initialize this cell; TODO move this to specific targets to let cells be split LATER, essentially pull outside the artificial cell case
 				}
-				#else
-				// work_t work_unit = workunit_per_cell_per_population[loca.population][loca.cell_instance];
 				#endif
 				
 				// get sig for said neuron, to properly manipulate the work item
@@ -9051,7 +9553,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		}
 		// done with statements
 	}
-	// HERE
+	// NOTE TODO:
 	// // for cell, for segment
 	// get location of target (maybe use shortcut?)
 	// update value
@@ -9081,11 +9583,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		}
 		
 		for( const auto &keyval : recv_list.spike_refs ){
-			const PointOnCellLocator &loc = keyval.first;
-			std::string say_refs = "\tSpikes " + loc.toPresentableString() + " to trigger refs: ";
+			const std::string &sPath = keyval.first;
+			std::string say_refs = "\tSpikes " + sPath + " to trigger refs: ";
 			
-			for( TabEntryRef_Packed ref : keyval.second ){
-				say_refs += presentable_string(ref) + " ";
+			for( RawTablesLocator tabloc : keyval.second ){
+				say_refs += tabloc.Stringify() + " ";
 			}
 			Say("%s", say_refs.c_str());
 		}
@@ -9132,8 +9634,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			enc += "\n";
 		}
 		for( const auto &keyval : recvlist.spike_refs ){
-			const auto &loc = keyval.first;
-			loc.toEncodedString( enc );
+			const std::string &sPath = keyval.first;
+			enc += sPath;
 			enc += "\n";
 		}
 		
@@ -9576,9 +10078,14 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		}
 		sendlist.spike_sources.resize(spikes);
 		for(int i = 0; i < spikes; i++){
-			auto ret = sendlist.spike_sources[i].fromEncodedString( lines[ spike_idx + i ] );
-			if(!ret) Say( "fail %s", lines[ spike_idx + i ] );
-			assert(ret);
+			const char *line = lines[ spike_idx + i ];
+			auto &source_path = sendlist.spike_sources[i];
+			// Say( "line %s", line);
+			SayWithPrefix log([&other_rank, &i, &line](){ return "send list "+accurate_string(other_rank)+", spike "+accurate_string(i)+" "+line+": "; });
+			if(!model.ParseLemsEventPath(log, line, NULL, net, source_path)) return false;
+			// auto ret = sendlist.spike_sources[i].fromEncodedString( lines[ spike_idx + i ] );
+			// if(!ret) Say( "fail %s", lines[ spike_idx + i ] );
+			// assert(ret);
 		}
 	}
 	
@@ -9594,9 +10101,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			Say("%s", say_refs.c_str());
 		}
 		
-		for( const auto &loc : send_list.spike_sources ){
-			std::string say_refs = "\tSpikes " + loc.toPresentableString() ;
-			Say("%s", say_refs.c_str());
+		for( const auto &path : send_list.spike_sources ){
+			std::string sPath; if(!model.LemsEventPathToString(net, path, sPath)) return false;
+			Say("%s", ("\tSpike " + sPath).c_str());
 		}
 		
 		for( const auto &path : send_list.value_refs ){
@@ -9644,14 +10151,14 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// TODO pack the boolean vectors
 		tab.resize( send_list.spike_sources.size(), 0);
 		// and add extra notification entries to the spike sources
-		for( size_t i = 0; i < send_list.spike_sources.size() ; i++ ){
-			const auto &loc = send_list.spike_sources.at(i);
-			
-			size_t global_idx_T_spiker;
-			if( !GetCompartmentSpikerImplementation_Global( loc, global_idx_T_spiker) ) return false;
-			auto packed_id = GetEncodedTableEntryId( send_list_impl.spike_mirror_buffer, i );
-			
-			tabs.global_tables_const_i64_arrays[global_idx_T_spiker].push_back( packed_id );
+		for( int i = 0; i < (int) send_list.spike_sources.size() ; i++ ){
+			const auto &source_path = send_list.spike_sources.at(i);
+			RawTablesLocator source_tabloc;
+			if(!LocateEntryFromEventPath(source_path, source_tabloc)) return false;
+			RawTablesLocator target_tabloc = {(ptrdiff_t) send_list_impl.spike_mirror_buffer, (int)i, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::I64};
+			// auto packed_id = GetEncodedTableEntryId( , i );
+			if(!AddSpikeTarget(source_tabloc, target_tabloc)) return false;
+			// tabs.global_tables_const_i64_arrays[global_idx_T_spiker].push_back( packed_id );
 		}
 	}
 	// The final send buffer for these will be allocated at run time
@@ -9938,7 +10445,7 @@ int main(int argc, char **argv){
 	FixedWidthNumberPrinter column_fmt(column_width, '\t', 0);
 	
 	// open the logs, one for each logger
-	std::vector<FILE *> trajectory_open_files;
+	std::vector<FILE *> trajectory_open_files, spike_open_files;
 	
 	struct TimeseriesFrame{
 		RawTables::Table_F32 values;
@@ -10068,6 +10575,19 @@ int main(int argc, char **argv){
 			exit(1);
 		}
 		trajectory_open_files.push_back(fout);
+	}
+	for(const auto &logger : engine_config.event_loggers){
+		#ifdef USE_MPI
+		assert( my_mpi.rank == 0);
+		#endif
+		const char *path = logger.logfile_path.c_str();
+		FILE *fout = fopen( path, "wt");
+		if(!fout){
+			auto errcode = errno;// NB: keep errno right away before it's overwritten
+			printf("Could not open spike log \"%s\" : %s\n", path, strerror(errcode) );
+			exit(1);
+		}
+		spike_open_files.push_back(fout);
 	}
 	for(const auto &reader : engine_config.timeseries_readers){
 		#ifdef USE_MPI
@@ -10319,6 +10839,22 @@ int main(int argc, char **argv){
 					return global_tables_const_f32_arrays[tabloc.table][tabloc.entry]; }
 			}
 		};
+		auto GetSingleI64 = [&global_tables_stateNow_i64, &global_tables_const_i64_arrays, &tabs](const RawTablesLocator &tabloc) -> long long & {
+			assert(tabloc.forma_type == RawTablesLocator::FormatType::I64);
+			static long long badval = 0xb177e2ba11333333LL;
+			if(tabloc.layou_type == RawTablesLocator::LayoutType::FLAT){
+				if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+					assert(false); return badval; }
+				else{ // if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+					return tabs.global_constints[tabloc.entry]; }
+			}
+			else{ // if(tabloc.layou_type == RawTablesLocator::LayoutType::TABLE){
+				if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+					return global_tables_stateNow_i64[tabloc.table][tabloc.entry]; }
+				else{ // if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+					return global_tables_const_i64_arrays[tabloc.table][tabloc.entry]; }
+			}
+		};
 		
 		bool initializing = step <= 0;
 		
@@ -10468,7 +11004,7 @@ int main(int argc, char **argv){
 				// TODO packed bool buffers
 				if( SpikeTable[i] ){
 					// add index	
-					buf.push_back(  EncodeI32ToF32(i) );
+					buf.push_back( EncodeI32ToF32(i) );
 					// clear trigger flag for the timestep after the next one
 					SpikeTable[i] = 0;
 				}
@@ -10496,10 +11032,11 @@ int main(int argc, char **argv){
 			// and deliver the spikes to trigger buffers
 			for( int i = recvlist_impl.value_mirror_size; i < (int)buf.size(); i++ ){
 				int spike_pos = EncodeF32ToI32( buf[i] );
-				for( auto tabent_packed : recvlist_impl.spike_destinations[spike_pos] ){
-					auto tabent = GetDecodedTableEntryId( tabent_packed );
-					// TODO packed bool buffers
-					global_tables_stateNow_i64[tabent.table][tabent.entry] = 1;
+				for( auto tabloc : recvlist_impl.spike_destinations[spike_pos] ){
+					// auto tabent = GetDecodedTableEntryId( tabent_packed );
+					// LATER packed bool buffers
+					// use GetSingleI64 if needed, but note that funkier options like stateNext may be needed later !
+					global_tables_stateNow_i64[tabloc.table][tabloc.entry] = 1;
 				}
 			}
 			
@@ -10593,6 +11130,14 @@ int main(int argc, char **argv){
 		
 		if( !initializing ){
 			// output what needs to be output
+			auto write_timestamp = [&tmps_column, &column_fmt](FILE *fout, double time){
+				const ScaleEntry seconds = {"sec",  0, 1.0};
+				const double time_scale_factor = Scales<Time>::native.ConvertTo(1, seconds);
+				// #FIXME check that the timestamp is double accurate
+				double time_val = time * time_scale_factor;
+				column_fmt.write( time_val, tmps_column );
+				fprintf(fout, "%s", tmps_column);
+			};
 			for(size_t i = 0; i < engine_config.trajectory_loggers.size(); i++){
 				#ifdef USE_MPI
 				assert(my_mpi.rank == 0);
@@ -10600,13 +11145,7 @@ int main(int argc, char **argv){
 				const auto &logger = engine_config.trajectory_loggers[i];
 				FILE *& fout = trajectory_open_files[i];
 				
-				const ScaleEntry seconds = {"sec",  0, 1.0};
-				const double time_scale_factor = Scales<Time>::native.ConvertTo(1, seconds);
-				
-				// FIXME why not double??
-				float time_val = time * time_scale_factor;
-				column_fmt.write( time_val, tmps_column );
-				fprintf(fout, "%s", tmps_column);
+				write_timestamp(fout, time);
 				
 				auto GetColumnValue = [
 					&GetSingleF32
@@ -10628,6 +11167,44 @@ int main(int argc, char **argv){
 				}
 				fprintf(fout, "\n");
 			}
+			for( int i = 0; i < (int)engine_config.event_loggers.size(); i++){
+				#ifdef USE_MPI
+				assert(my_mpi.rank == 0);
+				#endif
+				const auto &logger = engine_config.event_loggers[i];
+				FILE *& fout = spike_open_files[i];
+				
+				auto GetColumnValue = [
+					&GetSingleI64
+				]( const EngineConfig::EventLogger::LogColumn &column ) -> long long &{
+					if(column.tabloc.forma_type != RawTablesLocator::I64){
+						printf("internal error: logged value not is not float\n");
+						exit(2);
+					}
+					return GetSingleI64(column.tabloc);
+				};
+				for( const auto &column : logger.columns ){
+					long long &col_val = GetColumnValue(column);
+					if(col_val){
+						if(logger.format == EngineConfig::EventLogger::Format::NEUROML_ID_TIME){
+							fprintf( fout, "%ld ", column.id );
+							write_timestamp(fout, time);
+							fprintf(fout, "\n");
+						}
+						else if(logger.format == EngineConfig::EventLogger::Format::NEUROML_TIME_ID){
+							write_timestamp(fout, time);
+							fprintf( fout, " %ld\n", column.id );
+						}
+						else{
+							assert(false);
+						}
+						// fprintf( fout, "\t%f", col_val );
+					}
+					col_val = 0;
+				}
+				// fprintf(fout, "\n");
+			}
+			// NOTE: event writers that need to be in a tight (1*sync period) closed loop must be output _after_ the time in which they were emitted, so that the event readers can input them for the timestep right after. Another constraint is that at the latest timestamp emitted must match or exceed the timestep to be run, for the receiving
 		}
 		
 		// output state dump
@@ -10690,7 +11267,7 @@ int main(int argc, char **argv){
 		
 		//prepare for next parallel iteration
 		if( !initializing ){
-			time += engine_config.dt;
+			time += engine_config.dt; // roundoff may play tricks with delays of N*dt here! consider multiplication for fixed dt LATER
 		}
 		
 		// or a modulo-based cyclic queue LATER? will logging be so much of an issue? if so let the logger clone the state instead of duplicating the entire buffers
@@ -10702,6 +11279,7 @@ int main(int argc, char **argv){
 	
 	// close loggers
 	for( auto &fout : trajectory_open_files ){ fclose(fout); fout = NULL; }
+	for( auto &fout : spike_open_files ){ fclose(fout); fout = NULL; }
 	for( auto &reader : timeseries_readers ){ reader.Close(); }
 	
 	gettimeofday(&run_end, NULL);

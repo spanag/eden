@@ -1,5 +1,5 @@
 Latest
-
+- Add support for <EventoutputFile> raster output
 - Add experimental extension to NeuroML: 'TimeSeriesReader' for streaming time series data from external sources, into the simulation.  Access to these time series is through VariableRequirements, for now.
 - Add experimental extension to LEMS: 'VariableRequirement' for CoreNEURON-style POINTERs, which is accessible through the experimental "EdenCustomSetup" file format
 - Add experimental file format for direct, per-instance customization of model parameters

@@ -877,7 +877,22 @@ bool ParseSynapseLocation(const ILogProxy &log, Network::Projection::Connection:
 	}
 	return true;
 }
+void Model::LemsSegmentLocatorToString( const Network &net, const Simulation::LemsSegmentLocator &path, std::string &ret) const {
+	const Network::Population &population = net.populations.get(path.population);
+	const CellType &cell = cell_types.get(population.component_cell);
+	ret += net.populations.getName(path.population) + ("["+accurate_string(path.cell_instance)+"]");
+	// if it's a physical cell, add an explicit segment locator, just to be nice
+	if(cell.type == CellType::PHYSICAL){
+		// add segment locator
+		ret += "/";
+		ret += accurate_string(path.segment_seq);
+		if(path.fractionAlong != 0.5) ret += accurate_string(path.fractionAlong);
+		// don't add a slash in the end, refer to the very point on cell
+	}
+	return;
+}
 
+// helpers for LEMS id's
 bool Model::GetLemsQuantityPathType_FromLems(const Simulation::LemsInstanceQuantityPath &path, const ComponentInstance &compinst, ComponentType::NamespaceThing::Type &type, Dimension &dimension) const {
 	if(!compinst.ok()) return false;
 	Int comp_type_seq = compinst.id_seq;
@@ -1070,6 +1085,71 @@ bool Model::GetLemsQuantityPathType(const Network &net, const Simulation::LemsQu
 		return false;
 	}
 }
+bool Model::GetLemsEventPathType(const Simulation::LemsInstanceEventPath &path, const ComponentInstance &compinst, Simulation::LemsInstanceEventPath::Type &type) const {
+	type = path.type;
+	return true;
+}
+bool Model::GetLemsEventPathType(const Simulation::InputInstanceEventPath &path, const InputSource &input, Simulation::LemsInstanceEventPath::Type &type) const {
+	typedef Simulation::InputInstanceEventPath InpPath;
+	// TODO work with child synapses in input component!
+	if(path.type == InpPath::LEMS){
+		return GetLemsEventPathType(path.lems_event_path, input.component, type);
+	}
+	else if(path.type == InpPath::NATIVE){
+		// spikeArray is not lemsified
+		if( path.native_entry == InpPath::SPIKE ){
+			type = Simulation::LemsInstanceEventPath::OUT;
+			return true;
+		}
+		else{ assert(false); return false; }
+	}
+	else{ assert(false); return false; }
+}
+bool Model::GetLemsEventPathType(const Network &net, const Simulation::LemsEventPath &path, Simulation::LemsInstanceEventPath::Type &type) const {
+	typedef Simulation::LemsInstanceEventPath::Type Type;
+	
+	if(path.type == Simulation::LemsEventPath::CELL){
+		const Network::Population &population = net.populations.get(path.population);
+		const CellType &_cell_type = cell_types.get(population.component_cell);
+		
+		if(_cell_type.type != CellType::ARTIFICIAL){assert(false); return false;} // otherwise it would be a segment path
+		const auto &cell = _cell_type.artificial;
+		
+		const auto &path_cell = path.cell;
+		
+		if(path_cell.type == Simulation::LemsEventPath::Cell::INPUT){
+			const auto &input = input_sources.get( cell.spike_source_seq );
+			return GetLemsEventPathType(path_cell.input, input, type);
+		}
+		else{
+			// NB all artificial cells should be lemsified atm
+			return GetLemsEventPathType(path_cell.lems_event_path, cell.component, type);
+		}
+	}
+	else if(path.type == Simulation::LemsEventPath::SEGMENT){
+		const Network::Population &population = net.populations.get(path.population);
+		const CellType &_cell_type = cell_types.get(population.component_cell);
+		
+		assert(_cell_type.type == CellType::PHYSICAL);
+		const auto &cell = _cell_type.physical; (void) cell; // TODO
+		
+		typedef Simulation::LemsEventPath::Segment SegmentPath;
+		switch(path.segment.type){
+			case SegmentPath::SPIKE       : type = Type::OUT; return true;
+			default: assert(false); return false;
+		}
+	}
+	// experimental extensions
+	else if(path.type == Simulation::LemsEventPath::EVENTREADER){
+		type = Type::OUT;
+		return true;
+	}
+	else{
+		printf("event path type %d\n", (int) path.type);
+		assert(false);
+		return false;
+	}
+}
 bool Model::LemsQuantityPathToString(const ComponentInstance &inst, const Simulation::LemsInstanceQuantityPath &path, std::string &ret) const {
 	assert(inst.ok());
 	Int comptype_seq = inst.id_seq;
@@ -1155,16 +1235,10 @@ bool Model::LemsQuantityPathToString(const Network &net, const Simulation::LemsQ
 	|| type == Path::CHANNEL
 	|| type == Path::ION_POOL
 	){
-		ret += net.populations.getName(path.population) + ("["+accurate_string(path.cell_instance)+"]/");
 		const Network::Population &population = net.populations.get(path.population);
 		const CellType &cell = cell_types.get(population.component_cell);
-		// if it's a physical cell, add an explicit segment locator, just to be nice
-		if(cell.type == CellType::PHYSICAL){
-			// add segment locator
-			ret += accurate_string(path.segment_seq);
-			if(path.fractionAlong != 0.5) ret += accurate_string(path.fractionAlong);
-			ret += "/";
-		}
+		LemsSegmentLocatorToString(net, path, ret); ret += "/";
+		
 		if(type == Path::CELL){
 			assert(cell.type == CellType::ARTIFICIAL);
 			return LemsQuantityPathToString(cell.artificial, path.cell, ret);
@@ -1235,9 +1309,80 @@ bool Model::LemsQuantityPathToString(const Network &net, const Simulation::LemsQ
 		return false;
 	}
 }
-
-// helpers for LEMS id's
-// some are still inside ImportContext, like ParseLemsEventPath
+bool Model::LemsEventPathToString(const ComponentInstance &inst, const Simulation::LemsInstanceEventPath &path, std::string &ret) const {
+	typedef Simulation::LemsInstanceEventPath Path;
+	assert(inst.ok());
+	Int comptype_seq = inst.id_seq;
+	assert(component_types.has(comptype_seq));
+	const auto &comptype = component_types.get(comptype_seq);
+	
+	if(path.type == Path::Type::IN ) ret += comptype.event_inputs .getName(path.event_port_seq);
+	else if(path.type == Path::Type::OUT) ret += comptype.event_outputs.getName(path.event_port_seq);
+	else{ assert(false); return false;}
+	// all namespace things are leaves, until LATER
+	return true;
+}
+bool Model::LemsEventPathToString(const InputSource &input, const Simulation::InputInstanceEventPath &path, std::string &ret) const {
+	typedef Simulation::InputInstanceEventPath Path;
+	if( path.type == Path::LEMS ){
+		return LemsEventPathToString(input.component, path.lems_event_path, ret);
+	}
+	else if( path.type == Path::NATIVE ){
+		switch( path.native_entry ){
+			case Path::SPIKE : ret += "spike"; return true;
+			default: return false;
+		}
+	}
+	else return false;
+}
+bool Model::LemsEventPathToString(const ArtificialCell &cell, const Simulation::LemsEventPath::Cell &path, std::string &ret) const {
+	typedef Simulation::LemsEventPath::Cell Path;
+	if( path.type == Path::LEMS ){
+		return LemsEventPathToString(cell.component, path.lems_event_path, ret);
+	}
+	else if( path.type == Path::INPUT ){
+		assert( cell.type == ArtificialCell::SPIKE_SOURCE );
+		assert( cell.spike_source_seq >= 0 );
+		const auto &input = input_sources.get( cell.spike_source_seq );
+		return LemsEventPathToString(input, path.input, ret);
+	}
+	else return false;
+}
+bool Model::LemsEventPathToString(const Network &net, const Simulation::LemsEventPath &path, std::string &ret) const {
+	const auto &type = path.type;
+	typedef Simulation::LemsEventPath Path;
+	
+	ret.clear();
+	if(type == Path::CELL
+	|| type == Path::SEGMENT
+	){
+		const Network::Population &population = net.populations.get(path.population);
+		const CellType &cell = cell_types.get(population.component_cell);
+		LemsSegmentLocatorToString(net, path, ret); ret += "/";
+		
+		if(type == Path::CELL){
+			assert(cell.type == CellType::ARTIFICIAL);
+			return LemsEventPathToString(cell.artificial, path.cell, ret);
+		}
+		else if(type == Path::SEGMENT){
+			const auto type = path.segment.type;
+			typedef Path::Segment Path;
+			if     ( type == Path::SPIKE ) ret += "spike";
+			else return false;
+			return true;
+		}
+		else return false;
+	}
+	// experimental extensions
+	else if(type == Path::EVENTREADER){
+		ret += net.data_readers.getName(path.reader.read_seq) + ("["+accurate_string(path.reader.inst_seq)+"]/") + net.data_readers.get(path.reader.read_seq).columns.getName(path.reader.port_seq);
+		return true;
+	}
+	else{
+		printf("path to string: type %d not supported yet\n", (int)type);
+		return false;
+	}
+}
 // parse according to the definitive specification: the source code
 // https://github.com/NeuroML/jNeuroML/issues/50
 // https://github.com/NeuroML/org.neuroml.export/blob/master/src/main/java/org/neuroml/export/utils/LEMSQuantityPath.java#L136
@@ -1253,7 +1398,27 @@ bool Model::LemsQuantityPathToString(const Network &net, const Simulation::LemsQ
 // ... <segment>/<biophysical properties name>/membraneProperties/<ion channel distribution>/<channel type>/<gate>/q
 // <postsynaptic population name>/<instance>/<cell type, redundant>/<segment>/synapses:<synapse type>:<incrementing instance of same type on same segment of same cell>/g 
 // 	see https://github.com/NeuroML/org.neuroml.export/blob/master/src/main/java/org/neuroml/export/neuron/NeuronWriter.java#L581
-
+// template<auto whatever> typename IdToSeq;
+template<typename V, Int (V::*prop) >
+Int IdToSeq(const CollectionWithNames<V> &container, Int id){
+	return container.*prop.getSequential(id);
+};
+// template<auto whatever> struct SeqToSeq;
+template<typename V>
+struct SeqToSeq{
+	using Prop = Int V::*;
+	const Prop prop;
+	SeqToSeq(const Prop _p):prop(_p){}
+	Int operator()(const V &ob, Int id) const { 
+		return ( 0 <= id && id < ob.*prop ) ? id : -1 ;
+	}
+};
+// template<typename V, typename S, S (V::*prop) >
+// template<typename V, typename S>
+// template<S (V::*prop)>
+// Int SeqToSeq(const V &collection, Int id){
+// 	return ( 0 <= id && id < (Int)(collection.*prop) ) ? id : -1 ;
+// };
 template<typename GroupCollection, typename Get_Seq>
 bool ParseLemsGroupLocator(const ILogProxy &log, const std::vector<std::string> tokens, const char *group_type_name, const GroupCollection &group_collection, const Get_Seq &GetSeq, Int &group_seq, Int &instance_seq, Int &tokens_consumed) {
 	// note: tokens are spearted by '/' in the following
@@ -1647,7 +1812,6 @@ bool Model::ParseLemsQuantityPath_CellProperty(const ILogProxy &log, const CellT
 		log.error("not enough factors for cell or segment property");
 		return false;
 	}
-	
 	const std::string &segprop = tokens[segprop_token_id];
 	
 	
@@ -1824,7 +1988,6 @@ bool Model::ParseLemsQuantityPath_CellProperty(const ILogProxy &log, const CellT
 
 bool Model::ParseLemsQuantityPath(const ILogProxy &log, const char *qty_str, const Network &net, Simulation::LemsQuantityPath &path) const {
 	auto tokens = string_split(std::string(qty_str), "/");
-	assert(tokens.size() > 0);
 	const std::string first_identifier = string_split(tokens[0],"[")[0];
 	const char *sId = first_identifier.c_str();
 	Int tokens_consumed = 0;
@@ -1833,8 +1996,7 @@ bool Model::ParseLemsQuantityPath(const ILogProxy &log, const char *qty_str, con
 	Int group_seq = -1;
 	if( (group_seq = net.populations.get_id(sId)) >= 0 ){
 		
-		if ( !ParseLemsSegmentLocator(log, tokens, net, path, tokens_consumed) ) return false;
-		
+		if( !ParseLemsSegmentLocator(log, tokens, net, path, tokens_consumed) ) return false;
 		// if (cell) segment locator is valid, then it is a property of a cell in a population, and the cell_type is valid.
 		const Network::Population &population = net.populations.get(path.population);
 		const CellType &cell_type = cell_types.get(population.component_cell);
@@ -1921,11 +2083,271 @@ bool Model::ParseLemsQuantityPath(const ILogProxy &log, const char *qty_str, con
 	// TODO make a reverse toString() for lemsquantitypaths.
 	// path locations: parse, gettype, print, to tabloc.
 	else{
-		log.error("unknown top level identifier \"%s\"", sId);
+		log.error("unknown top level identifier \"%s\" for quantity path", sId);
 		return false;
 	}
 	
 	// TODO access projections and input_lists.
+}
+
+bool Model::ParseLemsEventPathInComponent( const ILogProxy &log, const ComponentInstance &instance, const std::vector<std::string> &tokens, Simulation::LemsInstanceEventPath &liep, Int &tokens_consumed) const {
+	
+	if(tokens_consumed >= (Int)tokens.size()){
+		log.error("not enough factors for LEMS component event path");
+		return false;
+	}
+	
+	// nothing more to extract
+	const char *sEventPort = tokens[tokens_consumed].c_str();
+	tokens_consumed++;
+	
+	if( tokens_consumed < (int)tokens.size() ){
+		log.error( "LEMS child component event outputs not yet supported" );
+		return false;
+	}
+	
+	// get comp.type
+	Int comptype_seq = instance.id_seq;
+	if( !component_types.has(comptype_seq) ){
+		log.error("internal error: LEMS event path missing component type %d", (int) instance.id_seq);
+		return false;
+	}
+	
+	// which takes preference in namespace anyway?
+	const auto &comptype = component_types.get(comptype_seq);
+	
+	Int &event_port_seq = liep.event_port_seq = -1;
+	Int event_in_seq  = comptype.event_inputs .get_id(sEventPort);
+	Int event_out_seq = comptype.event_outputs.get_id(sEventPort);
+	if( event_in_seq < 0 && event_out_seq < 0 ){
+		log.error("%s is not a defined event port in component type %s", sEventPort, component_types.getName(comptype_seq));
+		return false;
+	}
+	else if( event_in_seq >= 0 && event_out_seq >= 0 ){
+		log.error("%s is both an input and output port", sEventPort);
+		return false;
+	}
+	else if( event_in_seq >= 0 ){
+		liep.type = Simulation::LemsInstanceEventPath::IN;
+		event_port_seq = event_in_seq;
+		
+		// XXX this is just a limitation in Eden right now
+		// but idk if input event ports are logged in practice
+		log.error("%s is an input event port; which is not yet supported in EDEN", sEventPort);
+		return false;
+	}
+	else if( event_out_seq >= 0 ){
+		liep.type = Simulation::LemsInstanceEventPath::OUT;
+		event_port_seq = event_out_seq;
+		
+		return true;
+	}
+	else{
+		// all cases are handled but the compiler whines for some reason
+		assert(false);
+		return false;
+	}
+}
+bool Model::ParseLemsEventPath_InputInstance( const ILogProxy &log, const InputSource &input, const std::vector<std::string> &tokens, Simulation::InputInstanceEventPath &path, Int &tokens_consumed ) const {
+	typedef InputSource::Type InpType;
+	typedef Simulation::InputInstanceEventPath InpPath;
+	int mainprop_token_id = tokens_consumed;
+	
+	// now branch according to property type
+	if(mainprop_token_id >= (Int)tokens.size()){
+		log.error("not enough factors for input event path");
+		return false;
+	}
+	const std::string &mainprop = tokens[mainprop_token_id];
+	
+	// const bool is_native = ( input.type == InpType::PULSE );
+	const bool has_synapse = (
+		input.type == InpType::TIMED_SYNAPTIC
+		|| input.type == InpType::POISSON_SYNAPSE
+		|| input.type == InpType::POISSON_SYNAPSE_TRANSIENT
+	);
+	
+	// synapse containing stuff are more than just lemsified
+	if( has_synapse && mainprop == "synapse" ){
+		tokens_consumed++;
+		log.error("event paths in synpase children of inputs not supported yet");
+		return false;
+	}
+	
+	// work only with LEMSified stuff for now
+	if( input.component.ok() ){
+		path.type = InpPath::LEMS;
+		return ParseLemsEventPathInComponent(log, input.component, tokens, path.lems_event_path, tokens_consumed );
+	}
+	// not lemsified is propably not supported
+	// but let's check if there was any spike port even exists in native components (not yet)
+	
+	// NB: not looking for other children yet ...
+	if(!( input.HasSpikeOut(component_types))){ // || input.HasSpikeIn(component_types)
+		log.error("input source type has no event ports");
+		return false;
+	}
+	
+	// otherwise it's a native, or complicated, type.
+	path.type = InpPath::NATIVE;
+	
+	tokens_consumed++; // note: this token will be used in the following, unshift or refactor if necessary later
+	
+	auto &native_entry = path.native_entry;
+	typedef InpPath::NativeEntry Nat;
+	
+	// is it a terminal property? (to avoid repeated checks in the following)
+	if(tokens_consumed == (Int)tokens.size()){
+		if(     mainprop == "spike"){native_entry = Nat::SPIKE; return true; }
+		else{
+			log.error("unknown leaf property %s", mainprop.c_str()); // LATER log in token possibly in attribute
+			return false;
+		}
+	}
+	else{
+		log.error("unknown non-leaf property %s", mainprop.c_str());
+		return false;
+	}
+	
+	if( input.type == InpType::SPIKE_LIST ){
+		if(( input.type == InpType::SPIKE_LIST && !( native_entry == Nat::SPIKE ) )
+		){
+			log.error("property %s does not match input source type", mainprop.c_str()); return false;
+		}
+		return true; // all checks passed
+	}
+	else{
+		// shouldn't happen for now, all types are checked for at this point
+		log.error("input source type not supported yet");
+		return false;
+	}
+}
+bool Model::ParseLemsEventPath_ArtificialCell(const ILogProxy &log, const ArtificialCell &cell,  const std::vector<std::string> &tokens, Simulation::LemsEventPath::Cell &path_cell, Int &tokens_consumed) const {	
+	if( cell.type == ArtificialCell::SPIKE_SOURCE ){
+		path_cell.type = Simulation::LemsEventPath::Cell::INPUT;
+		
+		const auto &input = input_sources.get( cell.spike_source_seq );
+		
+		return ParseLemsEventPath_InputInstance( log, input, tokens, path_cell.input, tokens_consumed );
+	}
+	else{
+		// work only with LEMSified stuff for now
+		if( cell.component.ok() ){
+			path_cell.type = Simulation::LemsEventPath::Cell::LEMS;
+			return ParseLemsEventPathInComponent(log, cell.component, tokens, path_cell.lems_event_path, tokens_consumed );
+		}
+		else{
+			log.error("native artificial cell type not supported yet");
+			return false;
+		}
+	}
+}
+// NOTE: path is a read+write argument. Specifically, segment_seq is read. If set, only the mechanism distributions that include this segment are valid. If unset (ie negative), the caller is responsible for validating that if selected, a mechanism distribution exists for the segments being considered (for example, when multiple segments are considered, is it an error if some segments are outside the distribution mechanism, or are those without the mechanism simply excluded? It depends).
+bool Model::ParseLemsEventPath_CellProperty(const ILogProxy &log, const CellType &cell_type, const std::vector<std::string> &tokens, Simulation::LemsEventPath &path, Int &tokens_consumed ) const {
+
+	int segprop_token_id = tokens_consumed;
+	
+	// now branch according to property type
+	if(segprop_token_id >= (Int)tokens.size()){
+		log.error("not enough factors for cell or segment event path");
+		return false;
+	}
+	
+	if( cell_type.type == CellType::ARTIFICIAL ){
+		path.type = Simulation::LemsEventPath::CELL;
+		return ParseLemsEventPath_ArtificialCell(log, cell_type.artificial, tokens, path.cell, tokens_consumed);
+	}
+	else if(cell_type.type == CellType::PHYSICAL ){
+		const std::string &segprop = tokens[segprop_token_id];
+		segprop_token_id++;
+		if( segprop_token_id == (Int)tokens.size() ){
+			// right on the segment
+			// TODO check if Vthreshold is defined for that segment
+			
+			std::string port = segprop;
+			if(port == "spike"){
+				path.type = Simulation::LemsEventPath::SEGMENT;
+				path.segment.type =  Simulation::LemsEventPath::Segment::SPIKE;
+				//printf("\n spikes yay!\n");
+				return true;
+			}
+			else{
+				log.error("unknown eventPort %s", port.c_str());
+				return false;
+			}
+		}
+		else{
+			printf("%d, %d, %s!%s|%s|%s\n", segprop_token_id, (int)tokens.size(), segprop.c_str(), tokens[0].c_str(), tokens[1].c_str(), tokens[2].c_str());
+			// will keep on parsing the path LATER, if ever
+			log.error("spiking subcomponents of neuron segment not supported yet");
+			return false;
+		}
+	}
+	else{
+		log.error("internal error: LEMS event path: cell type type %d", cell_type.type);
+		return false;
+	}
+}
+// TODO merge into a common skeleton with quantity path parsing
+bool Model::ParseLemsEventPath(const ILogProxy &log, const char *sPath, const char *port_name_or_null, const Network &net, Simulation::LemsEventPath &path) const {
+	auto tokens = string_split(std::string(sPath), "/");
+	if( port_name_or_null ) tokens.push_back(port_name_or_null);
+	const std::string first_identifier = string_split(tokens[0],"[")[0];
+	const char *sId = first_identifier.c_str();
+	Int tokens_consumed = 0;
+	
+	// LATER complain if name is ambiguous
+	Int group_seq = -1;
+	if( (group_seq = net.populations.get_id(sId)) >= 0 ){
+	
+		if ( !ParseLemsSegmentLocator(log, tokens, net, path, tokens_consumed) ) return false;
+		// if (cell) segment locator is valid, then it is a property of a cell in a population, and the cell_type is valid.
+		const Network::Population &population = net.populations.get(path.population);
+		const CellType &cell_type = cell_types.get(population.component_cell);
+		
+		return ParseLemsEventPath_CellProperty(log, cell_type, tokens, path, tokens_consumed );
+	}
+	// experimental extensions
+	else if( (group_seq = net.event_readers.get_id(sId)) >= 0 ){
+		path.type = Simulation::LemsEventPath::EVENTREADER;
+		const Network::EventSetReader &reader = net.event_readers.get(group_seq);
+		// IdToSeq HERE
+		path.reader.read_seq = group_seq;
+		// Int (*xxx)(const Network::EventSetReader &, Int) = ;
+		if(!ParseLemsGroupLocator(log, tokens, "event reader", net.event_readers, SeqToSeq(&Network::EventSetReader::instances), path.reader.read_seq, path.reader.inst_seq, tokens_consumed)) return false;
+		// TODO add shortcut without group locator for single instance?
+		
+		// now branch according to property type
+		if(!(tokens_consumed+1 <= (Int)tokens.size())){
+			// if the elements have just one property, its name can be skipped
+			if(reader.ports.size() == 1){
+				path.reader.port_seq = 0;
+				return true;
+			}
+			else{
+				log.error("incomplete path for eventreader element");
+				return false;
+			}
+		}
+		else{
+			const char *sProp = tokens[tokens_consumed].c_str(); tokens_consumed++;
+			if(!(tokens_consumed == (Int)tokens.size())){
+				log.error("path for eventreader element too large");
+				return false;
+			}
+			
+			path.reader.port_seq = reader.ports.get_id(sProp);
+			if(path.reader.port_seq < 0){
+				log.error("property %s not found in eventreader %s", sProp, net.data_readers.getName(group_seq));
+				return false;
+			}
+			return true;
+		}	
+	}
+	else{
+		log.error("unknown top level identifier \"%s\" for event path", sId);
+		return false;
+	}
 }
 
 //------------------> Debug printing
@@ -4686,146 +5108,6 @@ struct ImportState{
 		return TryLemsifyComponent_WithParmContainer( log, eThing, type_name, parms, compinst );
 	}
 	
-	// helpers for LEMS paths, some are exposed in the Model already
-	bool ParseLemsEventPathInComponent( const ImportLogger &log, const pugi::xml_node &eOutEl, const ComponentInstance &instance, const std::vector<std::string> &tokens, const char *sEventPort, Simulation::LemsInstanceEventPath &liep, Int &tokens_consumed) const {
-		
-		if( tokens_consumed < (int)tokens.size() ){
-			log.error( eOutEl, "LEMS child component event outputs not yet supported" );
-			return false;
-		}
-		
-		// nothing more to extract
-		// const char *propname = tokens[tokens_consumed].c_str();
-		// tokens_consumed++;
-		
-		// get comp.type
-		Int comptype_seq = instance.id_seq;
-		if( !component_types.has(comptype_seq) ){
-			log.error(eOutEl, "internal error: LEMS event path missing component type %d", (int) instance.id_seq);
-			return false;
-		}
-		
-		// which takes preference in namespace anyway?
-		const auto &comptype = component_types.get(comptype_seq);
-		
-		Int &event_port_seq = liep.event_port_seq = -1;
-		Int event_in_seq  = comptype.event_inputs .get_id(sEventPort);
-		Int event_out_seq = comptype.event_outputs.get_id(sEventPort);
-		if( event_in_seq < 0 && event_out_seq < 0 ){
-			log.error(eOutEl, "%s is not a defined event port in component type %s", sEventPort, component_types.getName(comptype_seq));
-			return false;
-		}
-		else if( event_in_seq >= 0 && event_out_seq >= 0 ){
-			log.error(eOutEl, "%s is both an input and output port", sEventPort);
-			return false;
-		}
-		else if( event_in_seq >= 0 ){
-			liep.type = Simulation::LemsInstanceEventPath::IN;
-			event_port_seq = event_in_seq;
-			
-			// XXX this is just a limitation in Eden right now
-			// but idk if input event ports are logged in practice
-			log.error(eOutEl, "%s is an input event port; which is not yet supported in EDEN", sEventPort);
-			return false;
-		}
-		else if( event_out_seq >= 0 ){
-			liep.type = Simulation::LemsInstanceEventPath::OUT;
-			event_port_seq = event_out_seq;
-			
-			return true;
-		}
-		else{
-			// all cases handled but compiler whines for some reason
-			assert(false);
-			return false;
-		}
-	}
-	bool ParseLemsEventPath_InputInstance( const ImportLogger &log, const pugi::xml_node &eOutEl, const InputSource &input, const std::vector<std::string> &tokens, const char *sEventPort, Simulation::InputInstanceEventPath &instance_event_path, Int &tokens_consumed ) const {
-		
-		// work only with LEMSified stuff for now
-		if( input.component.ok() ){
-			instance_event_path.type = Simulation::InputInstanceEventPath::LEMS;
-			return ParseLemsEventPathInComponent(log, eOutEl, input.component, tokens, sEventPort, instance_event_path.lems_event_path, tokens_consumed );
-		}
-		else{
-			log.error(eOutEl, "input source type not supported yet");
-			return false;
-		}
-	}
-	bool ParseLemsEventPath(const ImportLogger &log, const pugi::xml_node &eOutEl, const char *comp_path_str, const char *out_eventPort, const Network &net, Simulation::LemsEventPath &path) const {
-		
-		auto tokens = string_split(std::string(comp_path_str), "/");
-		Int tokens_consumed = 0;
-		if ( !model.ParseLemsSegmentLocator(LogWithElement{log,eOutEl}, tokens, net, path, tokens_consumed) ) return false;
-		
-		Int comp_token_id = tokens_consumed;
-		
-		// now branch according to property type? should be a spike source
-		if( comp_token_id < (int)tokens.size() ){
-			log.error(eOutEl, "not enough factors for spike source path");
-			return false;
-		}
-		
-		const Network::Population &population = net.populations.get(path.population);
-		
-		const CellType &cell_type = cell_types.get(population.component_cell);
-		if( cell_type.type == CellType::ARTIFICIAL ){
-			
-			path.type = Simulation::LemsEventPath::CELL;
-			const auto &cell = cell_type.artificial;
-			
-			if( cell.type == ArtificialCell::SPIKE_SOURCE ){
-				path.cell.type = Simulation::LemsEventPath::Cell::INPUT;
-				
-				const auto &input = input_sources.get( cell.spike_source_seq );
-				
-				return ParseLemsEventPath_InputInstance( log, eOutEl, input, tokens, out_eventPort, path.cell.input, tokens_consumed );
-			}
-			else{
-				if( cell.component.ok() ){
-					
-					// work only with LEMSified stuff for now
-					path.cell.type = Simulation::LemsEventPath::Cell::LEMS;
-					// printf(" typ %d \n", cell_type.artificial.type);		
-					return ParseLemsEventPathInComponent(log, eOutEl, cell_type.artificial.component, tokens, out_eventPort, path.cell.lems_event_path, tokens_consumed );
-				}
-				else{
-					log.error(eOutEl, "artificial cell type not supported yet");
-					return false;
-				}
-			}
-		}
-		else if(cell_type.type == CellType::PHYSICAL ){
-			
-			if( comp_token_id == (Int)tokens.size() ){
-				// right on the segment
-				// TODO check if Vthreshold is defined for that segment
-				
-				std::string port = out_eventPort;
-				if(port == "spike"){
-					path.type = Simulation::LemsEventPath::SEGMENT;
-					path.segment.type =  Simulation::LemsEventPath::Segment::SPIKE;
-					//printf("\n spikes yay!\n");
-					return true;
-				}
-				else{
-					log.error(eOutEl, "unknown eventPort %s", port.c_str());
-					return false;
-				}
-			}
-			else{
-				// will keep on parsing the path LATER, if ever
-				log.error(eOutEl, "spiking subcomponents of neuron segment not supported yet");
-				return false;
-			}
-		}
-		else{
-			log.error(eOutEl, "internal error: LEMS event path: cell type type %d", cell_type.type);
-			return false;
-		}
-		return true;
-	}
-	
 	// parse the tags one by one
 	bool ParseStandaloneMorphology(const ImportLogger &log, const pugi::xml_node &eMorph){
 		
@@ -7497,7 +7779,7 @@ struct ImportState{
 		auto sSeed = eSim.attribute("seed").value();
 		if(*sSeed){
 			if(!StrToL(sSeed, sim.seed)){
-				log.error(eSim, "seed must be a 32bit integer value");
+				log.error(eSim, "seed must be a \'long\' integer value");
 				return false;
 			}
 			sim.seed_defined = true;
@@ -7619,8 +7901,13 @@ struct ImportState{
 						
 						auto outsel_name = RequiredNmlId(log, eOutEl);
 						if(!outsel_name) return false;
+						Int id;
+						if(!StrToL(outsel_name, id)){
+							log.error(eOutEl, "id must be an integer");
+							return false;
+						}
 						
-						if(evw.outputs.has(outsel_name)){
+						if(evw.outputs.hasId(id)){
 							log.error(eOutEl, "output column %s already defined", outsel_name);
 							return false;
 						}
@@ -7638,9 +7925,9 @@ struct ImportState{
 						}
 						// validate path right here right now
 						
-						if(!ParseLemsEventPath(log, eOutEl, out_select, out_eventPort, net, out.selection)) return false;
+						if(!model.ParseLemsEventPath(LogWithElement{log,eOutEl}, out_select, out_eventPort, net, out.selection)) return false;
 						
-						evw.outputs.add(out, outsel_name);
+						evw.outputs.add(out, id);
 					}
 					else{
 						//unknown, ignore

@@ -81,6 +81,8 @@
 	<poissonFiringSynapse id="Inp_poissonFiringSynapse" averageRate="50 Hz" synapse="Syn_expOneSynapse" spikeTarget="./Syn_expOneSynapse"/>
 	<transientPoissonFiringSynapse id="Inp_transientPoissonFiringSynapse" delay="5ms" duration="40ms" averageRate="50 Hz" synapse="Syn_expTwoSynapse" spikeTarget="./Syn_expTwoSynapse"/>
 	
+	<!-- TODO roundoff fun may lead to a dt long uncertainty of the events happening.
+	One way to live with it is to accept this much error + epsilon, another is to place every event here away from multiples of dt.  -->
 	<spikeArray id="Inp_spikeArray">
 		<spike id="0" time="10 ms"/>
 		<spike id="1" time="20 ms"/>

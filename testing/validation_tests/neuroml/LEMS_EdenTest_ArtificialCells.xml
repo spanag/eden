@@ -47,6 +47,20 @@
 			<!-- <OutputColumn id="V_iafTauCell_Quadratic"     quantity="Pop_iafTauCell_Quadratic[0]/v"    /> -->
 			
 		</OutputFile>
+		<EventOutputFile id="spikerec" fileName="resultspikes.gen.txt" format="TIME_ID">
+            <EventSelection id="0"  select="Pop_iafTauCell[0]"         eventPort="spike"/>
+            <EventSelection id="1"  select="Pop_iafTauRefCell[0]"      eventPort="spike"/>
+            <EventSelection id="2"  select="Pop_iafCell[0]"            eventPort="spike"/>
+            <EventSelection id="3"  select="Pop_iafRefCell[0]"         eventPort="spike"/>
+        <!--<EventSelection id="4"  select="Pop_izhikevichCell[0]"     eventPort="spike"/> -->
+            <EventSelection id="5"  select="Pop_izhikevich2007Cell[0]" eventPort="spike"/>
+        <!--<EventSelection id="6"  select="Pop_adExIaFCell[0]"        eventPort="spike"/> -->
+			
+            <EventSelection id="10" select="Pop_IF_curr_alpha[0]"      eventPort="spike"/>
+            <EventSelection id="11" select="Pop_IF_curr_exp[0]"        eventPort="spike"/>
+            <EventSelection id="12" select="Pop_IF_cond_alpha[0]"      eventPort="spike"/>
+            <EventSelection id="13" select="Pop_IF_cond_exp[0]"        eventPort="spike"/>
+		</EventOutputFile>
     </Simulation>
 
 </Lems>

@@ -3,6 +3,24 @@ from eden_tools import *
 from eden_simulator import runEden
 from eden_tools.run_sim import runNeuron
 
+def RunTests(
+	tests,
+	skip_missing_criteria=False, explain_verification_on_fail=False,
+	extra_cmdline_args=None,
+	verbose = False,
+):
+	failed_tests = []
+	for test in tests:
+		ok = RunTest( test, skip_missing_criteria, explain_verification_on_fail, extra_cmdline_args, verbose )
+		
+		if ok is not True:
+			failed_tests.append(test)
+
+	if not failed_tests:
+		return True
+	else:
+		return failed_tests
+
 test_nml_dir = 'neuroml/'
 tests = [
 {
@@ -49,6 +67,7 @@ tests = [
 		'pop0/2/MultiCompCell/1/v': { 'type': 'box', 'dt': 0.0005, 'dv': 0.002 },
 		'pop0/2/MultiCompCell/0/v': { 'type': 'box', 'dt': 0.0005, 'dv': 0.002 },
 		'pop0/2/MultiCompCell/1/bioPhys1/membraneProperties/naChans/naChan/m/q': { 'type': 'box', 'dt': 0.0005, 'dv': 0.005 },
+		'pop0/2/MultiCompCell/0': {'type': 'samecount_box', 'dt': 0.0002 },
 	},
 },
 {
@@ -85,6 +104,9 @@ tests = [
 		# 'InputDemosDL[01]/v': { 'type': 'box', 'dt': 0.000001, 'dv': 0.000100 },
 		# 'InputDemosDL[02]/v': { 'type': 'box', 'dt': 0.000001, 'dv': 0.000100 },
 		# 'InputDemosDL[03]/v': { 'type': 'box', 'dt': 0.000001, 'dv': 0.000100 },
+		
+		'Input_spikeArray[0]'    : {'type': 'samecount_box', 'dt': 0.00001001 },
+		'Input_spikeGenerator[0]': {'type': 'samecount_box', 'dt': 0.00001001 },
 		
 		# TODO automate running the ones commented out with jLEMS
 	},
@@ -141,6 +163,18 @@ tests = [
 		'Pop_HH_cond_exp[0]/v'   : { 'type': 'box', 'dt': 0.000020, 'dv': 0.000100 },
 		# 'Pop_iafTauCell_Quadratic[0]/v'     : { 'type': 'box', 'dt': 0.000020, 'dv': 0.000100 },
 		'Pop_iafTauCell_Quadratic[0]/v'     : { 'type': 'box', 'dt': 0.000020, 'dv': 0.000100 },
+		
+		"Pop_iafTauCell[0]"        :  {'type': 'samecount_box', 'dt': 0.00001001 },
+		"Pop_iafTauRefCell[0]"     :  {'type': 'samecount_box', 'dt': 0.00002001 },
+		"Pop_iafCell[0]"           :  {'type': 'samecount_box', 'dt': 0.00001001 },
+		"Pop_iafRefCell[0]"        :  {'type': 'samecount_box', 'dt': 0.00010001 },
+		# "Pop_izhikevichCell[0]"    :  {'type': 'samecount_box', 'dt': 0.00001001 },
+		"Pop_izhikevich2007Cell[0]":  {'type': 'samecount_box', 'dt': 0.0015001 },
+		# "Pop_adExIaFCell[0]"       :  {'type': 'samecount_box', 'dt': 0.00001001 },
+		"Pop_IF_curr_alpha[0]"     :  {'type': 'samecount_box', 'dt': 0.00001001 },
+		"Pop_IF_curr_exp[0]"       :  {'type': 'samecount_box', 'dt': 0.00001001 },
+		"Pop_IF_cond_alpha[0]"     :  {'type': 'samecount_box', 'dt': 0.00001001 },
+		"Pop_IF_cond_exp[0]"       :  {'type': 'samecount_box', 'dt': 0.00001001 },
 	},
 },
 {

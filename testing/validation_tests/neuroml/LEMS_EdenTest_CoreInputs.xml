@@ -45,6 +45,10 @@
 			<!-- <OutputColumn id="v_input_demoDL03" quantity="InputDemosDL[03]/v" /> TODO -->
 			
 		</OutputFile>
+		<EventOutputFile id="spikerec" fileName="resultspikes.gen.txt" format="TIME_ID">
+            <EventSelection id="0" select="Input_spikeArray[0]" eventPort="spike"/>
+            <EventSelection id="1" select="Input_spikeGenerator[0]" eventPort="spike"/>
+		</EventOutputFile>
     </Simulation>
 
 </Lems>

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # Own files
 from . import embeden
 
-def runEden( example_lems_file, threads=None, extra_cmdline_args=None, executable_path=None, verbose = False, full_cmdline=None):
+def runEden( example_lems_file, reload_events=False, threads=None, extra_cmdline_args=None, executable_path=None, verbose = False, full_cmdline=None):
 	'''
 	Run LEMS/NeuroML2 file with EDEN
 	'''
@@ -97,9 +97,13 @@ def runEden( example_lems_file, threads=None, extra_cmdline_args=None, executabl
 	if verbose:
 		print( "Ran EDEN in %.2f seconds" % (toc - tic) )
 	
-	results_Eden = reload_saved_data(example_lems_file, t_run=t_run)
-	
-	return OrderedDict(sorted(results_Eden.items()))
+	results = reload_saved_data(example_lems_file, reload_events=reload_events, t_run=t_run)
+	if reload_events: traje, event = results # decompose tuple
+	else: traje = results, event = None
+	if reload_events:
+		return OrderedDict(sorted(traje.items())), OrderedDict(sorted(event.items()))
+	else:
+		return OrderedDict(sorted(traje.items()))
 
 
 # Adapted from pynml.reload_saved_data: https://github.com/NeuroML/pyNeuroML/blob/v0.7.5/pyneuroml/pynml.py
@@ -179,19 +183,20 @@ def reload_saved_data(
                 select = col.attrib["select"]
                 events[select] = []
                 selections[id] = select
-
+            
             with open(file_name) as f:
                 for line in f:
                     values = line.split()
-                    # TODO improve procssing speed
+                    # TODO improve processing speed
                     if format == "TIME_ID":
                         t = float(values[0])
                         id = int(values[1])
                     elif format == "ID_TIME":
                         id = int(values[0])
                         t = float(values[1])
-                #logger.debug("Found a event in cell %s (%s) at t = %s" % (id, selections[id], t))
-                events[selections[id]].append(t)
+                    else: raise ValueError(format)
+                    #logger.debug("Found a event in cell %s (%s) at t = %s" % (id, selections[id], t))
+                    events[selections[id]].append(t)
 
             if remove_dat_files_after_load:
                 logger.warning( "Removing file %s after having loading its data!" % file_name)

@@ -25,11 +25,11 @@
 			<OutputColumn id="v" quantity="pop0/0/PassiveCompartment/0/v"/>
 		</OutputFile>
 		<!-- 
-		<EventOutputFile id="spikeone" fileName="resultspikes.txt" format="ID_TIME">
-            <EventSelection id="thatone" select="pop0[2]/0" eventPort="spike"/> 
+		<EventOutputFile id="spikeone" fileName="resultspieks.txt" format="ID_TIME">
+            <EventSelection id="5" select="pop0[2]/0" eventPort="spike"/> 
 		</EventOutputFile>
 		<EventOutputFile id="spiketwo" fileName="resultspikes.txt" format="TIME_ID">
-            <EventSelection id="thisone" select="pop0/2/MultiCompCell/0" eventPort="spike"/> 
+            <EventSelection id="9" select="pop0/2/MultiCompCell/0" eventPort="spike"/> 
 		</EventOutputFile>
 		 -->
     </Simulation>
