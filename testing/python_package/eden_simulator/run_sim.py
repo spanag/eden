@@ -99,7 +99,7 @@ def runEden( example_lems_file, reload_events=False, threads=None, extra_cmdline
 	
 	results = reload_saved_data(example_lems_file, reload_events=reload_events, t_run=t_run)
 	if reload_events: traje, event = results # decompose tuple
-	else: traje = results, event = None
+	else: traje, event = (results, None)
 	if reload_events:
 		return OrderedDict(sorted(traje.items())), OrderedDict(sorted(event.items()))
 	else:

@@ -7973,7 +7973,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		std::string string_path;
 		model.LemsSegmentLocatorToString(net, loca, string_path);
 		string_path += "/spike"; // it's convenient that the spike emitter has the same name everywhere, unlike v which could be V as well
-		printf("eifni %s\n", string_path.c_str());
 		return model.ParseLemsEventPath(log, string_path.c_str(), NULL, net, spiker_path);
 	};
 	// TODO move to more general aux
@@ -8570,7 +8569,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						tabloc.forma_type = RawTablesLocator::FormatType::I64;
 						// TODO map subentry maybe?
 						size_t global_idx_targets = tabs.global_table_const_i64_index[work_unit] + pig.comp_implementations.at(comp_seq).spiker.Table_SpikeRecipients; // LATER change for split cell?
-						printf("offset %d ->  %d\n", (int)work_unit, (int)tabs.global_table_const_i64_index[work_unit]);
 						tabloc.table = global_idx_targets;
 						tabloc.entry = 0; // TODO use negative maybe?
 						return true;

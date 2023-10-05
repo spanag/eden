@@ -22,7 +22,7 @@ def runNeuron( example_lems_file, verbose=False, reload_events=False):
 	tic = time.time()
 	results = pynml.run_lems_with_jneuroml_neuron(rel_filename, nogui=True, load_saved_data=True, reload_events=reload_events, exec_in_dir=out_dir)
 	if reload_events: traje, event = results # decompose tuple
-	else: traje = results, event = None
+	else: traje, event = (results, None)
 	if not (traje or event):
 		raise RuntimeError('Could not run simulation')
 	toc = time.time()
@@ -45,7 +45,7 @@ def runJLems( example_lems_file, verbose=False, reload_events=False):
 	tic = time.time()
 	results = pynml.run_lems_with_jneuroml(rel_filename, nogui=True, load_saved_data=True, reload_events=reload_events, exec_in_dir=out_dir)
 	if reload_events: traje, event = results # decompose tuple
-	else: traje = results, event = None
+	else: traje, event = (results, None)
 	if not (traje or event):
 		raise RuntimeError('Could not run simulation')
 	toc = time.time()
