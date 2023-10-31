@@ -44,23 +44,32 @@
     
     <RefCurrentsource id="inpX"/>
     
-    <expOneSynapse id="syn0" gbase="10nS" erev="0V" tauDecay="0.5ms"/>
+    <expOneSynapse id="syn0" gbase="1nS" erev="0V" tauDecay="0.5ms"/>
     <pulseGenerator id="inp0" delay="10ms" duration="19.999ms" amplitude="0.05nA"/> <!-- TODO stop the current source on exactly the timestep, to match how it's necessary to be for streaming and such. -->
-    
-    <spikeGenerator id="InpS" period="6 ms"/>
 
+    <spikeArray id="Inp0"><spike id="0" time="00.001 ms"/></spikeArray>
+	<spikeArray id="Inp1"><spike id="0" time="17.000 ms"/></spikeArray>
+	<spikeArray id="Inp2"><spike id="0" time="25.001 ms"/></spikeArray>
+    <spikeArray id="Inp3"><spike id="0" time="35.001 ms"/></spikeArray>
+    <spikeArray id="Inp4"><spike id="0" time="36.001 ms"/></spikeArray>
+    
     <network id="EdenTestNetwork">
         <population id="pop0" component="PassiveCell" size="2" />
-        <population id="popS" component="InpS" size="1" />
+        <population id="popS0" component="Inp0" size="1" />
+        <population id="popS1" component="Inp1" size="1" />
+        <population id="popS2" component="Inp2" size="1" />
+        <population id="popS3" component="Inp3" size="1" />
+        <population id="popS4" component="Inp4" size="1" />
         
         <inputList id="inli0" component="inp0" population="pop0">
             <inputW id="0" target="pop0[0]" destination="synapses" weight="1"/>
         </inputList>
         
-        <projection id="proj0" presynapticPopulation="popS" postsynapticPopulation="pop0" synapse="syn0">
-            <connection id="0" preCellId="0" postCellId="1"/>
-        </projection>
-        
+        <projection id="projS0" presynapticPopulation="popS0" postsynapticPopulation="pop0" synapse="syn0"> <connection id="0" preCellId="0" postCellId="1"/> </projection>
+        <projection id="projS1" presynapticPopulation="popS1" postsynapticPopulation="pop0" synapse="syn0"> <connection id="0" preCellId="0" postCellId="1"/> </projection>
+        <projection id="projS2" presynapticPopulation="popS2" postsynapticPopulation="pop0" synapse="syn0"> <connection id="0" preCellId="0" postCellId="1"/> </projection>
+        <projection id="projS3" presynapticPopulation="popS3" postsynapticPopulation="pop0" synapse="syn0"> <connection id="0" preCellId="0" postCellId="1"/> </projection>
+        <projection id="projS4" presynapticPopulation="popS4" postsynapticPopulation="pop0" synapse="syn0"> <connection id="0" preCellId="0" postCellId="1"/> </projection>
         
         <population id="popX" component="PassiveCell" size="2" />
         
@@ -68,9 +77,24 @@
             <inputW id="0" target="popX[0]" destination="synapses" weight="1"/>
         </inputList>
         
+        
+        <EdenEventSetReader id="SpikeX" href="./EdenTest_Extension_CustomIO_EventSet.txt" format="ascii_v0" instances="1" >
+            <Port id="lalala"/>
+        </EdenEventSetReader> 
+        <EdenEventSetReader id="SpikeY" href="./EdenTest_Extension_CustomIO_EventSetMulti.txt" format="ascii_v0" instances="2" >
+            <Port id="zero"/>
+            <Port id="one"/>
+        </EdenEventSetReader> 
+        
         <!-- Since the spike threshold is too high, the synapse can't get a spike from the pre cell, but it still can be triggered by an event source-->
-        <projection id="projX" presynapticPopulation="popX" postsynapticPopulation="popX" synapse="syn0">
+        <projection id="projX" presynapticPopulation="SpikeX" postsynapticPopulation="popX" synapse="syn0">
             <connection id="0" preCellId="0" postCellId="1"/>
+        </projection>
+        <projection id="projY" presynapticPopulation="SpikeY" postsynapticPopulation="popX" synapse="syn0">
+            <connection id="0" preCellId="0" preSegmentId="zero" postCellId="1"/>
+            <connection id="1" preCellId="0" preSegmentId="one" postCellId="1"/>
+            <connection id="2" preCellId="1" preSegmentId="zero" postCellId="1"/>
+            <connection id="3" preCellId="1" preSegmentId="one" postCellId="1"/>
         </projection>
         
         <EdenTimeSeriesReader id="DataX"  href="./EdenTest_Extension_CustomIO_TimeSeries.txt" format="ascii_v0" instances="1" >
@@ -79,19 +103,14 @@
         
     </network>
     
-    <Simulation id="sim1" length="50.33ms" step="0.010ms" target="EdenTestNetwork">
+    <Simulation id="sim1" length="50.04ms" step="0.010ms" target="EdenTestNetwork">
         <EdenCustomSetup filename="./EdenTest_Extension_CustomIO_CustomSetup.txt"/>
-        
-        <!-- TODO
-        <EdenEventSetReader href="./EdenTest_Extension_CustomIO_TimeSeries.txt" format="ascii_v0" ports="1" >
-            <EventMapping source_port="0" destination="projX[0]/post/spike"/>
-        </EdenEventSetReader> -->
     
 		<OutputFile id="first" fileName="results.gen.txt">
 			<OutputColumn id="v00" quantity="pop0[0]/v" />
-			<!-- <OutputColumn id="v01" quantity="pop0[1]/v" /> -->
+			<OutputColumn id="v01" quantity="pop0[1]/v" />
 			<OutputColumn id="vX0" quantity="popX[0]/v" />
-            <!-- <OutputColumn id="vX1" quantity="popX[1]/v" /> -->
+            <OutputColumn id="vX1" quantity="popX[1]/v" />
 		</OutputFile>
     </Simulation>
     

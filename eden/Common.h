@@ -116,7 +116,7 @@ public:
 
 
 // do not use default accuracy when converting numerics to alpha !
-// expicitly specify what the alpha is used for
+// explicitly specify what the alpha is used for
 template< typename T, typename = typename std::enable_if< std::is_integral<T>::value >::type >
 std::string accurate_string( T val ){
 	return std::to_string( val );
@@ -131,6 +131,36 @@ static inline std::string accurate_string( double val ){
 	char tmps[100];
 	sprintf(tmps, "%.17g", val);
 	return tmps;
+}
+
+// Made static in hope they will not be inlined, wherever it makes sense
+// but TODO check performance to justify it first!
+//Uses strtol, overwrites errno.
+//Returns whether conversion was successful.
+static inline bool StrToL( const char *str, long &L, bool whole_string = true){
+	long ret;
+	char *pEnd;
+	errno = 0;
+	ret = strtol(str, &pEnd, 10);
+	if( errno ) return false; //the standard way of handling strtol etc.
+	if(whole_string){
+		if(*pEnd) return false;
+	}
+	L = ret;
+	return true;
+}
+static inline bool StrToF( const char *str, float &F ){
+	float ret;
+	char *pEnd;
+	errno = 0;
+	ret = strtof(str, &pEnd);
+	if(errno) return false; //the standard way of handling strtol etc.
+	while( *pEnd ){
+		if(!isspace(*pEnd)) return false;
+		pEnd++;
+	}
+	F = ret;
+	return true;
 }
 
 // Split URL into scheme and auth+path, if scheme is present (otherwise it's a "URL reference")

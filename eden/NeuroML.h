@@ -2084,7 +2084,16 @@ struct Network{
 		Int presynapticPopulation;
 		Int postsynapticPopulation;
 		
-		CollectionWithIds<Connection> connections; 
+		CollectionWithIds<Connection> connections;
+		
+		// extensions!
+		// for spike connections, use EventSetReaders instead of, as spike sources.
+		// To keep things quick and dirty for now, reinterpret population, cell, segment as eventset, instance, port instead.
+		enum PresynType{
+			CELL,
+			EVENT_SERIES
+		} presyn_type;
+		// TODO for extensions: Override the spike and continuous dependencies 'spike' and 'v' in favour of other properties! 
 	};
 	
 	struct Input{
@@ -2146,7 +2155,7 @@ struct Network{
 	
 	// experimental extension
 	CollectionWithNames<TimeSeriesReader> data_readers;
-	CollectionWithNames<EventSetReader> event_readers; // FIXME
+	CollectionWithNames<EventSetReader> event_readers;
 };
 
 // A NeuroML simulation, targeting a specific network
@@ -2532,6 +2541,20 @@ struct Simulation{
 		};
 		std::vector<Statement> statements;	
 	};
+	
+	// An ExplicitConnection is a direct event-based connection between two LEMS components.
+	// This still does not cover the case where e.g. Brian style synapses have each their own state variables and dynamics and yet also modify the state variables of a cell;
+	// a formulation of how synapses are allowed to "write" to the cell remains to be established.  Perhaps LEMS parent paths could be a reference?  Note that this sort of interaction changes the dataflow.
+	// TODO move these to Network and move paths outside Simulation i guess.
+	struct ExplicitConnection{
+		LemsEventPath from, to;
+		Real delay;
+		
+		// for weights and more LATER
+		std::vector<ComponentInstance::ParameterOverride> parms;
+	};
+	
+	
 	// ---> fields
 	
 	Real length; // duration, that's how it's called in LEMS
@@ -2548,6 +2571,7 @@ struct Simulation{
 	
 	// extensions!
 	CustomSetup custom_init;
+	std::vector<ExplicitConnection> event_connections;
 	
 	Simulation(){
 		seed_defined = false;

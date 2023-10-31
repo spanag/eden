@@ -55,7 +55,7 @@ tests = [
     'sim_file': 'neuroml/' + 'EdenTest_Extension_CustomIO.nml',
     'validation_criteria':[
         ["pop0[0]/v", "popX[0]/v", "exact"],
-        # ["pop0[1]/v", "popX[1]/v", "exact"],
+        ["pop0[1]/v", "popX[1]/v", "exact"],
     ]
 },
 {

@@ -17,37 +17,6 @@
 
 //------------------> Auxiliaries
 
-// Made static in hope they will be inlined, wherever it makes sense
-// or use C++ inline, but check performance to justify it first!
-//Uses strtol, overwrites errno.
-//Returns whether conversion was successful.
-static bool StrToL( const char *str, long &L, bool whole_string = true){
-	long ret;
-	char *pEnd;
-	errno = 0;
-	ret = strtol(str, &pEnd, 10);
-	if( errno ) return false; //the standard way of handling strtol etc.
-	if(whole_string){
-		if(*pEnd) return false;
-	}
-	L = ret;
-	return true;
-}
-static bool StrToF( const char *str, float &F ){
-	float ret;
-	char *pEnd;
-	errno = 0;
-	ret = strtof(str, &pEnd);
-	if(errno) return false; //the standard way of handling strtol etc.
-	while( *pEnd ){
-		if(!isspace(*pEnd)) return false;
-		pEnd++;
-	}
-	F = ret;
-	return true;
-}
-
-
 //Linear interpolation from a -> b with respective parameter from 0 -> 1
 static Real Lerp(Real a, Real b, Real ratio){
 	return a + (b-a)*ratio;
@@ -2311,9 +2280,7 @@ bool Model::ParseLemsEventPath(const ILogProxy &log, const char *sPath, const ch
 	else if( (group_seq = net.event_readers.get_id(sId)) >= 0 ){
 		path.type = Simulation::LemsEventPath::EVENTREADER;
 		const Network::EventSetReader &reader = net.event_readers.get(group_seq);
-		// IdToSeq HERE
 		path.reader.read_seq = group_seq;
-		// Int (*xxx)(const Network::EventSetReader &, Int) = ;
 		if(!ParseLemsGroupLocator(log, tokens, "event reader", net.event_readers, SeqToSeq(&Network::EventSetReader::instances), path.reader.read_seq, path.reader.inst_seq, tokens_consumed)) return false;
 		// TODO add shortcut without group locator for single instance?
 		
@@ -2456,6 +2423,18 @@ const char * RequiredNmlId(const ImportLogger &log, const pugi::xml_node &from_n
 	}
 	return ret_id;
 }
+// a variant for the common CollectionWithNames
+template<typename T>
+const char * RequiredNmlId(const ImportLogger &log, const pugi::xml_node &from_node, const CollectionWithNames<T> &set, const char *parent_name = NULL){
+	const char *name = RequiredNmlId(log, from_node);
+	if(!name) return NULL;
+	if(set.has(name)){
+		if(name) log.error(from_node, "%s %s already defined in %s", from_node.name(), name, parent_name);
+		else log.error(from_node, "%s %s already defined", from_node.name(), name);
+		return NULL;
+	}
+	return name;
+}
 // just in case it may differ more than the name, and to discern between NeuroML and pure LEMS
 const char * RequiredLemsName(const ImportLogger &log, const pugi::xml_node &from_node){
 	const char *ret_id = from_node.attribute("name").value(); //if missing, null handle returns empty string
@@ -2472,6 +2451,33 @@ const char * RequiredAttribute(const ImportLogger &log, const pugi::xml_node &fr
 		return NULL;
 	}
 	return ret_attr;
+}
+
+bool RequiredPositiveAttribute(const ImportLogger &log, const pugi::xml_node &from_node, const char *attr_name, Int &value){
+	const char *sInt = RequiredAttribute( log, from_node, attr_name);
+	if(!sInt) return false;
+	if(!( StrToL(sInt, value) && value > 0 )){
+		log.error(from_node, " \"%s\" must be a positive integer, not %s", attr_name, sInt);
+		return false;
+	}
+	return true;
+}
+bool RequiredNonnegativeAttribute(const ImportLogger &log, const pugi::xml_node &from_node, const char *attr_name, Int &value){
+	const char *sInt = RequiredAttribute( log, from_node, attr_name);
+	if(!sInt) return false;
+	if(!( StrToL(sInt, value) && value >= 0 )){
+		log.error(from_node, " \"%s\" must be a non-negative integer, not %s", attr_name, sInt);
+		return false;
+	}
+	return true;
+}
+bool OptionalPositiveAttribute(const ImportLogger &log, const pugi::xml_node &from_node, const char *attr_name, Int &value){
+	if(*from_node.attribute(attr_name).value()) return RequiredPositiveAttribute(log, from_node, attr_name, value);
+	else return true;
+}
+bool OptionalNonnegativeAttribute(const ImportLogger &log, const pugi::xml_node &from_node, const char *attr_name, Int &value){
+	if(*from_node.attribute(attr_name).value()) return RequiredNonnegativeAttribute(log, from_node, attr_name, value);
+	else return true;
 }
 
 const char * RequiredComponentType(const ImportLogger &log, const pugi::xml_node &from_node){
@@ -2492,6 +2498,25 @@ const char * TagNameOrType(const pugi::xml_node &from_node){
 	auto ret = from_node.attribute("type").value();
 	if( *ret ) return ret;
 	else return from_node.name();
+}
+
+// TODO if it's a file url, much like the current behaviour of OutputFile, it's relative to the cwd of the program, not the file being parsed! TODO specify a way to selecthow to behave, or at least document --  filename
+// here's a trick: use "no uri scheme" to mean "relative to xml file" and "file://" to mean "relative to working directory", it is also how href's in webpages work, TODO document it.
+bool GetSchemeOrRelpathFromUrl(const ImportLogger &log, const pugi::xml_node &from_node, const char *attrname,  std::string &url ){
+	
+	const char *sHref = RequiredAttribute( log, from_node, attrname);
+	if(!sHref) return false;
+	
+	url = sHref;
+	
+	std::string scheme, auth_path;
+	if(!GetUrlScheme(url, scheme, auth_path)){
+		const char *loading_from_file = log.GetFilenameFromElement(from_node);
+		url = GetRelativeFilePath((loading_from_file ? loading_from_file : "."), url);
+	}
+	// else keep the url as is
+	
+	return true;
 }
 
 bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morphology &morph ){
@@ -3250,7 +3275,7 @@ bool ParseBiophysicalProperties(
 			if(distribution.type == ChannelDistribution::POPULATION){
 				Int population;
 				if(!(StrToL(eDistr.attribute("number").value(), population) && population > 0)){
-					log.error(eDistr, "ion channel population needs a positive integer population attribute");
+					log.error(eDistr, "ion channel population needs a positive integer \"number\" attribute");
 					return false;
 				}
 				distribution.number = population;
@@ -4316,12 +4341,7 @@ bool ParseIonChannel(const ImportLogger &log, const pugi::xml_node &eChannel, co
 			}
 			
 			Int instances;
-			//gate.type = gatetype;
-			
-			if(!( StrToL(eGate.attribute("instances").value(), instances) && instances > 0 )){
-				log.error(eGate, "instance attribute must be a positive integer");
-				return false;
-			}
+			if(!RequiredPositiveAttribute(log, eGate, "instances", instances)) return false;
 			
 			// parse and add gate! yay!
 			if(gatetype == IonChannel::Gate::INSTANTANEOUS){
@@ -4709,16 +4729,24 @@ bool parseCompartmentTarget(const ImportLogger &log, const pugi::xml_node &eTarg
 }
 
 bool ParseProjectionPrePost(const ImportLogger &log, const pugi::xml_node &eProj,
-	const CollectionWithNames<Network::Population> &populations, Network::Projection &proj
+	const Network &net, Network::Projection &proj
 ){
 	
 	auto prePopName = eProj.attribute("presynapticPopulation").value();
 	auto postPopName = eProj.attribute("postsynapticPopulation").value();
-	proj.presynapticPopulation = populations.get_id(prePopName);
-	proj.postsynapticPopulation = populations.get_id(postPopName);
+	proj.presynapticPopulation = net.populations.get_id(prePopName);
+	proj.postsynapticPopulation = net.populations.get_id(postPopName);
 	if(proj.presynapticPopulation < 0){
-		log.error(eProj, "presynaptic population %s not found", prePopName);
-		return false;
+		// extension!
+		proj.presynapticPopulation = net.event_readers.get_id(prePopName);
+		if(proj.presynapticPopulation < 0){
+			log.error(eProj, "presynaptic population %s not found", prePopName);
+			return false;
+		}
+		else proj.presyn_type = Network::Projection::PresynType::EVENT_SERIES;
+	}
+	else{
+		proj.presyn_type = Network::Projection::PresynType::CELL; // it is just a cell population
 	}
 	if(proj.postsynapticPopulation < 0){
 		log.error(eProj, "postsynaptic population %s not found", postPopName);
@@ -4727,114 +4755,108 @@ bool ParseProjectionPrePost(const ImportLogger &log, const pugi::xml_node &eProj
 	
 	return true;
 }
-
-bool ParseConnectionPrePost(const ImportLogger &log, const pugi::xml_node &eConn,
-	const Network::Population &pre, const Network::Population &post, const Morphology *pre_morph, const Morphology *post_morph,
-	bool old_type,
-	Network::Projection::Connection &conn
+// validate attached segment id's
+bool ValidateAttachedSegmentId(
+	const ImportLogger &log, const pugi::xml_node &eConn,
+	const Morphology *morph, const char *sSegAttrName, Int cellId,
+	Int &seg_seq
 ){
 	
-	const char *preCell = "preCell";
-	const char *preSegment = "preSegment";
-	const char *postCell = "postCell";
-	const char *postSegment = "postSegment";
-	if(old_type){
-		preCell = "preCellId";
-		preSegment = "preSegmentId";
-		postCell = "postCellId";
-		postSegment = "postSegmentId";
-	}
+	Int segId = 0;
+	if(!OptionalNonnegativeAttribute(log, eConn, sSegAttrName, segId)) return false;
+
 	
-	
-	// validate cell instance id's
-	auto *sPre = eConn.attribute(preCell).value(), *sPost = eConn.attribute(postCell).value();
-	if(!( *sPre && *sPost )){
-		log.error(eConn, "connection must have %s and %s", preCell, postCell);
-		return false;
-	}
-	
-	Int preCellId;
-	if( !ParseSynapseCellRef(sPre, preCellId) ){
-		log.error(eConn, "invalid path \"%s\" for %s", sPre, preCell);
-		return false;
-	}
-	conn.preCell = pre.instances.getSequential(preCellId); //convert to sequential form
-	if(conn.preCell < 0){
-		log.error(eConn, "cell instance id %ld not present in presynaptic population", preCellId);
-		return false;
-	}
-	
-	Int postCellId;
-	if( !ParseSynapseCellRef(sPost, postCellId) ){
-		log.error(eConn, "invalid path \"%s\" for %s", sPost, postCell);
-		return false;
-	}
-	conn.postCell = post.instances.getSequential(postCellId); //convert to sequential form
-	if(conn.postCell < 0){
-		log.error(eConn, "cell instance id %ld not present in postsynaptic population", postCellId);
-		return false;
-	}
-	
-	// validate attached segment id's
-	auto ValidateAttachedSegmentId = [](
-		const ImportLogger &log, const pugi::xml_node &eConn,
-		const Morphology *morph, const char *sSegAttrName, const char *sSegPosition, Int cellId,
-		Int &seg_seq
-	){
-		
-		const char *sSeg = eConn.attribute(sSegAttrName).value();
-		Int segId = 0;
-		
-		if( *sSeg ){
-			if( !StrToL(sSeg, segId) ){
-				log.error(eConn, "%s target segment id must be a positive integer", sSeg);
-				return false;
-			}
+	if( morph ){
+		seg_seq = morph->segments.getSequential(segId); //convert to sequential form
+		if(seg_seq < 0){
+			log.error(eConn, "%s %ld not present in cell %ld", sSegAttrName, segId, cellId);
+			return false;
 		}
-		
-		if( morph ){
-			seg_seq = morph->segments.getSequential(segId); //convert to sequential form
-			if(seg_seq < 0){
-				log.error(eConn, "segment id %ld not present in %s cell %ld", segId, sSegPosition, cellId);
-				return false;
-			}
-			return true; // seg_seq is known
+		return true; // seg_seq is known
+	}
+	else{
+		// artificial cell
+		if( segId != 0 ){
+			log.error(eConn, "%s %ld not present in artificial cell %ld; only segment id 0 exists", sSegAttrName, segId, cellId);
+			return false;
+		}
+		seg_seq = 0; // artificial cell only has "fictitious" segment 0
+		return true;
+	}
+	// both cases covered
+}
+bool ParseConnectionPre_EventSeries(const ImportLogger &log, const pugi::xml_node &eConn,
+	const Network::EventSetReader &evr,
+	const char *cell_attr, const char *seg_attr,
+	Int &cell_seq, Int &seg_seq, Real &frac
+){
+	// validate cell instance id's
+	const char *sCell = RequiredAttribute(log, eConn, cell_attr);
+	if(!sCell) return false;
+	if(!( StrToL(sCell, cell_seq) && 0 <= cell_seq && cell_seq < evr.instances )){
+		log.error(eConn, "%s must be an integer between 0 and %ld", cell_attr, (long) evr.instances);
+		return false;
+	}
+	
+	const char *sPort = eConn.attribute(seg_attr).value();
+	if(*sPort){
+		seg_seq = evr.ports.get_id(sPort);
+		if(seg_seq < 0){
+			log.error(eConn, "%s not found in event reader", sPort);
+			return false;
+		}
+	}
+	else{
+		if(evr.ports.size() == 1){
+			seg_seq = 0;
+		}
+		else if( (seg_seq = evr.ports.get_id("spike")) >= 0 ){
+			// done in "if"
 		}
 		else{
-			// artificial cell
-			if( segId != 0 ){
-				log.error(eConn, "segment id %ld not present in artificial %s cell %ld; only segment id 0 exists", segId, sSegPosition, cellId);
-				return false;
-			}
-			seg_seq = 0; // artificial cell only has "fictitious" segment 0
-			return true;
-		}
-		
-		// both cases covered
-	};
-	if( !ValidateAttachedSegmentId(log, eConn, pre_morph , preSegment , "presynaptic" , preCellId , conn.preSegment ) ) return false;
-	if( !ValidateAttachedSegmentId(log, eConn, post_morph, postSegment, "postsynaptic", postCellId, conn.postSegment) ) return false;
-	
-	
-	// validate fractions along
-	if(eConn.attribute("preFractionAlong")){
-		if( !ParseQuantity<Dimensionless>(log, eConn, "preFractionAlong", conn.preFractionAlong) ) return false;
-		if(!( 0 <= conn.preFractionAlong && conn.preFractionAlong <= 1.0 )){
-			log.error(eConn, "preFractionAlong not between 0 and 1");
+			log.error(eConn, "attribute %s is needed, since the event reader has multiple ports but none of them is 'spike'", cell_attr, (long) evr.instances);
 			return false;
 		}
 	}
-	else conn.preFractionAlong = 0.5;
-	if(eConn.attribute("postFractionAlong")){
-		if( !ParseQuantity<Dimensionless>(log, eConn, "postFractionAlong", conn.postFractionAlong) ) return false;
-		if(!( 0 <= conn.postFractionAlong && conn.postFractionAlong <= 1.0 )){
-			log.error(eConn, "postFractionAlong not between 0 and 1");
+	frac = 0.5; // to make the fake loca valid
+	return true;
+}
+bool ParseConnectionPreOrPost_Cell(const ImportLogger &log, const pugi::xml_node &eConn,
+	const Network::Population &pop, const Morphology *morphOrNot,
+	const char *cell_attr, const char *seg_attr, const char *frac_attr,
+	Int &cell_seq, Int &seg_seq, Real &frac
+){
+	// validate cell instance id's
+	auto *sCell = eConn.attribute(cell_attr).value();
+	if(!( *sCell )){
+		log.error(eConn, "connection must have %s", cell_attr);
+		return false;
+	}
+	
+	// TODO shouldn't this be just an integer?
+	Int cellId;
+	if( !ParseSynapseCellRef(sCell, cellId) ){
+		log.error(eConn, "invalid path \"%s\" for %s", sCell, cell_attr);
+		return false;
+	}
+	cell_seq = pop.instances.getSequential(cellId); //convert to sequential form
+	if(cell_seq < 0){
+		log.error(eConn, "%s %ld not present in population", cell_attr, cellId);
+		return false;
+	}
+	
+	if( !ValidateAttachedSegmentId(log, eConn, morphOrNot, seg_attr, cellId, seg_seq) ) return false;
+	
+	// validate fraction along
+	if(eConn.attribute(frac_attr)){
+		if( !ParseQuantity<Dimensionless>(log, eConn, frac_attr, frac) ) return false;
+		if(!( 0 <= frac && frac <= 1.0 )){
+			log.error(eConn, "%s not between 0 and 1", frac_attr);
 			return false;
 		}
 	}
-	else conn.postFractionAlong = 0.5;
+	else frac = 0.5;
 	
-	// done for the common pre/post cell/segment/fractionAlong properties
 	return true;
 }
 
@@ -5728,9 +5750,9 @@ struct ImportState{
 				net.temperature = 6.3 + 273.15; // Kelvin degrees
 			}
 		}
-		
+		// TODO order them by element name maybe?
 		for (auto eNetEl: eNet.children()){
-			// printf("%s\n", eNetEl.name());
+			printf("%s\n", eNetEl.name());
 			// perhaps annotation stuff?
 			// NOTE wherever there is Standalone, notes, annotation and property tage may exist. Handle properties as they appear, for they must be documented to be used.
 			if(
@@ -5858,10 +5880,7 @@ struct ImportState{
 				// if instances were already defined, validate size; else synthesize a collection of cells
 				if(eUniPop.attribute("size")){
 					Int size;
-					if(!( StrToL(eUniPop.attribute("size").value(), size) && size > 0 )){
-						log.error(eUniPop, "size must be a positive number");
-						return false;
-					}
+					if(!RequiredPositiveAttribute(log, eUniPop, "size", size)) return false;
 					if( !pop.instances.contents.empty() ){
 						if( (int)pop.instances.contents.size() != size){
 							log.error(eUniPop, "Population size is %zd, while explicit instances were %ld", pop.instances.contents.size(), size);
@@ -5910,7 +5929,7 @@ struct ImportState{
 				//electricalProjection is supposed to be for linear gap junctions
 				//continuousProjection is supposed to be for any graded synapse, why not gap junctions too?
 				
-				if(!ParseProjectionPrePost(log, eProj, net.populations, proj)) return false;
+				if(!ParseProjectionPrePost(log, eProj, net, proj)) return false;
 				
 				Int default_synapse_type = -1;
 				if(is_spiking){
@@ -5928,16 +5947,27 @@ struct ImportState{
 				}
 				
 				// get morphologies, they will be needed to validate cell segment - cell segment connections
-				const Network::Population &presynaptic_population = net.populations.get(proj.presynapticPopulation);
-				const Network::Population &postsynaptic_population = net.populations.get(proj.postsynapticPopulation);
-				
-				const CellType &cell_type_pre = cell_types.get( presynaptic_population.component_cell );
-				const CellType &cell_type_post = cell_types.get( postsynaptic_population.component_cell );
-				const char *cell_type_name_pre = cell_types.getName( presynaptic_population.component_cell );
-				const char *cell_type_name_post = cell_types.getName( postsynaptic_population.component_cell );
-				
+				// and get some nullable properties, or rather std::optional?
+				const Network::EventSetReader *presynaptic_evr = NULL;
+				const Network::Population *presynaptic_population = NULL;
+				const CellType *cell_type_pre = NULL;
+				const char *cell_type_name_pre = NULL;
 				const Morphology *pre_morph  = NULL;
-				if( cell_type_pre .type == CellType::PHYSICAL ) pre_morph  = &( morphologies.get( cell_type_pre .physical.morphology ) );
+				if( proj.presyn_type == Network::Projection::PresynType::EVENT_SERIES ){
+					presynaptic_evr = &net.event_readers.get(proj.presynapticPopulation);
+					cell_type_name_pre = net.event_readers.getName(proj.presynapticPopulation);
+				}
+				else if( proj.presyn_type == Network::Projection::PresynType::CELL ){
+					presynaptic_population = &net.populations.get(proj.presynapticPopulation);
+					cell_type_pre = &cell_types.get( presynaptic_population->component_cell );
+					cell_type_name_pre = cell_types.getName( presynaptic_population->component_cell );
+					if( cell_type_pre->type == CellType::PHYSICAL ) pre_morph  = &( morphologies.get( cell_type_pre->physical.morphology ) );
+				}
+				else{ assert(false); return false; }
+				
+				const Network::Population &postsynaptic_population = net.populations.get(proj.postsynapticPopulation);
+				const CellType &cell_type_post = cell_types.get( postsynaptic_population.component_cell );
+				const char *cell_type_name_post = cell_types.getName( postsynaptic_population.component_cell );
 				const Morphology *post_morph = NULL;
 				if( cell_type_post.type == CellType::PHYSICAL ) post_morph = &( morphologies.get( cell_type_post.physical.morphology ) );
 				
@@ -5971,6 +6001,11 @@ struct ImportState{
 						bool uses_delay = conntype_it->second.uses_delay;
 						bool uses_old_format = ( conn.type == Network::Projection::Connection::SPIKING );
 						
+						if( proj.presyn_type == Network::Projection::PresynType::EVENT_SERIES && conn.type != Network::Projection::Connection::SPIKING ){
+							log.error(eConn, "projection from event series must have one-way synapses only");
+							return false;
+						}
+						
 						Int id;
 						if(!( StrToL(eConn.attribute("id").value(), id) )){
 							log.error(eConn, "connection requires a non-negative id");
@@ -6002,6 +6037,8 @@ struct ImportState{
 						// 	also assume spike threshold exists (otherwise no triggering is possible), TODO check Vt existence and complain
 						// (if it was a cyborg cell it would have been modelled as something coupled with artificial cells in between, probably)
 						
+						// NB: for SPIKING connections, there can be a different code path for non cell pre...
+						
 						if(conn.type == Network::Projection::Connection::SPIKING || conn.type == Network::Projection::Connection::ELECTRICAL){
 							Int synapse_type = default_synapse_type;
 							if(synapse_type < 0){
@@ -6020,6 +6057,7 @@ struct ImportState{
 							conn.synapse = synapse_type;
 							const auto &syncomp = synaptic_components.get(synapse_type);
 							if( conn.type == Network::Projection::Connection::ELECTRICAL ){
+								assert( proj.presyn_type == Network::Projection::PresynType::CELL );
 								if( !syncomp.HasVpeer(component_types) ){
 									log.error(eConn, "connection should use an electrical synapse (using Vpeer)");
 									return false;
@@ -6030,31 +6068,37 @@ struct ImportState{
 								if( !CheckSynapticComponentWithCellTypes( log, eConn,
 									syncomp, synaptic_components.getName(synapse_type), 
 									cell_type_post, cell_type_name_post,
-									cell_type_pre, cell_type_name_pre
+									*cell_type_pre, cell_type_name_pre
 								) ) return false;
 								if( !CheckSynapticComponentWithCellTypes( log, eConn,
 									syncomp, synaptic_components.getName(synapse_type), 
-									cell_type_pre, cell_type_name_pre,
+									*cell_type_pre, cell_type_name_pre,
 									cell_type_post, cell_type_name_post
 								) ) return false;
 							}
 							if( conn.type == Network::Projection::Connection::SPIKING ){
 								if( !syncomp.HasSpikeIn(component_types) ){
-									log.error(eConn, "connection should use a spiking synapse");
+									log.error(eConn, "connection should use a synapstic component with a spike in port");
 									return false;
 								}
 								
-								// check the interfaces
-								if( !CheckSynapticComponentWithCellTypes( log, eConn,
-									syncomp, synaptic_components.getName(synapse_type), 
-									cell_type_post, cell_type_name_post,
-									cell_type_pre, cell_type_name_pre
-								) ) return false;
+								if( proj.presyn_type == Network::Projection::PresynType::CELL ){
+									// check the interfaces
+									if( !CheckSynapticComponentWithCellTypes( log, eConn,
+										syncomp, synaptic_components.getName(synapse_type), 
+										cell_type_post, cell_type_name_post,
+										*cell_type_pre, cell_type_name_pre
+									) ) return false;
+								}
+								else if( proj.presyn_type == Network::Projection::PresynType::EVENT_SERIES ){
+									// the spike port will be checked as a segment anyway
+								}
+								else{ assert(false); return false; }
 							}
 							
 						}
 						else if(conn.type == Network::Projection::Connection::CONTINUOUS){
-							
+							assert( proj.presyn_type == Network::Projection::PresynType::CELL );
 							auto preName = eConn.attribute("preComponent").value();
 							auto &synapse_type_pre = conn.continuous.preComponent = synaptic_components.get_id(preName);
 							if(conn.continuous.preComponent < 0){
@@ -6075,23 +6119,45 @@ struct ImportState{
 							if( !CheckSynapticComponentWithCellTypes( log, eConn,
 								syncomp_post, postName, 
 								cell_type_post, cell_type_name_post,
-								cell_type_pre, cell_type_name_pre
+								*cell_type_pre, cell_type_name_pre
 							) ) return false;
 							if( !CheckSynapticComponentWithCellTypes( log, eConn,
 								syncomp_pre, preName, 
-								cell_type_pre, cell_type_name_pre,
+								*cell_type_pre, cell_type_name_pre,
 								cell_type_post, cell_type_name_post
 							) ) return false;
 							
 						}
-						// NB assume continuous projections present no delay, but be ready to handle it anytime LATER
-						if( !ParseConnectionPrePost(log, eConn, presynaptic_population, postsynaptic_population, pre_morph, post_morph, uses_old_format, conn)) return false;
-						
-						// TODO check Vt dependency here
+						// now parse some more, mostly common, attributes
+						{
+						const char *preCell = "preCell";
+						const char *preSegment = "preSegment";
+						const char *postCell = "postCell";
+						const char *postSegment = "postSegment";
+						if( uses_old_format ){
+							preCell = "preCellId";
+							preSegment = "preSegmentId";
+							postCell = "postCellId";
+							postSegment = "postSegmentId";
+						}
+						// parse the pre connection differently in each case
+						if( proj.presyn_type == Network::Projection::PresynType::EVENT_SERIES ){
+						// TODO use different attribute names?
+						if(!ParseConnectionPre_EventSeries(log, eConn, *presynaptic_evr, preCell, preSegment, conn.preCell, conn.preSegment, conn.preFractionAlong )) return false; // for pre 
+						}
+						else if( proj.presyn_type == Network::Projection::PresynType::CELL ){
+						if(!ParseConnectionPreOrPost_Cell(log, eConn, *presynaptic_population , pre_morph , preCell , preSegment , "preFractionAlong" , conn.preCell , conn.preSegment , conn.preFractionAlong  )) return false; // for pre 
+						// TODO check Vt dependency here for presynaptic cell
+						}
+						else{ assert(false); return false; }
+						// but the post cell is a cell, for now
+						if(!ParseConnectionPreOrPost_Cell(log, eConn, postsynaptic_population, post_morph, postCell, postSegment, "postFractionAlong", conn.postCell, conn.postSegment, conn.postFractionAlong )) return false; // for post
+						}
 						
 						if(uses_weight){
 							if( !ParseQuantity<Dimensionless>(log, eConn, "weight", conn.weight) ) return false;
 						}
+						// NB assume continuous projections present no delay, but be ready to handle it anytime LATER
 						if(uses_delay){
 							if( !ParseQuantity<Time>(log, eConn, "delay", conn.delay) ) return false;
 						}
@@ -6202,42 +6268,23 @@ struct ImportState{
 			else if(strcmp(eNetEl.name(), "EdenTimeSeriesReader") == 0){
 				const auto &eRea = eNetEl;
 				
-				auto name = RequiredNmlId(log, eRea);
+				auto name = RequiredNmlId(log, eRea, net.data_readers);
 				if(!name) return false;
-				if(net.data_readers.has(name)){
-					log.error(eRea, "%s %s already defined", eRea.name(), name);
-					return false;
-				}
 				
 				Network::TimeSeriesReader reader;
 				
-				const char *sHref = RequiredAttribute( log, eRea, "href");
-				if(!sHref) return false;
-				auto &url = reader.source_url;
-				url = sHref; // NB validate on backend, until the url format is standardized LATER (or even better, leave it up to the backend?)
-				
-				// XXX if it's a file url, much like the current behaviour of OutputFile, it's relative to the cwd of the program, not the file being parsed! TODO specify a way to selecthow to behave, or at least document --  filename
-				// here's a trick: use "no uri scheme" to mean "relative to xml file" and "file://" to mean "relative to working directory", TODO document it.
-				std::string scheme, auth_path;
-				if(!GetUrlScheme(url, scheme, auth_path)){
-					const char *loading_from_file = log.GetFilenameFromElement(eRea);
-					url = GetRelativeFilePath((loading_from_file ? loading_from_file : "."), url);
-				}
-				// else keep the url as is
+				if(!GetSchemeOrRelpathFromUrl(log, eRea, "href", reader.source_url)) return false;
+				// NB validate url on backend, until the url format is standardized LATER (or even better, leave it up to the backend?)
 				
 				const char *sFormat = RequiredAttribute( log, eRea, "format");
 				if(!sFormat) return false;
 				reader.data_format = sFormat; // NB validate on backend, until the url format is standardized LATER (or even better, leave it up to the backend?)
 				
-				const char *sInstances = RequiredAttribute( log, eRea, "instances");
-				if(!sInstances) return false;
-				if(!( StrToL(sInstances, reader.instances) && reader.instances > 0 )){
-					log.error(eRea, " \"instances\" must be a positive integer, not %s", sInstances);
-					return false;
-				}
+				if(!RequiredPositiveAttribute(log, eRea, "instances", reader.instances)) return false;
 				
+				const char *sColName = "InputColumn";
 				for(const auto &eReaEl : eRea.children()){
-					if( strcmp(eReaEl.name(), "InputColumn") == 0 ){
+					if( strcmp(eReaEl.name(), sColName) == 0 ){
 						
 						auto name = RequiredNmlId(log, eReaEl);
 						if(!name) return false;
@@ -6248,7 +6295,7 @@ struct ImportState{
 						
 						Network::TimeSeriesReader::InputColumn column = {Dimension::Unity(), dimensions.GetNative(Dimension::Unity())};
 						if(!ParseDimensionAttribute(log, eReaEl, dimensions, column.dimension)) return false;
-						const char *sUnits = RequiredAttribute( log, eReaEl, "units"); if(!sInstances) return false;
+						const char *sUnits = RequiredAttribute( log, eReaEl, "units");
 						if(!ValidateGetUnits(LogWithElement(log,eReaEl), dimensions, column.dimension, sUnits, column.units)) return false;
 						
 						reader.columns.add(column, name); // yay!
@@ -6260,11 +6307,52 @@ struct ImportState{
 				
 				// one last consistency check
 				if(reader.columns.contents.empty()){
-					log.error(eRea, "%s must have one or more <InputColumn>s", eRea.name());
+					log.error(eRea, "%s must have one or more <%s>s", eRea.name(), sColName);
 					return false;
 				}
 				
 				net.data_readers.add(reader, name); // yay!
+			}
+			else if(strcmp(eNetEl.name(), "EdenEventSetReader") == 0){
+				printf("waa!!\n");
+				const auto &eRea = eNetEl;
+				
+				auto name = RequiredNmlId(log, eRea, net.event_readers);
+				if(!name) return false;
+				
+				Network::EventSetReader reader;
+				
+				if(!GetSchemeOrRelpathFromUrl(log, eRea, "href", reader.source_url)) return false;
+				// NB validate url on backend, until the url format is standardized LATER (or even better, leave it up to the backend?)
+				
+				const char *sFormat = RequiredAttribute( log, eRea, "format");
+				if(!sFormat) return false;
+				reader.data_format = sFormat; // NB validate on backend, until the url format is standardized LATER (or even better, leave it up to the backend?)
+				
+				if(!RequiredPositiveAttribute(log, eRea, "instances", reader.instances)) return false;
+				
+				const char *sColName = "Port";
+				for(const auto &eReaEl : eRea.children()){
+					if( strcmp(eReaEl.name(), sColName) == 0 ){
+						
+						auto name = RequiredNmlId(log, eReaEl, reader.ports, eRea.name());
+						if(!name) return false;
+						
+						Network::EventSetReader::Port port = {};
+						reader.ports.add(port, name); // yay!
+					}
+					else{
+						// unknown, ignore
+					}
+				}
+				
+				// one last consistency check
+				if(reader.ports.contents.empty()){
+					log.error(eRea, "%s must have one or more <%s>s", eRea.name(), sColName);
+					return false;
+				}
+				
+				net.event_readers.add(reader, name); // yay!
 			}
 			else{
 				// unknown, ignore

@@ -33,8 +33,10 @@ def VerifyTimeSeries_Box( results_Truth, results_Test, time_Truth, dt_box, dv_bo
 	
 	over_points  = np.flatnonzero( results_Test > dmax )
 	under_points = np.flatnonzero( results_Test < dmin )
+	nan_points   = np.flatnonzero( np.isnan(results_Truth) | np.isnan(results_Test) )
 	# print (over_points)
 	# print (under_points)
+	# print (nan_points)
 	over_earliest = len(dmax) + 5 # invalid value, later than possible
 	if over_points.size > 0:
 		over_earliest = over_points[0]
@@ -42,18 +44,24 @@ def VerifyTimeSeries_Box( results_Truth, results_Test, time_Truth, dt_box, dv_bo
 	under_earliest = len(dmin) + 5 # invalid value, later than possible
 	if under_points.size > 0:
 		under_earliest = under_points[0]
+	
+	nan_earliest = len(dmin) + 5 # invalid value, later than possible
+	if nan_points.size > 0: nan_earliest = nan_points[0]
 	# print(over_earliest)
-	# print(under_earliest)
-	if over_points.size > 0 or under_points.size > 0:
+	if over_points.size > 0 or under_points.size > 0 or nan_points.size > 0:
 		# one of them should be in the sample range
-		if over_earliest < under_earliest:
+		if over_earliest < under_earliest and over_earliest < nan_earliest:
 			fail_desc = "Over limit"
 			fail_sample = over_earliest
 			diff = (results_Test[over_earliest] - results_Truth[over_earliest])
-		elif under_earliest < over_earliest:
+		elif under_earliest < over_earliest and under_earliest < nan_earliest:
 			fail_desc = "Under limit"
 			fail_sample = under_earliest
 			diff = (results_Test[under_earliest] - results_Truth[under_earliest])
+		elif nan_earliest < over_earliest and nan_earliest < under_earliest:
+			fail_desc = "NaN"
+			fail_sample = nan_earliest
+			diff = (results_Test[nan_earliest] - results_Truth[nan_earliest])
 		else:
 			raise AssertionError( 'exceeding both max and min limits')
 		return {'desc': fail_desc, 'sample':fail_sample, 'time': time_Truth[fail_sample], 'diff':diff}

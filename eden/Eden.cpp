@@ -61,7 +61,7 @@ typedef long long * Table_I64;
 // assume standard C calling convention, which is probably the only cross-module one in most architectures
 // bother if problems arise LATER
 typedef void ( *IterationCallback)(
-	double time,
+	double time_f64,
 	float dt,
 	const float *__restrict__ constants, long long const_local_index,
 	const long long *__restrict__ constints, long long cinst_local_index,
@@ -74,7 +74,7 @@ typedef void ( *IterationCallback)(
 	
 );
 void UndefinedCallback(
-	double time,
+	double time_f64,
 	float dt,
 	const float *__restrict__ constants, long long const_local_index,
 	const long long *__restrict__ constints, long long cinst_local_index,
@@ -302,6 +302,7 @@ bool GetCellLocationFromPath( const Network &net, const Simulation::LemsQuantity
 		const auto &proj = net.projections.get(path.synapse.proj_seq);
 		const auto &conn = proj.connections.atSeq(path.synapse.conn_seq);
 		if(      path.synapse.location == Path::SynapsePath::Location::PRE  ){
+			if(proj.presyn_type == Network::Projection::PresynType::EVENT_SERIES){return false;} // it's an event reader actually
 			loca = Simulation::LemsSegmentLocator(proj.presynapticPopulation , conn.preCell , conn.preSegment , conn.preFractionAlong );
 		}
 		else if( path.synapse.location == Path::SynapsePath::Location::POST ){
@@ -416,7 +417,7 @@ auto GetEncodedTableEntryId = []( long long global_idx_T_dest_table, long long e
 	return packed_id;
 };
 auto GetDecodedTableEntryId = [  ]( TabEntryRef_Packed packed_id ){
-	long long global_idx_T_dest_table = packed_id >> 24;
+	ptrdiff_t global_idx_T_dest_table = packed_id >> 24;
 	int entry_idx_T_dest = packed_id % (1 << 24);
 	TabEntryRef ret = { global_idx_T_dest_table, entry_idx_T_dest };
 	return ret;
@@ -848,9 +849,31 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 		};
 		
-		
 		// The mapping of properties to offsets, for common components
-		struct SynapticComponentImplementation{
+		struct SpikeRecvingImplementation{
+			size_t Table_Trig;  // for spiking synapses & hybrids
+			// these may be optional later
+			ptrdiff_t Table_Delay; // for spiking synapses & hybrids
+			ptrdiff_t Table_NextSpike;  // pending spike queue for spiking synapses & hybrids. LATER will hold more than one spike.
+			// possibly delay in sender LATER, depends on formulation
+			
+			SpikeRecvingImplementation(){
+				Table_Trig = -1; Table_Delay = Table_NextSpike = -1;
+			}
+			// what TODO with multiple spike-sending things in a compartment ??
+		};
+		struct SpikeSendingImplementation{
+			// if a complicated type (ie always)
+			ptrdiff_t Table_SpikeRecipients;
+			// possibly delay in sender LATER, depends on formulation
+			
+			SpikeSendingImplementation(){
+				Table_SpikeRecipients = -1;
+			}
+			// what TODO with multiple spike-sending things in a compartment ??
+		};
+		
+		struct SynapticComponentImplementation : public SpikeRecvingImplementation{
 			// Spike-receiving synaptic components require:
 			//	- a trigger state table for each comp.type, in post-synaptic cell
 			//	- an entry referring to trigger state table, in pre-synaptic cell send spike table 
@@ -861,9 +884,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			size_t Table_Weight; // for all of them
 			
+			// spike recving components are included by inheritance
 			// optional, is -1 if not used
-			size_t Table_Delay; // for spiking synapses & hybrids
-			size_t Table_Vpeer; // for gap junctions    & hybrids
+			size_t Table_Vpeer; // for gap junctions & hybrids
 			
 			// if a native type
 				size_t Table_Erev;
@@ -877,9 +900,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// size_t Table_Ibase;
 			
 			// and states
-			
-			size_t Table_Trig;  // for spiking synapses & hybrids
-			size_t Table_NextSpike;  // pending spike queue for spiking synapses & hybrids. LATER will hold more than one spike.
 			
 			// if a native type
 				size_t Table_Grel;
@@ -904,8 +924,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// Table_Tau3 = -1;
 				// Table_Ibase = -1;
 				
-				Table_Trig = -1;
-				Table_NextSpike = -1;
 				Table_Grel = -1;
 				// Table_Grel2 = -1;
 			}
@@ -944,29 +962,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			InputImplementation(){
 				Table_Weight = -1;
 			}
-		};
-		// TODO merge with syncomp implementation
-		struct SpikeRecvingImplementation{
-			size_t Table_Trig;  // for spiking synapses & hybrids
-			// these may be optional later
-			ptrdiff_t Table_Delay; // for spiking synapses & hybrids
-			ptrdiff_t Table_NextSpike;  // pending spike queue for spiking synapses & hybrids. LATER will hold more than one spike.
-			// possibly delay in sender LATER, depends on formulation
-			
-			SpikeRecvingImplementation(){
-				Table_Trig = -1; Table_Delay = Table_NextSpike = -1;
-			}
-			// what TODO with multiple spike-sending things in a compartment ??
-		};
-		struct SpikeSendingImplementation{
-			// if a complicated type (ie always)
-			ptrdiff_t Table_SpikeRecipients;
-			// possibly delay in sender LATER, depends on formulation
-			
-			SpikeSendingImplementation(){
-				Table_SpikeRecipients = -1;
-			}
-			// what TODO with multiple spike-sending things in a compartment ??
 		};
 		
 		struct RngImplementation{
@@ -1835,7 +1830,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	
 	// check for spike in/out as well
 	std::vector< std::set<Int> > spiking_outputs_per_cell_per_compartment( cell_types.contents.size() );
-	// HERE make sure it's all types of event writers!!
+	// NB: HERE make sure it's all types of event writers!!
 	for( Int evw_seq = 0; evw_seq < (Int)sim.event_writers.contents.size(); evw_seq++ ){
 		const auto &evw = sim.event_writers.get(evw_seq);
 		for( Int col_seq = 0; col_seq < (Int)evw.outputs.size(); col_seq++ ){
@@ -2588,7 +2583,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			// TODO replace common exposures by LEMS names using a persistent name table
 			const static NameMap< Int ComponentType::CommonRequirements::* > common_requirement_names = {
-				{"time"					, &ComponentType::CommonRequirements::time },
+				{"time_f32"				, &ComponentType::CommonRequirements::time },
 				{"temperature"			, &ComponentType::CommonRequirements::temperature },
 				{"Vcomp"				, &ComponentType::CommonRequirements::membrane_voltage },
 				{"Acomp"				, &ComponentType::CommonRequirements::membrane_surface_area },
@@ -3174,7 +3169,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	
 	auto EmitWorkItemRoutineHeader = [ &config ]( std::string &code ){
 		(void) config; // just in case
-		code += "void doit( double time, float dt, const float *__restrict__ global_constants, long long const_local_index, \n"
+		code += "void doit( double time_f64, float dt, const float *__restrict__ global_constants, long long const_local_index, \n"
 											  "const long long *__restrict__ global_constints, long long cinst_local_index, \n"
 		"const long long *__restrict__ global_const_table_f32_sizes, const Table_F32 *__restrict__ global_const_table_f32_arrays, long long table_cf32_local_index,\n"
 		"const long long *__restrict__ global_const_table_i64_sizes, const Table_I64 *__restrict__ global_const_table_i64_arrays, long long table_ci64_local_index,\n"
@@ -3187,7 +3182,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		code += "	\n";
 		code += "	char initial_state = (step <= 0);\n";
-		code += "	const float time_f32 = time; //when not accumulating small deltas, double precision is not necessary, and it messes up with SIMD\n";
+		code += "	const float time_f32 = time_f64; //when not accumulating small deltas, double precision is not necessary, and it messes up with SIMD\n";
 		code +=   "	\n";
 		
 		code += "	const long long NOT_AN_INSTANCE = ~0xFee1600dLL; // if it's misused to index an array it will probably stop right there \xE3\x8B\xA1\n";
@@ -3710,8 +3705,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// TODO wrap into a reqstring ?
 				ccde   += tab+"char spiker_fired_flag = 0;\n";
 				ccde   += tab+"long long pos = Positions[instance];\n";
-				ccde   += tab+"while( time_f32 >= Spike_Times[pos] ){\n";
-				ccde   += tab+"	spiker_fired_flag = 1;\n";
+				ccde   += tab+"while( Spike_Times[pos] < time_f32 + dt ){\n";
+				ccde   += tab+"	spiker_fired_flag = 1;\n"; // LATER handle multiple spikes somehow!
 				ccde   += tab+"	pos++;\n";
 				ccde   += tab+"}\n";
 				ccde   += tab+"if( !initial_state ){\n";
@@ -3747,7 +3742,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						ccde +=   "	 #pragma novector\n";
 					}
 					sprintf(tmps, "	for(long long instance = 0; instance < Instances_input_pulse; instance++){\n"); ccde += tmps;
-					ccde +=   "		if( Start_input_pulse[instance] <= time && time <=  Start_input_pulse[instance] +  Duration_input_pulse[instance] ) I_input_pulse += Imax_input_pulse[instance] * Weight[instance];\n";
+					ccde +=   "		if( Start_input_pulse[instance] <= time_f32 && time_f32 <=  Start_input_pulse[instance] +  Duration_input_pulse[instance] ) I_input_pulse += Imax_input_pulse[instance] * Weight[instance];\n";
 					ccde   += "	}\n";
 					sprintf(tmps, "	I_input_total += I_input_pulse;\n"); ccde += tmps;
 					sprintf(tmps, "	I_input_total += 0;\n"); ccde += tmps; // the ideal current probe is invariant with voltage
@@ -5126,7 +5121,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					};
 					auto DescribeRate_Tau = [&DescribeRate_Thing](const IonChannel::Rate &rate, const std::string &tab, std::size_t inst_seq, std::size_t gate_seq, CellInternalSignature::ComponentSubSignature &component){
 						std::string for_what = "HHRate BaseTau "+itos(gate_seq)+" for Fixed channel "+itos(inst_seq); // TODO more structured commenting
-						//printf("wac\n");
 						return 	DescribeRate_Thing( rate, tab, for_what, "t", component );
 					};
 					
@@ -6603,9 +6597,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					return;
 				}
 			};
-			// FIXME handle each event independently!!
-			// TODO weighted events, oh dear? only if brian supports them i guess, otherwise let it stay for a while
-			// FIXME also delays on inputs! HERE AddDelay
+			// LATER weighted events, oh dear? only if brian supports them i guess, otherwise let it stay for a while
+			// also delays on inputs ... also AddDelay
 			auto ImplementspikeRecver_OpenEnd = [&config](
 				const std::string &flagname,
 				const SignatureAppender_Table &AppendMulti,
@@ -6613,7 +6606,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				CellInternalSignature::SpikeRecvingImplementation &recver,
 				std::string &code
 			){
-				// table_Trig HERE, let's see if it works without them...
+				// table_Trig LATER, let's see if it works without them...
 				// const Table_Delay state Table_NextSpike
 				assert(false);
 				return true;
@@ -6630,7 +6623,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						("Lems_eventin_"+std::to_string(port_seq)).c_str(),
 						AppendMulti,
 						for_what+" in port "+std::to_string(port_seq),
-						aig.lems__inports_to_trigvecs[port_seq], added_spike_recv_code // HERE ccde and openend
+						aig.lems__inports_to_trigvecs[port_seq], added_spike_recv_code // LATER ccde and openend
 					) ) return false;
 					// FIXME allocate delays as well!!!
 					// direct naked input is not implemented (as a multi recipient), thus all lems in ports are allocated here
@@ -6699,9 +6692,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					}
 					
 					ccde   += tab+"if( !initial_state ){\n";
-						
-					ccde   += tab+"	while( time_f32 >= Spike_Times[pos] ){\n";
-					ccde   += tab+"		spike_out_flag |= 1;\n";
+					ccde   += tab+"	while( Spike_Times[pos] < time_f32 + dt ){\n";
+					ccde   += tab+"		spike_out_flag |= 1;\n"; // LATER handle multiple spikes somehow!
 					ccde   += tab+"		pos++;\n";
 					ccde   += tab+"	}\n";
 						
@@ -7157,7 +7149,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	
 	
 	// symbolic reference to some point, on some neuron, under NeuroML
-	// NB: should thois be replaced by LemsSegmentLocator, or saty to show how to use an alternative identifier? ... it doesn't make mauch sense becuase it is no more, no less than a LemsSemgnetLocator in this case. TODO eliminate.
+	// NB: should this be replaced by LemsSegmentLocator, or saty to show how to use an alternative identifier? ... it doesn't make mauch sense becuase it is no more, no less than a LemsSegmentLocator in this case. TODO eliminate.
 	// what should be done with fractionalong vs ? one workaround is to know the discretization beforehand and use the middle of each compartment as discrete fractionAlong (it's not like it's practical to vary things if the discrete element is the same i guess?)
 	struct PointOnCellLocator{
 		Int population;
@@ -7214,7 +7206,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	};
 	
 	#ifdef USE_MPI
-	
+	constexpr int EXTERNAL_IO_NODE = 0; // unitl LATER
 	// get lists of what to be sent, in model-specific symbolic references -
 	// not references to realized work items, because each node may handle this differently
 	
@@ -7356,7 +7348,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	// LATER make a file format that enables fully distributed loading, through pre-processed domain decomposition (using e.g. METIS, or Scotch)
 	
 	// Mapping of neuron GIDs <-> ( nodes, work items, PointOnCellLocators or paths )
-	
+	// todo eliminate gids?
 	std::map< Int, int > neuron_gid_to_node;	
 	std::vector< std::map<Int, Int> > neuron_gid_per_cell_per_population( net.populations.contents.size() );
 	
@@ -7365,15 +7357,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	
 	// similar to PointOnCellLocator
 	// TODO SOON refactor better
-	struct CellLocator_PopInst {
-		Int pop_seq;
-		Int inst_seq;
-		CellLocator_PopInst( Int _p, Int _i ){
-			pop_seq = _p;
-			inst_seq = _i;
-		}
-	};
-	std::map< Int, CellLocator_PopInst > neuron_gid_to_popinst;
+	// struct CellLocator_PopInst {
+	// 	Int pop_seq;
+	// 	Int inst_seq;
+	// 	CellLocator_PopInst( Int _p, Int _i ){
+	// 		pop_seq = _p;
+	// 		inst_seq = _i;
+	// 	}
+	// };
+	// std::map< Int, CellLocator_PopInst > neuron_gid_to_popinst;
 	
 	// and helper functions, to not mess with the data structures directly (TODO refactor into object)
 	auto GetLocalWorkItem_FromPopInst = [ &net, &local_workunit_per_cell_per_population  ]( Int pop_seq, Int cell_seq ){
@@ -7400,47 +7392,49 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		return hm.at(cell_seq);
 	};
 	// FIXME make fallible !
-	auto GetRemoteNode_FromPopInst = [ &GetGlobalGid_FromPopInst, &neuron_gid_to_node ]( Int pop_seq, Int cell_seq ){
+	// LATER replace these in favor of string paths i guess, to decentralize
+	auto GetRemoteNode_FromPopInst = [ &GetGlobalGid_FromPopInst, &neuron_gid_to_node ]( Int pop_seq, Int cell_seq, int &node ){
 		// sanity check
 		
 		Int gid = GetGlobalGid_FromPopInst( pop_seq, cell_seq );
-		if( gid < 0 ) return (int) ~0xABadD00d;
+		if( gid < 0 ) return false;
 		
 		if( !neuron_gid_to_node.count(gid) ){
 			printf("Internal error: missing node for neuron gid %ld\n", gid);
-			return (int) ~0xABadD00d;
+			return false;
 		}
 		
-		return neuron_gid_to_node.at(gid);
+		node = neuron_gid_to_node.at(gid);
+		return true;
 	};
 	
 	// Maps neuron instance to either non-negative local work item, or negative ~(remote_node_id)
+	// Compared to LocateNode + LocateEntry, it is useful for adding several things on the same workitem
+	// eg. syn table entries and also Locateentry itself
 	// FIXME make fallible !
-	auto WorkUnitOrNode = [ &GetLocalWorkItem_FromPopInst, &GetRemoteNode_FromPopInst ]( int pop, int cell_inst ){
-		work_t ret = GetLocalWorkItem_FromPopInst( pop, cell_inst );
-		// Say("pop %d %d = %llx", pop, cell_inst, (long long)ret);
-		
-		if( ret < 0 ){
-			ret = ~GetRemoteNode_FromPopInst( pop, cell_inst );
+	auto WorkUnitOrNode = [ &GetLocalWorkItem_FromPopInst, &GetRemoteNode_FromPopInst ]( int pop, int cell_inst, work_t &work_unit_or_node ){
+		work_unit_or_node = GetLocalWorkItem_FromPopInst( pop, cell_inst );
+		if( work_unit_or_node < 0 ){
+			int node;
+			if(!GetRemoteNode_FromPopInst( pop, cell_inst, node )) return false;
+			work_unit_or_node = ~node;
 		}
 		// Say("popp %d %d = %llx", pop, cell_inst, (long long)ret);
 		
-		return ret;
+		return true;
 	};
 	
 	auto LocateNodeForSegLoc = [&net, &GetRemoteNode_FromPopInst]( const auto &path, int &node ){
 		Simulation::LemsSegmentLocator loca;
 		if( !GetCellLocationFromPath(net, path, loca) ) return false;
-		Int nodecode = GetRemoteNode_FromPopInst(loca.population, loca.cell_instance);
-		if(nodecode == ~0xABadD00d) assert(false);
-		node = (Int) nodecode;
+		if(!GetRemoteNode_FromPopInst(loca.population, loca.cell_instance, node)){ assert(false); return false;} // TODO allow nodes to not know about all cells and thus fail, or emit a diagnostic
 		return true;
 	};
 	auto LocateNodeForPath = [&net, &LocateNodeForSegLoc]( const Simulation::LemsQuantityPath &path, int &node ){
 		if( LocateNodeForSegLoc(path, node) ) return true;
 		else{
 			if( path.type == Simulation::LemsQuantityPath::DATAREADER ){
-				node = 0; // for now at least, LATER use a mapper to determine
+				node = EXTERNAL_IO_NODE; // for now at least, LATER use a mapper to determine
 				return true;
 			}
 			// LATER with official LEMS synapse paths and such
@@ -7451,7 +7445,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		if( LocateNodeForSegLoc(path, node) ) return true;
 		else{
 			if( path.type == Simulation::LemsEventPath::EVENTREADER ){
-				node = 0; // for now at least, LATER use a mapper to determine
+				node = EXTERNAL_IO_NODE; // for now at least, LATER use a mapper to determine
 				return true;
 			}
 			return false;
@@ -7466,7 +7460,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	// so only a realized population -> work items mapping needs to be maintained
 	
 	std::vector< std::vector<size_t> >  workunit_per_cell_per_population( net.populations.contents.size() ); // will extend to include compartments, somehow LATER
-	// TODO unify GetLocalWorkItem_FromPopInst to get work unit or negative? vs workunitornode...
+	// TODO unify to get work unit or negative whether mpi or not?
 	
 	#endif
 	
@@ -7474,7 +7468,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	bool i_log_the_data = true;
 	
 	#ifdef USE_MPI
-	if( my_mpi.rank == 0 ){
+	if( my_mpi.rank == EXTERNAL_IO_NODE ){
 		
 		i_log_the_data = true;
 		// form the data structures, send requests for whatever is remote
@@ -7805,7 +7799,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				local_workunit_per_cell_per_population[pop_seq][inst_seq] = work_unit;
 				neuron_gid_to_workitem[current_neuron_gid] = work_unit;
-				neuron_gid_to_popinst.insert( std::make_pair( current_neuron_gid, CellLocator_PopInst(pop_seq, inst_seq) ) );
+				// neuron_gid_to_popinst.insert( std::make_pair( current_neuron_gid, CellLocator_PopInst(pop_seq, inst_seq) ) );
 				
 				#else
 				
@@ -7975,6 +7969,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		string_path += "/spike"; // it's convenient that the spike emitter has the same name everywhere, unlike v which could be V as well
 		return model.ParseLemsEventPath(log, string_path.c_str(), NULL, net, spiker_path);
 	};
+	auto PathToEventReaderPort = [](const Simulation::LemsSegmentLocator &loca, Simulation::LemsEventPath &path, const ILogProxy &log = printf_stderr){
+		path.type = Simulation::LemsEventPath::Type::EVENTREADER;
+		path.reader = {loca.population, loca.cell_instance, loca.segment_seq };
+		return true;
+	};
 	// TODO move to more general aux
 	/*
 	auto PathToVpeer = [&cell_types](Int celltype_seq, const Simulation::LemsSegmentLocator &loca){
@@ -7991,8 +7990,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		}
 	};
 	*/
-	auto GetCompartmentVoltageStatevarIndex = [ &cell_types ]( const CellInternalSignature &sig, Int celltype_seq, Int seg_seq, Real fractionAlong ){
-		const CellType &cell_type = cell_types.get(celltype_seq);
+	auto GetCompartmentVoltageStatevarIndex = [ ]( const CellInternalSignature &sig, const CellType &cell_type, Int seg_seq, Real fractionAlong ){
+		// TODO maybe duplicate in sig if it's only that check?
 		if( cell_type.type == CellType::PHYSICAL ){
 			auto comp_seq = sig.physical_cell.compartment_discretization.GetCompartmentForSegmentLocation(seg_seq, fractionAlong);
 			return (ptrdiff_t) sig.physical_cell.GetVoltageStatevarIndex( comp_seq );
@@ -8005,7 +8004,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	#ifdef USE_MPI
 	// Variants of GetXxxImplementation, including ??? TODO remove since they should be the same whether mpi or not?
 	// TODO merge with its only caller i guess
-	auto GetCompartmentVoltageStatevarIndex_Global = [ &net, &cell_sigs, &tabs, &GetLocalWorkItem_FromPopInst, &GetCompartmentVoltageStatevarIndex ]( const PointOnCellLocator &loc ){
+	auto GetCompartmentVoltageStatevarIndex_Global = [ &net, &cell_types, &cell_sigs, &tabs, &GetLocalWorkItem_FromPopInst, &GetCompartmentVoltageStatevarIndex ]( const PointOnCellLocator &loc ){
 		const auto &pop = net.populations.get(loc.population);
 		// TODO for split cell
 		auto celltype_seq = pop.component_cell;
@@ -8014,7 +8013,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		ptrdiff_t work_unit = GetLocalWorkItem_FromPopInst( loc.population, loc.cell_instance );
 		assert( work_unit >= 0 ); // LATER make fallible ?
 		
-		ptrdiff_t local_offset = GetCompartmentVoltageStatevarIndex( sig, celltype_seq, loc.segment, loc.fractionAlong );
+		ptrdiff_t local_offset = GetCompartmentVoltageStatevarIndex( sig, cell_types.get(celltype_seq), loc.segment, loc.fractionAlong );
 		assert( local_offset >= 0 );
 		
 		size_t global_idx_V_peer = tabs.global_state_f32_index[work_unit] + local_offset;
@@ -8141,7 +8140,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// get work item for this neuron here, or perhaps further on when compartments are work items
 			
 			#ifdef USE_MPI
-			work_t work_unit = WorkUnitOrNode( loca.population, loca.cell_instance );
+			work_t work_unit = GetLocalWorkItem_FromPopInst( loca.population, loca.cell_instance );
 			if( work_unit < 0 ) return false; // TODO return node name or leave it to the caller? where should the domain decomposition be checked
 			// TODO leave the check to the caller?
 			#else
@@ -8519,7 +8518,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			// get work item for this neuron here, or perhaps further on when compartments are work items
 			#ifdef USE_MPI
-			work_t work_unit = WorkUnitOrNode( loca.population, loca.cell_instance );
+			work_t work_unit = GetLocalWorkItem_FromPopInst( loca.population, loca.cell_instance );
 			if( work_unit < 0 ) return false; // TODO return node name or leave it to the caller? where should the domain decomposition be checked
 			// TODO leave the check to the caller?
 			#else
@@ -8688,7 +8687,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	};
 	
 	// create connectivity after cells are instantiated, for simplicity:
-	
 	// also populate the inputs
 	printf("Creating inputs...\n");
 	
@@ -8840,27 +8838,32 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// printf("Projection %zd of %zd \n", proj_seq, net.projections.contents.size() );
 		
 		const auto &proj = net.projections.contents.at(proj_seq);
-		const auto &prepop = net.populations.get(proj.presynapticPopulation);
-		const auto &postpop = net.populations.get(proj.postsynapticPopulation);
+		Network::Projection::PresynType presyn_type = proj.presyn_type, postsyn_type = Network::Projection::PresynType::CELL;
+		// get Cell type/Compartment instance. don't remove yet, since multiple entries need to be added, according to the local cell's sig.
+		const CellType *cell_type_pre = NULL; const CellInternalSignature *sig_pre = NULL;
+		if( presyn_type == Network::Projection::PresynType::CELL ){
+			const auto &prepop = net.populations.get(proj.presynapticPopulation);
+			cell_type_pre = &cell_types.get(prepop.component_cell);
+			sig_pre = &cell_sigs[prepop.component_cell];
+		}
 		
-		// get Cell type/Compartment instance. TODO remove?
-		const auto &presig = cell_sigs[prepop.component_cell];
-		const auto &postsig = cell_sigs[postpop.component_cell];
+		const auto &postpop = net.populations.get(proj.postsynapticPopulation);
+		const CellType *cell_type_post = &cell_types.get(postpop.component_cell);;
+		const CellInternalSignature *sig_post = &cell_sigs[postpop.component_cell];
 		
 		auto AppendSynapticComponentEntries = [
 			&model, &net, &AppendSyncompInternals,
 			&GetSynapseIdId, &GetCompartmentSynapseImplementations, 
-			&PathToCellSpiker, &AddSpikeTarget, &LocateEntryFromEventPath,
+			&PathToCellSpiker, &PathToEventReaderPort, &AddSpikeTarget, &LocateEntryFromEventPath,
 			&GetCompartmentVoltageStatevarIndex
 			#ifdef USE_MPI
 			, &AppendRemoteDependency_Vpeer, &AppendRemoteDependency_Spike
 			#endif
 		](
 			const SynapticComponent &syn, Int syncomp_seq, const Network::Projection::Connection &conn,
-			const PointOnCellLocator &mine_loc,
-			const PointOnCellLocator &peer_loc,
-			work_t work_unit, const CellInternalSignature &sig, Int mine_cell_type_seq,
-			work_t peer_work_unit,const CellInternalSignature &peer_sig, Int peer_cell_type_seq,
+			const PointOnCellLocator &mine_loc, const PointOnCellLocator &peer_loc,
+			work_t work_unit,
+			work_t peer_work_unit, const CellInternalSignature *peer_sig, const CellType *peer_cell_type, Network::Projection::PresynType peer_type,
 			Int &new_instance_seq, RawTables &tabs
 		){
 			new_instance_seq = -1;
@@ -8878,7 +8881,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			// get the underlying mechanism
 			// TODO might not exist, if this node doesn't work with this cell type
-			const auto &synimps = GetCompartmentSynapseImplementations( mine_loc );
+			const auto &synimps = GetCompartmentSynapseImplementations( mine_loc ); // TODO use loca now?
 			if(!synimps.count(id_id)){
 				printf("Internal error: No impl signature for type %ld\n", id_id);
 				printf("Synimps: " );
@@ -8906,18 +8909,18 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			if( uses_weight ) AddWeight( work_unit, synimpl, weight, new_instance_seq );
 			
 			if( needs_Vpeer ){
-				
+				// LATER make half-gap synpases or what it takes to connect timeseries and cells continuously, in a less messy way than inputs+varref
+				if(!( peer_type == Network::Projection::PresynType::CELL && peer_sig && peer_cell_type )){ assert(false); return false; } // equivalently check if the peer really is a cell
 				auto AddGap = [ 
 					&GetCompartmentVoltageStatevarIndex
 					#ifdef USE_MPI
 					, &AppendRemoteDependency_Vpeer
 					#endif
 				](
-					const SynapticComponent &syn,
-					work_t work_unit, const CellInternalSignature::SynapticComponentImplementation &synimpl, //const CellInternalSignature &sig, Int comp_seq,
+					work_t work_unit, const CellInternalSignature::SynapticComponentImplementation &synimpl,
 					work_t peer_work_unit,
-					const CellInternalSignature &peer_sig, 
-					Int peer_cell_type_seq,
+					const CellInternalSignature *peer_sig, 
+					const CellType *peer_cell_type,
 					const PointOnCellLocator &peer_loc,					
 					// const LemsSegmentLocator &peer_loca,					
 					auto &tabs
@@ -8926,7 +8929,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					if( work_unit < 0 ){
 						return true; // not mine, let the need to send emerge
 					}
-					
 					
 					const auto off_ci64 = tabs.global_table_const_i64_index[work_unit];
 					auto &tab_ci64 = tabs.global_tables_const_i64_arrays;
@@ -8953,7 +8955,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					// 	printf("internal error: gap junction realization: cannot locate Vpeer voltage for path %s\n", model.LemsQuantityPathToStringOrEmpty(net, peer_path).c_str() );
 					// 	return false;
 					// }
-					ptrdiff_t local_idx_V_peer = GetCompartmentVoltageStatevarIndex( peer_sig, peer_cell_type_seq, peer_loc.segment, peer_loc.fractionAlong );
+					// TODO use loca except for dependency, if it really is a vpeer, otherwise use varreq . thus eliminating peer_sig, peer_cell_type_seq and sig and mine cell type
+					ptrdiff_t local_idx_V_peer = GetCompartmentVoltageStatevarIndex( *peer_sig, *peer_cell_type, peer_loc.segment, peer_loc.fractionAlong );
 					if( local_idx_V_peer < 0 ){
 						printf("internal error: gap junction realization: cannot locate Vpeer voltage for loc %s\n", peer_loc.toPresentableString().c_str() );
 						return false;
@@ -8972,7 +8975,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					return true;
 				};
 				
-				if( !AddGap(syn, work_unit, synimpl, peer_work_unit, peer_sig, peer_cell_type_seq, peer_loc, tabs) ) return false;
+				if( !AddGap(work_unit, synimpl, peer_work_unit, peer_sig, peer_cell_type, peer_loc, tabs) ) return false;
 			}
 			
 			if( needs_spike ){
@@ -9008,15 +9011,13 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				auto AddChemPrePost = [
 					&model, &net,
-					&PathToCellSpiker, &LocateEntryFromEventPath, &AddSpikeTarget
+					&PathToCellSpiker, &PathToEventReaderPort, &LocateEntryFromEventPath, &AddSpikeTarget
 					#ifdef USE_MPI
 					, &AppendRemoteDependency_Spike
 					#endif
 				](
-					const SynapticComponent &syn,
-					work_t post_work_unit, const CellInternalSignature::SynapticComponentImplementation &post_synimpl,
-					work_t pre_work_unit,const CellInternalSignature &pre_sig, Int pre_cell_type_seq,
-					const PointOnCellLocator &pre_loc,
+					work_t post_work_unit, const CellInternalSignature::SpikeRecvingImplementation &post_spikerecv,
+					work_t pre_work_unit_or_node, const Simulation::LemsEventPath &pre_source_path,
 					auto &tabs
 				){
 					
@@ -9024,44 +9025,34 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						return true; // not mine, let it be resolved on spike-receiver demands later on
 					}
 					
-					// and now add the entries to the post syn table
-					auto AddPost = [ ]( auto &tabs, work_t work_unit, const auto &synimpl){
+					// and now add the entries to the post syn table; return a ref to how to trigger the corresponding entry
+					auto AddPost = [ ]( auto &tabs, work_t work_unit, const CellInternalSignature::SpikeRecvingImplementation &spikerecv, RawTablesLocator &target_tabloc){
 						
-						const auto off_si64 = tabs.global_table_state_i64_index[work_unit];
-						auto &tab_si64 = tabs.global_tables_state_i64_arrays;
+						// TODO offset by component or sth? or not bc they are attachments?
+						long long global_idx_T_dest_table = tabs.global_table_state_i64_index[work_unit] + spikerecv.Table_Trig;
+						RawTables::Table_I64 &Trig  = tabs.global_tables_state_i64_arrays.at( global_idx_T_dest_table);
+						long long entry_idx_T_dest = Trig.size(); // TODO change to reflect when handling mask, perhaps encapsulate
 						
-						RawTables::Table_I64 &Trig  = tab_si64.at(off_si64 + synimpl.Table_Trig );
 						Trig.push_back(0); // perhaps compress trigger table LATER
+						target_tabloc = {(ptrdiff_t)global_idx_T_dest_table, (int)entry_idx_T_dest, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::I64};
 						
 						return true;
 					};
-					
-					//post has trig buf, gives idx to sender
-					
-					// and where the spike target is located in each post-synaptic work item
 						
 					//TODO change for split cell? just find the compartment responsible
 					
-					long long global_idx_T_dest_table = tabs.global_table_state_i64_index[post_work_unit] + post_synimpl.Table_Trig; 
-					// printf("yyyyyy %lld %lld %lld\n\n\n", post_work_unit, tabs.global_table_state_i64_index[post_work_unit], global_idx_T_dest_table );
-					long long entry_idx_T_dest = tabs.global_tables_state_i64_arrays[global_idx_T_dest_table].size(); // TODO change to reflect when handling mask, perhaps encapsulate
 					// for path resolution, all synpases have to be accessible TODO ... and type safety can be resolved like it's done for projections
-					RawTablesLocator target_tabloc = {(ptrdiff_t)global_idx_T_dest_table, (int)entry_idx_T_dest, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::I64};
-					// auto packed_id = GetEncodedTableEntryId( global_idx_T_dest_table, entry_idx_T_dest );
-					
+					RawTablesLocator target_tabloc;
 					// TODO maybe AddSpikeTarget should handle this as well?
-					if( !AddPost( tabs, post_work_unit, post_synimpl) ) return false;
+					if( !AddPost( tabs, post_work_unit, post_spikerecv, target_tabloc) ) return false;
 					
-					// now attach to 
-					Simulation::LemsEventPath source_path;
-					if(!PathToCellSpiker(pre_loc.toLems(), source_path, printf_stderr)) return false;
-					
+					// now attach to the source
 					#ifdef USE_MPI
-					if( pre_work_unit < 0 ){
+					if( pre_work_unit_or_node < 0 ){
 						
 						// needs to ask for spike input from pre, and keep the map from packed received input to buf
-						int node_pre = ~(pre_work_unit); // TODO refactor
-						if( !AppendRemoteDependency_Spike( source_path, node_pre, target_tabloc ) ) return false;
+						int node_pre = ~(pre_work_unit_or_node); // TODO refactor
+						if( !AppendRemoteDependency_Spike( pre_source_path, node_pre, target_tabloc ) ) return false;
 						return true;
 					}
 					#endif
@@ -9070,20 +9061,26 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					// const auto &preimp = GetCompartmentSpikerImplementation( pre_sig, pre_cell_type_seq, pre_loc.segment, pre_loc.fractionAlong );
 					// preimp.Table_SpikeRecipients < 0
 					RawTablesLocator source_tabloc = {0};
-					if(!LocateEntryFromEventPath(source_path, source_tabloc)){
+					if(!LocateEntryFromEventPath(pre_source_path, source_tabloc)){
 						std::string s;
-						printf("Internal error: No spike send for %d %s\n", (int)model.LemsEventPathToString(net, source_path, s), s.c_str());
+						printf("Internal error: No spike send for %d %s\n", (int)model.LemsEventPathToString(net, pre_source_path, s), s.c_str());
 						return false;
 					}
 					if(!AddSpikeTarget(source_tabloc, target_tabloc)) return false;
-					// RawTables::Table_I64 &Spike_recipients = tabs.global_tables_const_i64_arrays.at(tabs.global_table_const_i64_index.at(pre_work_unit) + preimp.Table_SpikeRecipients);
-					
-					// Spike_recipients.push_back(packed_id); // TODO make a wrapper for the underlying table or sth ... or at least tabloc?
-					
+					//done!
 					return true;
 				};
 				
-				if( !AddChemPrePost(syn, work_unit, synimpl, peer_work_unit, peer_sig, peer_cell_type_seq, peer_loc, tabs) ) return false;
+				Simulation::LemsEventPath peer_source_path;
+				if( peer_type == Network::Projection::PresynType::EVENT_SERIES ){
+					if(!PathToEventReaderPort(peer_loc.toLems(), peer_source_path, printf_stderr)) return false;
+				}
+				else if( peer_type == Network::Projection::PresynType::CELL ){
+					if(!PathToCellSpiker(peer_loc.toLems(), peer_source_path, printf_stderr)) return false;
+				}
+				else{ assert(false); return false; } 
+				
+				if( !AddChemPrePost(work_unit, synimpl, peer_work_unit, peer_source_path, tabs) ) return false;
 			};
 			
 			if( work_unit >= 0 ){
@@ -9100,21 +9097,27 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			// printf("Connection %zd of %zd \n", conn_seq, proj.connections.contents.size() ); fflush(stdout);
 			
-			const PointOnCellLocator pre_loc  = { proj.presynapticPopulation , conn.preCell , conn.preSegment , conn.preFractionAlong  }; // XXX refactor into GetPre or sth
+			const PointOnCellLocator pre_loc  = { proj.presynapticPopulation , conn.preCell , conn.preSegment , conn.preFractionAlong  }; // XXX refactor into loca + GetPre or sth
 			const PointOnCellLocator post_loc = { proj.postsynapticPopulation, conn.postCell, conn.postSegment, conn.postFractionAlong };
 			
-			//get work unit from type/population/instance. TODO replace with something better, using work_unit only when applicable. (eg split cell)
-			
+			// get work unit from type/population/instance. TODO replace with something better, using work_unit only when applicable. (eg split cell)
+			// NB: work_unit_pre = -1 on not USE_MPI if the source does not belong to a work unit !!
+			work_t work_unit_pre = -1, work_unit_post = -1;
 			#ifdef USE_MPI
+			if( presyn_type == Network::Projection::PresynType::EVENT_SERIES ){
+				work_unit_pre = EXTERNAL_IO_NODE;
+				if(my_mpi.rank != work_unit_pre) work_unit_pre = work_unit_pre; // XXX change this into nullable work item AND nullable node after all...
+			}
+			else if( presyn_type == Network::Projection::PresynType::CELL ){
+				if(!WorkUnitOrNode( proj. presynapticPopulation, conn. preCell, work_unit_pre  )) return false;
+			}
 			
-			work_t work_unit_pre  = WorkUnitOrNode( proj.presynapticPopulation , conn.preCell  );
-			work_t work_unit_post = WorkUnitOrNode( proj.postsynapticPopulation, conn.postCell );
-			
-			#else 
-			
-			work_t work_unit_pre = workunit_per_cell_per_population[proj.presynapticPopulation][conn.preCell];
-			work_t work_unit_post = workunit_per_cell_per_population[proj.postsynapticPopulation][conn.postCell];
-			
+			if(!WorkUnitOrNode( proj.postsynapticPopulation, conn.postCell, work_unit_post )) return false;
+			#else
+			if( presyn_type == Network::Projection::PresynType::CELL ){ 
+				work_unit_pre  = workunit_per_cell_per_population[proj. presynapticPopulation][conn. preCell];
+			}
+			work_unit_post = workunit_per_cell_per_population[proj.postsynapticPopulation][conn.postCell];
 			#endif
 			
 			// printf("connnn %lx %ld\n", work_unit_pre, work_unit_post); fflush(stdout);
@@ -9128,10 +9131,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				const SynapticComponent &syn = synaptic_components.get(conn.synapse);
 				
 				if( !AppendSynapticComponentEntries(
-					syn, conn.synapse, conn,
+					syn, conn.synapse, conn, 
 					post_loc, pre_loc,
-					work_unit_post, postsig, postpop.component_cell,
-					work_unit_pre , presig , prepop.component_cell ,
+					work_unit_post, 
+					work_unit_pre , sig_pre , cell_type_pre ,  presyn_type,
 					conn_seq_to_idid_instance_post[proj_seq][conn_seq], tabs
 				) ) return false;
 			}
@@ -9144,15 +9147,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				if( !AppendSynapticComponentEntries(
 					syn, conn.synapse, conn,
 					post_loc, pre_loc,
-					work_unit_post, postsig, postpop.component_cell,
-					work_unit_pre , presig , prepop.component_cell ,
+					work_unit_post,
+					work_unit_pre , sig_pre ,  cell_type_pre,  presyn_type,
 					conn_seq_to_idid_instance_pre [proj_seq][conn_seq], tabs
 				) ) return false;
 				if( !AppendSynapticComponentEntries(
 					syn, conn.synapse, conn,
 					pre_loc, post_loc,
-					work_unit_pre , presig , prepop.component_cell ,
-					work_unit_post, postsig, postpop.component_cell,
+					work_unit_pre ,
+					work_unit_post, sig_post, cell_type_post, postsyn_type,
 					conn_seq_to_idid_instance_post[proj_seq][conn_seq], tabs
 				) ) return false;	
 			}
@@ -9164,15 +9167,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				if( !AppendSynapticComponentEntries(
 					syn_post, conn.continuous.postComponent, conn,
 					post_loc, pre_loc,
-					work_unit_post, postsig, postpop.component_cell,
-					work_unit_pre , presig , prepop.component_cell ,
+					work_unit_post,
+					work_unit_pre , sig_pre , cell_type_pre ,  presyn_type,
 					conn_seq_to_idid_instance_pre [proj_seq][conn_seq], tabs
 				) ) return false;
 				if( !AppendSynapticComponentEntries(
 					syn_pre , conn.continuous.preComponent , conn,
 					pre_loc, post_loc,
-					work_unit_pre , presig , prepop.component_cell ,
-					work_unit_post, postsig, postpop.component_cell,
+					work_unit_pre ,
+					work_unit_post, sig_post, cell_type_post, postsyn_type,
 					conn_seq_to_idid_instance_post[proj_seq][conn_seq], tabs
 				) ) return false;
 			}
@@ -9225,7 +9228,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				int path_node;
 				if(!LocateNodeForPath( path, path_node )) return false;
 				if( path_node != my_mpi.rank ){
-					assert( my_mpi.rank == 0 ); // for now at least...
+					assert( my_mpi.rank == EXTERNAL_IO_NODE ); // for now at least...
 					if( !AppendRemoteDependency_DataWriter( path, path_node, {daw_seq, col_seq} ) ) return false;
 				} else
 				#endif
@@ -9303,7 +9306,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				int path_node;
 				if(!LocateNodeForEventPath( path, path_node )) return false;
 				if( path_node != my_mpi.rank ){
-					assert( my_mpi.rank == 0 ); // for now at least...
+					assert( my_mpi.rank == EXTERNAL_IO_NODE ); // for now at least...
 					if( !AppendRemoteDependency_Spike( path, path_node, tabloc ) ) return false;
 				} else
 				#endif
@@ -9347,10 +9350,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			Int statement_seq; Int instance_seq; std::string item_type;
 			LogSetStmtInsideGroup(Int _s, Int _i, const std::string &_it)
 				:statement_seq(_s),instance_seq(_i),item_type(_it){}
-			// void operator()(const char *format, ...) const {
-			// for some reason operator()(const char *format, ...) is not inherited from ILogSimpleProxy, oh well, duplicate it.
-			// void operator()(const char *format, ...) const {
-				// va_list args; va_start(args, format);  yee(format, args); va_end(args); }
 			void vLog(const char *format, va_list args) const {
 				// va_list args; va_start(args, format);
 				std::string prefix = "Setup statement "+accurate_string(statement_seq)+", "+item_type+": "; // NOTE allow no printf % to be injected here!
@@ -9424,7 +9423,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// get work item for this neuron here, or perhaps further on when compartments are work items
 				
 				#ifdef USE_MPI
-				work_t work_unit = WorkUnitOrNode( loca.population, loca.cell_instance );
+				// TODO LocateNode ?
+				work_t work_unit = GetLocalWorkItem_FromPopInst( loca.population, loca.cell_instance );
 				if( work_unit < 0 ){
 					continue; // another node will initialize this cell; TODO move this to specific targets to let cells be split LATER, essentially pull outside the artificial cell case
 				}
@@ -10200,7 +10200,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// resolve loggers
 			if(recv_list.log_refs.count(sPath) > 0)
 			for( const auto &log_ref : recv_list.log_refs.at(sPath) ){
-				assert(my_mpi.rank == 0);
+				assert(my_mpi.rank == EXTERNAL_IO_NODE);
 				
 				engine_config.trajectory_loggers[log_ref.daw_seq].columns[log_ref.col_seq].tabloc = {value_mirror_table, value_mirror_entry, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::F32};
 			}
@@ -10435,7 +10435,6 @@ int main(int argc, char **argv){
 		printf("NeuroML model could not be created\n");
 		exit(1);
 	}
-	
 	//-------------------> crunch the numbers
 	// set up printing in logfiles
 	const int column_width = 16;
@@ -10444,23 +10443,77 @@ int main(int argc, char **argv){
 	
 	// open the logs, one for each logger
 	std::vector<FILE *> trajectory_open_files, spike_open_files;
-	
-	struct TimeseriesFrame{
-		RawTables::Table_F32 values;
-		double timestamp;
-		TimeseriesFrame(){ timestamp = -INFINITY; }
-	};
-	struct TimeseriesReader_File{
-		const EngineConfig::TrajectoryReader &reader;
-		
+	struct LineReader_File{
 		Int lines_read_so_far;
 		
 		std::string filename;
 		FILE *open_file;
+		
+		LineReader_File(const std::string &_fn, FILE *_f): filename(_fn), open_file(_f){
+			lines_read_so_far = 0;
+		}
+		
+		bool GetFrameLine(std::string &line){
+			char buf[BUFSIZ];
+			if(!IsActive()) return false;
+			while(1){
+				if(!fgets(buf, BUFSIZ, open_file)) break;
+				line += buf;
+				assert(!line.empty());
+				// if line ends with (CR)LF, strip and deliver the whole line
+				if(*line.rbegin() == '\n'){
+					line.pop_back();
+					if(*line.rbegin() == '\r') line.pop_back();
+					
+					break;
+				}
+			}
+			if(feof(open_file)){
+				if(line.empty()) return false;
+				// else, accept the last line of the file
+			}
+			else if(ferror(open_file)){
+				PerrorWrapped("error while reading file \"%s\"", filename.c_str());
+				// fall through anyway
+			}
+			lines_read_so_far++;
+			return true;
+		}
+		
+		bool IsActive() const {
+			return bool(open_file) and not ( ferror(open_file) or feof(open_file) );
+		}
+		bool IsBad() const {
+			return not bool(open_file) or bool( ferror(open_file) );
+		}
+		void Close(){
+			fclose(open_file); open_file = NULL;
+		}
+	};
+	
+	struct AbstractFrame{
+		static constexpr double NEVER_BEFORE(){return -INFINITY;}
+		static constexpr double NEVER_AGAIN (){return +INFINITY;}
+	};
+	struct TimeseriesFrame : public AbstractFrame{
+		RawTables::Table_F32 values;
+		double timestamp;
+		TimeseriesFrame(){ timestamp = NEVER_BEFORE(); }
+	};
+	struct EventsetFrame : public AbstractFrame{
+		// two parallel vectors, for instance, port pairs
+		RawTables::Table_F32 instances;
+		RawTables::Table_F32 instance_ports;
+		double timestamp;
+		EventsetFrame(){ timestamp = NEVER_BEFORE(); }
+	};
+	struct TimeseriesReader_File : public LineReader_File{
+		const EngineConfig::TrajectoryReader &reader;
+		
 		TimeseriesFrame next_frame; // must be peeked to ensure that data up to that point are most recent
 		
-		TimeseriesReader_File(const EngineConfig::TrajectoryReader &_r, const std::string &_fn, FILE *_f): reader(_r), filename(_fn), open_file(_f){
-			lines_read_so_far = 0;
+		TimeseriesReader_File(const EngineConfig::TrajectoryReader &_r, const std::string &_fn, FILE *_f): LineReader_File(_fn, _f), reader(_r){
+			// all set
 		}
 		
 		bool LineToFrame(const std::string &line, TimeseriesFrame &frame){
@@ -10502,39 +10555,14 @@ int main(int argc, char **argv){
 					value = reader.columns[col].conversion_factor.ConvertTo(value, Scales<Dimensionless>::native);
 					
 					frame.values[value_tokens_read] = value; // TODO abstract the pattern away LATER: (elm * (Int)reader.columns.size()) + col
-					// or rather, parse the numbers and rescale them elsewhere? that's more confuding though?
+					// or rather, parse the numbers and rescale them elsewhere? that's more confusing though?
 					
 					value_tokens_read++;
 				}
 			}
 			return true;
 		}
-		bool GetFrameLine(std::string &line){
-			char buf[BUFSIZ];
-			if(!IsActive()) return false;
-			while(1){
-				if(!fgets(buf, BUFSIZ, open_file)) break;
-				line += buf;
-				assert(!line.empty());
-				// if line ends with (CR)LF, strip and deliver the whole line
-				if(*line.rbegin() == '\n'){
-					line.pop_back();
-					if(*line.rbegin() == '\r') line.pop_back();
-					
-					break;
-				}
-			}
-			if(feof(open_file)){
-				if(line.empty()) return false;
-				// else, accept the last line of the file
-			}
-			else if(ferror(open_file)){
-				PerrorWrapped("error while reading file \"%s\"", filename.c_str());
-				// fall through anyway
-			}
-			lines_read_so_far++;
-			return true;
-		}
+		// TODO deduplicate
 		bool FetchFrame(){
 			std::string line;
 			if(!GetFrameLine(line)) return false;
@@ -10548,22 +10576,105 @@ int main(int argc, char **argv){
 			next_frame = new_frame;
 			return true;
 		}
+	};
+	struct EventsetReader_File : public LineReader_File{
+		const EngineConfig::EventSetReader &reader;
 		
-		bool IsActive() const {
-			return bool(open_file) and not ( ferror(open_file) or feof(open_file) );
+		EventsetFrame next_frame; // must be peeked to ensure that data up to that point are most recent
+		
+		EventsetReader_File(const EngineConfig::EventSetReader &_r, const std::string &_fn, FILE *_f): LineReader_File(_fn, _f), reader(_r){
+			// all set
 		}
-		bool IsBad() const {
-			return not bool(open_file) or bool( ferror(open_file) );
+		
+		bool LineToFrame(const std::string &line, EventsetFrame &frame){
+			
+			std::istringstream streamline(line);
+			std::vector<std::string> tokens{std::istream_iterator<std::string>(streamline), {}};
+			
+			int min_tokens = 1; // for timestamp
+			Int provided_tokens = (Int)tokens.size(), expected_tokens = (min_tokens);
+			if(provided_tokens < expected_tokens){
+				fprintf(stderr, "line %ld on file %s malformed: %ld tokens were given, expected at least %ld \n", 
+					(long)lines_read_so_far, filename.c_str(), (long)provided_tokens,  (long)expected_tokens);
+				return false;
+			}
+			
+			// TODO deduplicate
+			const ScaleEntry seconds = {"sec",  0, 1.0};
+			if(!StrToF(tokens[0].c_str(), frame.timestamp)){
+				fprintf(stderr, "file %s : line %ld : token %ld malformed: cannot parse \"%s\" as timestamp\n", 
+					filename.c_str(), (long)lines_read_so_far, (long) 0, tokens[0].c_str());
+				return false;
+			}
+			frame.timestamp = seconds.ConvertTo(frame.timestamp, Scales<Time>::native); // adjust units to native
+			
+			Int value_tokens_to_read = provided_tokens - expected_tokens;
+			frame.instances     .resize(value_tokens_to_read);
+			frame.instance_ports.resize(value_tokens_to_read);
+			
+			for(Int value_tokens_read = 0; value_tokens_read < (Int)frame.instances.size(); value_tokens_read++){
+				auto token_read = min_tokens + value_tokens_read;
+				std::string & token = tokens[token_read]; // NB: the delimiter char gets modified to \0 which is so far safe since 'tokens' is made up of copies, TODO use string_view and {fmt} while allowing some tolerance like + and ...
+				const char *sToken = token.c_str();
+				
+				Int instance = -1, port = 0;
+				
+				char *pDelim = const_cast<char *>( strchr(sToken, (int)'!') );
+				if(pDelim){
+					// cut string and point to start of  field
+					*pDelim = '\0';
+					pDelim++;
+					if(!(StrToL(pDelim, port) && 0 <= port)){
+						fprintf(stderr, "file %s : line %ld : token %ld malformed: cannot parse \"%s\" as port id\n", 
+						filename.c_str(), (long)lines_read_so_far, (long)token_read,  sToken);
+						return false;
+					}
+					int max_ports = (int) reader.ports.size();
+					if(!(port < max_ports)){
+						fprintf(stderr, "file %s : line %ld : token %ld malformed: port id %s too high for 0-indexed event port set (%d exist)\n", 
+						filename.c_str(), (long)lines_read_so_far, (long)token_read,  sToken, max_ports);
+						return false;
+					}
+				}
+				if(!(StrToL(sToken, instance) && 0 <= instance)){
+					fprintf(stderr, "file %s : line %ld : token %ld malformed: cannot parse \"%s\" as instance id\n", 
+					filename.c_str(), (long)lines_read_so_far, (long)token_read,  sToken);
+					return false;
+				}
+				long max_instances = (int) reader.instances;
+				if(!(instance < max_instances)){
+					fprintf(stderr, "file %s : line %ld : token %ld malformed: instance id %s too high for 0-indexed set (%ld exist)\n", 
+					filename.c_str(), (long)lines_read_so_far, (long)token_read,  sToken, max_instances);
+					return false;
+				}
+				
+				frame.instances[value_tokens_read] = instance;
+				frame.instance_ports[value_tokens_read] = port;
+			}
+			return true;
 		}
-		void Close(){
-			fclose(open_file); open_file = NULL;
+		// TODO deduplicate with CRTP i guess
+		bool FetchFrame(){
+			std::string line;
+			if(!GetFrameLine(line)) return false;
+			EventsetFrame new_frame;
+			if(!LineToFrame(line, new_frame)) return false;
+			
+			// ingore non monotonic timestamps
+			if(!( next_frame.timestamp < new_frame.timestamp )) return false;
+			
+			// update the frame ! yay!
+			next_frame = new_frame;
+			return true;
 		}
 	};
+	
 	std::vector<TimeseriesReader_File> timeseries_readers;
+	std::vector<EventsetReader_File> eventset_readers;
 	
 	for(const auto &logger : engine_config.trajectory_loggers){
 		#ifdef USE_MPI
-		assert( my_mpi.rank == 0);
+		assert( my_mpi.rank == EXTERNAL_IO_NODE);
 		#endif
 		const char *path = logger.logfile_path.c_str();
 		FILE *fout = fopen( path, "wt");
@@ -10576,7 +10687,7 @@ int main(int argc, char **argv){
 	}
 	for(const auto &logger : engine_config.event_loggers){
 		#ifdef USE_MPI
-		assert( my_mpi.rank == 0);
+		assert( my_mpi.rank == EXTERNAL_IO_NODE);
 		#endif
 		const char *path = logger.logfile_path.c_str();
 		FILE *fout = fopen( path, "wt");
@@ -10589,7 +10700,7 @@ int main(int argc, char **argv){
 	}
 	for(const auto &reader : engine_config.timeseries_readers){
 		#ifdef USE_MPI
-		assert( my_mpi.rank == 0);
+		assert( my_mpi.rank == EXTERNAL_IO_NODE);
 		#endif
 		const auto &url = reader.url, &format = reader.format;
 		if(format == "ascii_v0"){
@@ -10614,15 +10725,51 @@ int main(int argc, char **argv){
 			exit(1);
 		}
 		
-		FILE *fout = fopen( filename.c_str(), "rt"); // TODO what about pipes, should it be r+ ?
-		if(!fout){
+		FILE *fin = fopen( filename.c_str(), "rt"); // TODO what about pipes, should it be r+ ?
+		if(!fin){
 			auto errcode = errno;// NB: keep errno right away before it's overwritten
 			printf("Could not open time series input \"%s\" : %s\n", filename.c_str(), strerror(errcode) );
 			exit(1);
 		}
-		timeseries_readers.push_back({reader, filename, fout});
+		timeseries_readers.push_back({reader, filename, fin});
 	}
-	// TODO HERE move to nonblocking API for streams with feedback!
+	// TODO deduplicate...
+	for(const auto &reader : engine_config.event_sets_readers){
+		#ifdef USE_MPI
+		assert( my_mpi.rank == EXTERNAL_IO_NODE);
+		#endif
+		const auto &url = reader.url, &format = reader.format;
+		if(format == "ascii_v0"){
+			// it's the only one supported for now
+		}
+		else{
+			printf("unknown data format %s for event set reader \"%s\"\n", format.c_str(), url.c_str() );
+			exit(1);
+		}
+		// convert URL reference to vars, enums and such
+		std::string filename;
+		std::string scheme, auth_path;
+		if(!GetUrlScheme(url, scheme, auth_path)){
+			// it's a file path, by default
+			filename = url;
+		}
+		else if(scheme == "file"){
+			filename = auth_path;
+		}
+		else{
+			printf("unknown URI scheme %s (suffix %s) for event set reader \"%s\"\n", scheme.c_str(), auth_path.c_str(), url.c_str() );
+			exit(1);
+		}
+		
+		FILE *fin = fopen( filename.c_str(), "rt"); // TODO what about pipes, should it be r+ ?
+		if(!fin){
+			auto errcode = errno;// NB: keep errno right away before it's overwritten
+			printf("Could not open time series input \"%s\" : %s\n", filename.c_str(), strerror(errcode) );
+			exit(1);
+		}
+		eventset_readers.push_back({reader, filename, fin});
+	}
+	// TODO XXX move to nonblocking API for streams with feedback!
 	
 	// prepare engine for crunching
 	
@@ -10816,7 +10963,6 @@ int main(int argc, char **argv){
 	// perform the crunching
 	timeval run_start, run_end;
 	gettimeofday(&run_start, NULL);
-	
 	double time = engine_config.t_initial;
 	// need multiple initialization steps, to make sure the dependency chains of all state variables are resolved
 	for( long long step = -3; time <= engine_config.t_final; step++ ){
@@ -10853,8 +10999,22 @@ int main(int argc, char **argv){
 					return global_tables_const_i64_arrays[tabloc.table][tabloc.entry]; }
 			}
 		};
+		auto SetSpikeFlagNow = [
+			&global_tables_stateNow_i64
+		]( const RawTablesLocator &tabloc){
+			if(!(  tabloc.forma_type == RawTablesLocator::I64
+				&& tabloc.varia_type == RawTablesLocator::STATE
+				&& tabloc.layou_type == RawTablesLocator::TABLE
+			)){
+				printf("internal error: spike slot value not is not table state i64, instead: %s\n", tabloc.Stringify().c_str());
+				exit(2);
+			}
+			// use GetSingleI64 if needed, but note that funkier options like stateNext may be needed later !
+			global_tables_stateNow_i64[tabloc.table][tabloc.entry] = 1;
+		};
 		
 		bool initializing = step <= 0;
+		const float dt = engine_config.dt;
 		
 		// FIXME move writes here ?
 		if( !initializing ){
@@ -10862,16 +11022,15 @@ int main(int argc, char **argv){
 			
 			// time series: these are tricky in that the timestamp of the data to be read must be equal to, or after, the timestep to be run now.
 			// If the file has ended, values for the last timestamp are held.
-			// This allows variable sampling rates, which are very useful for both source related, and transfer volume trelated, reasons.  TODO hanble the ramificagions of reduced sampling rates.
+			// This allows variable sampling rates, which are very useful for both source related, and transfer volume trelated, reasons.  TODO handle the ramifications of reduced sampling rates.
 			// FIXME mention the slack as a good measure in the user guide.
 			// TODO put some epsilon in timestamp checking? will it be innocuous even when fooled? probably, if the sampling rate is too high... can be off by one frame at most...
 			for(size_t i = 0; i < engine_config.timeseries_readers.size(); i++){
 				#ifdef USE_MPI
-				assert(my_mpi.rank == 0);
+				assert(my_mpi.rank == EXTERNAL_IO_NODE);
 				#endif
 				auto &dar = engine_config.timeseries_readers[i];
 				auto &reader = timeseries_readers[i];
-				
 				// overwrite both stateNow and stateNext to avoid copying over on each timestep when swapping buffers.
 				// LATER do sth more generic for more than double buffering - or just overwrite on every step?
 				auto ApplyFrame = [&](){
@@ -10882,7 +11041,7 @@ int main(int argc, char **argv){
 							&& tabloc.varia_type == RawTablesLocator::STATE
 							&& tabloc.layou_type == RawTablesLocator::TABLE
 						)){
-							printf("internal error: reader value not is not table state f32\n");
+							printf("internal error: data reader value not is not table state f32\n");
 							exit(2);
 						}
 						global_tables_stateNow_f32 [tabloc.table][tabloc.entry] = value;
@@ -10900,34 +11059,50 @@ int main(int argc, char **argv){
 				
 				// read the data line: timestamp in sec followed by instances*columns numbers in specified scales
 				
+				// the logic is:
+				// if timestamp is before now, we must get a new one
+				// if new timestamp is still before (but after the last received timestep), apply and repeat
+				// if it's equal to now, apply and proceed
+				// if it is after now, proceed. then how does it get applied when skipped??
+				// the answer is of course, to keep a second timestap on whether this one is stale. Or clear the timestamp..
+				// But the most robust way (also for tolerance etc.?) is to maintain a timestamp of last timestamp read.
+				// Thus the condition of whether we need a new frame is:
+				// last frame read + max allowed slack < now.
+				// And before that, we need to check if it wasn't yet time to read the frame, but now it is (last frame read + max allowed slack <= now). Another cheap way would be to clear the contents i guess.
 				// if it's time for the upcoming timestamp to take effect (and it hadn't been last timstamp, of course)
-				// then apply the timestamp and grab a new one?? FIXME tolerance!
-				// also: ignore timestanps which appear non monotonically
+				// then apply the timestamp and grab a new one?? TODO tolerance!
+				// also: ignore timestanps which appear non monotonically TODO
 				// bool fetched_new_frame = false;
 				bool applied_frame = false;
 				// TODO keep current frame as well, i guess
-				if(!reader.next_frame.values.empty() && reader.next_frame.timestamp <= time){
-					ApplyFrame();
-					applied_frame = true;
-				}
-				while(reader.next_frame.timestamp < time && reader.IsActive()){
-					// make more efficient LATER if needed, by skipping over based on timestamp or sth
-					if(true){
-						
+				double time_to_read_until = time;
+				while( (reader.next_frame.timestamp <= time_to_read_until) ){
+					if( (reader.next_frame.timestamp >= 0) && !reader.next_frame.values.empty() ){ // or check with "last processed frame" timestamp
+						ApplyFrame();
+						applied_frame = true;
+						// reader.next_frame.values.clear();
+					}
+					if(reader.next_frame.timestamp == time_to_read_until) break; // we don't need more frames to do this timestep
+					// otherwise we need more...
+					// make more efficient LATER if needed, by skipping over based on timestamp or sth ... or rather not?
+					if(reader.IsActive()){
 						bool fetch_ok = reader.FetchFrame();
 						if(reader.IsBad()){
 							fprintf(stderr, "Error encountered for reader with url %s , exiting\n", dar.url.c_str());
 							exit(1);
 						}
 						if(fetch_ok){
-							// fetched_new_frame = true;
-							if(!reader.next_frame.values.empty() && reader.next_frame.timestamp <= time){
-								ApplyFrame();
-								applied_frame = true;
-							}
+							// maybe handle it as well ... or skip if <= last timestep?
 						}
 					}
+					else{
+						// end of file, it's guaranteed no more frames will happen
+						// do keep that frame though, i guess?
+						break;
+						// reader.next_frame.timestamp = reader.next_frame.NEVER_AGAIN();
+					}
 				}
+				// LATER restructure logic, to not double update on every timestep (dependeing on implementation, level of buffering etc...)
 				// TODO put some expicit slack for timestamps to linger, like max_sampling_period, to allow more concurrency.
 				
 				// check for some problematic cases
@@ -10939,7 +11114,93 @@ int main(int argc, char **argv){
 					fprintf(stderr, "data reader with url %s had no sample for t = 0, exiting\n", dar.url.c_str());
 					exit(1);
 				}
-				// TODO read the stamps for t = 0 before initializing !!! but then, how are hooked together? easily due to not running on init?? or mention to the guide that data will not ne cessarily be ready?? or just enfore an initial value?? initialization is ill defined anyway ...
+				// TODO read the stamps for t = 0 before initializing !!! but then, how are hooked together? easily due to not running on init?? or mention to the guide that data will not necessarily be ready?? or just enforce an initial value?? initialization is ill defined anyway ...
+				// or rather, use the init file to take care of it?
+				
+				// done refreshing reader
+			}
+			// event sets: these are tricky in that the timestamp of the data to be read must be equal to, or after, the timestep to be run now.
+			// If the file has ended, no further events are delivered.
+			// TODO put some epsilon in timestamp checking? will it be innocuous even when fooled? probably, if the sampling rate is too high... can be off by one frame at most...
+			for(size_t i = 0; i < engine_config.event_sets_readers.size(); i++){
+				#ifdef USE_MPI
+				assert(my_mpi.rank == EXTERNAL_IO_NODE);
+				#endif
+				auto &evr = engine_config.event_sets_readers[i];
+				auto &reader = eventset_readers[i];
+				
+				auto ApplyFrame = [&](){
+					const auto &instances      = reader.next_frame.instances     ;
+					const auto &instance_ports = reader.next_frame.instance_ports;
+					
+					for(Int i = 0; i < (Int)instances.size(); i++){
+						Int event_index = instances[i] * evr.ports.size() + instance_ports[i];
+						auto tabloc = evr.spike_destination_tables[event_index];
+						if(!(  tabloc.forma_type == RawTablesLocator::I64
+							&& tabloc.varia_type == RawTablesLocator::CONST
+							&& tabloc.layou_type == RawTablesLocator::TABLE
+						)){
+							printf("internal error: event reader value not is not table const i64, instead: %s\n", tabloc.Stringify().c_str());
+							exit(2);
+						}// LATER tabloc.entry == -1 or sth
+						const auto &vec = tabs.global_tables_const_i64_arrays[tabloc.table];
+						for(size_t i = 0; i < vec.size(); i++ ){
+							TabEntryRef_Packed packed_ref = vec[i];// GetSingleI64?
+							RawTablesLocator tablocc = {(ptrdiff_t) -1, -1, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::I64};
+							(TabEntryRef &)tablocc = GetDecodedTableEntryId(packed_ref);
+							SetSpikeFlagNow(tablocc);
+						}
+					}
+				};
+				
+				// read the data line: timestamp in sec followed by instance[!port] ids TODO maybe use the strings for ports?
+				
+				// if it's time for the upcoming timestamp to take effect (and it hadn't been last timstamp, of course)
+				// then apply the timestamp and grab a new one?? TODO tolerance!
+				// also: ignore timestanps which appear non monotonically FIXME
+				// FIXME add some steps to skipping old timestamps...
+				
+				// bool applied_frame = false;
+				// TODO keep current frame as well, i guess
+				
+				double time_to_read_until = time;
+				// printf("%f %f %f\n", time,dt,time_to_read_until);
+				// NB: handle all spikes before the timestep, but not exactly *on* the timestep; leave those to be activated on the next timestep (like those on time + epsilon), in line with how cells < actually for spikes...
+				while( (reader.next_frame.timestamp < time_to_read_until) ){
+					if( (reader.next_frame.timestamp >= 0) && !reader.next_frame.instances.empty() ){ // or check with "last processed frame" timestamp
+						ApplyFrame();
+						// applied_frame = true;
+						reader.next_frame.instances.clear();
+					}
+					if(reader.next_frame.timestamp == time_to_read_until) break; // NB: this won't happen, keep it for the intent
+					// otherwise we need more...
+					// make more efficient LATER if needed, by skipping over based on timestamp or sth ... or rather not?
+					if(reader.IsActive()){
+						bool fetch_ok = reader.FetchFrame();
+						if(reader.IsBad()){
+							fprintf(stderr, "Error encountered for reader with url %s , exiting\n", evr.url.c_str());
+							exit(1);
+						}
+						if(fetch_ok){
+							// maybe handle it as well ... or skip if <= last timestep?
+						}
+					}
+					else{
+						// end of file, it's guaranteed no more events will happen
+						reader.next_frame.timestamp = reader.next_frame.NEVER_AGAIN();
+					}
+				}
+				
+				// TODO put some expicit slack for timestamps to linger, like max_sampling_period, to allow more concurrency.
+				
+				// check for some problematic cases
+				// let an empty file be a valid event set though?
+				// if(reader.next_frame.timestamp < 0){
+				// 	fprintf(stderr, "data reader with url %s had no valid samples, exiting\n", evr.url.c_str());
+				// 	exit(1);
+				// }
+				
+				// TODO preload events originating from the past before initializing?
 				// or rather, use the init file to take care of it?
 				
 				// done refreshing reader
@@ -10987,7 +11248,7 @@ int main(int argc, char **argv){
 			}
 			
 			for( size_t i = 0; i < sendlist_impl.ref_locations.size(); i++ ){
-				assert( my_mpi.rank != 0 && other_rank == 0 );
+				assert( my_mpi.rank != EXTERNAL_IO_NODE && other_rank == EXTERNAL_IO_NODE );
 				// do not apply scaling! keep engine units consistent or at most marshalled!
 				buf[ ref_buf_idx + i ] = GetSingleF32(sendlist_impl.ref_locations[i]); // global_state_now[ off ];  * col.scaleFactor ;
 			}
@@ -11017,7 +11278,7 @@ int main(int argc, char **argv){
 		auto PostRecv = []( int other_rank, std::vector<float> &buf, MPI_Request &recv_req ){
 			MPI_Irecv( buf.data(), buf.size(), MPI_FLOAT, other_rank, MYMPI_TAG_BUF_SEND, MPI_COMM_WORLD, &recv_req );
 		};
-		auto ReceiveList = [ &engine_config, &global_tables_stateNow_f32, &global_tables_stateNow_i64 ]( const EngineConfig::RecvList_Impl &recvlist_impl, std::vector<float> &buf ){
+		auto ReceiveList = [ &engine_config, &global_tables_stateNow_f32, &SetSpikeFlagNow ]( const EngineConfig::RecvList_Impl &recvlist_impl, std::vector<float> &buf ){
 			
 			// copy the continuous-time values
 			size_t value_buf_idx = 0;
@@ -11031,10 +11292,7 @@ int main(int argc, char **argv){
 			for( int i = recvlist_impl.value_mirror_size; i < (int)buf.size(); i++ ){
 				int spike_pos = EncodeF32ToI32( buf[i] );
 				for( auto tabloc : recvlist_impl.spike_destinations[spike_pos] ){
-					// auto tabent = GetDecodedTableEntryId( tabent_packed );
-					// LATER packed bool buffers
-					// use GetSingleI64 if needed, but note that funkier options like stateNext may be needed later !
-					global_tables_stateNow_i64[tabloc.table][tabloc.entry] = 1;
+					SetSpikeFlagNow(tabloc);
 				}
 			}
 			
@@ -11099,7 +11357,6 @@ int main(int argc, char **argv){
 		#endif
 		
 		//prepare for parallel iteration
-		const float dt = engine_config.dt;
 		
 		// Execute all work items
 		#pragma omp parallel for schedule(runtime)
@@ -11138,7 +11395,7 @@ int main(int argc, char **argv){
 			};
 			for(size_t i = 0; i < engine_config.trajectory_loggers.size(); i++){
 				#ifdef USE_MPI
-				assert(my_mpi.rank == 0);
+				assert(my_mpi.rank == EXTERNAL_IO_NODE);
 				#endif
 				const auto &logger = engine_config.trajectory_loggers[i];
 				FILE *& fout = trajectory_open_files[i];
@@ -11167,7 +11424,7 @@ int main(int argc, char **argv){
 			}
 			for( int i = 0; i < (int)engine_config.event_loggers.size(); i++){
 				#ifdef USE_MPI
-				assert(my_mpi.rank == 0);
+				assert(my_mpi.rank == EXTERNAL_IO_NODE);
 				#endif
 				const auto &logger = engine_config.event_loggers[i];
 				FILE *& fout = spike_open_files[i];
@@ -11279,6 +11536,7 @@ int main(int argc, char **argv){
 	for( auto &fout : trajectory_open_files ){ fclose(fout); fout = NULL; }
 	for( auto &fout : spike_open_files ){ fclose(fout); fout = NULL; }
 	for( auto &reader : timeseries_readers ){ reader.Close(); }
+	for( auto &reader : eventset_readers ){ reader.Close(); }
 	
 	gettimeofday(&run_end, NULL);
 	metadata.run_time_sec = TimevalDeltaSec(run_start, run_end);

@@ -12,7 +12,13 @@ set -e
 mkdir -p ${OUT_DIR}/bin
 mkdir -p ${OUT_DIR}/obj
 
-TOOLCHAIN=gcc OUT_DIR=${OUT_DIR} BUILD=release make -j$(nproc) ${TARGETS}
+procs=$(nproc)
+# cut build parallelism for less capable machines
+if [ $(awk '/^MemAvailable:/ { print $2; }' /proc/meminfo) -lt 1000000 ]; then
+	procs=1
+fi
+
+TOOLCHAIN=gcc OUT_DIR=${OUT_DIR} BUILD=release make -j${procs} ${TARGETS}
 
 if [ $? -ne 0 ]; then
 	echo "Dockerized build with GCC failed !"
