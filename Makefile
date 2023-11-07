@@ -136,7 +136,7 @@ TOOLCHAIN_LIBS_PATH ?= /usr/local/
 
 # Compiler flags
 # TODO more optimization flags
-CFLAGS_basic := -Wall -Werror -Wno-unused-result -lm -DBUILD_STAMP=\"$(BUILD_STAMP)\" ${CFLAGS_extra}
+CFLAGS_basic := -Wall -Werror -Wno-unused-result -lm -lstdc++fs -DBUILD_STAMP=\"$(BUILD_STAMP)\" ${CFLAGS_extra}
 CFLAGS_release := ${CFLAGS_basic} -DNDEBUG -O3
 CFLAGS_debug := ${CFLAGS_basic} -g
 

@@ -25,13 +25,15 @@ std::vector<std::string> string_split(const std::string& str, const std::string&
 
 // TODO separate auth from path as well i guess, parse all stadnard fields
 bool GetUrlScheme(const std::string &url, std::string &scheme, std::string &auth_path){
-	std::regex uri_scheme("^([A-Za-z][A-Za-z+.-]*):");
+	std::regex uri_scheme("^([A-Za-z][A-Za-z+.-]*):(//)?");
 	std::smatch scheme_matches;
 	
 	if(!std::regex_search(url, scheme_matches, uri_scheme)) return false;
 	
 	scheme = scheme_matches[1];
 	auth_path = scheme_matches.suffix();
+	// printf("%s %s\n", scheme.c_str(), auth_path.c_str());
+	// exit(1);
 	return true;
 }
 

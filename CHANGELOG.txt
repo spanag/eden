@@ -1,10 +1,12 @@
 Latest
-- Add support for <EventoutputFile> raster output
+- Add support for <EventOutputFile> raster output
+- Add experimental extension to NeuroML: 'EdenEventOutputFile' and 'EdenEventOutputFile' which are enhanced versions of adding more options: active interval and sampling period (or explicit sampling points), URL and data format
 - Add experimental extension to NeuroML: 'EventSetReader' for streaming spike series data from external sources, into the simulation. Access to these spike series is through another NeuroML extension, so that they can be eligible spike sources along with cell populations.
 - Add experimental extension to NeuroML: spike-based synaptic projetions from <EventSetReader>s to cells
 - Add experimental extension to NeuroML: 'TimeSeriesReader' for streaming time series data from external sources, into the simulation.  Access to these time series is through VariableRequirements, for now.
 - Add experimental extension to LEMS: 'VariableRequirement' for CoreNEURON-style POINTERs, which is accessible through the experimental "EdenCustomSetup" file format
 - Add experimental file format for direct, per-instance customization of model parameters
+- Add streaming capability for EDEn to use pipes
 - Eliminate LEMS constants from the model's memory footprint
 - Add support to keep model files loaded after finishing loading the model. Now EDEN and extensions can access the names of objects, for diagnostics and more!
 - Add support for new Apple Silicon Mac's

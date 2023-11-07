@@ -162,6 +162,20 @@ static inline bool StrToF( const char *str, float &F ){
 	F = ret;
 	return true;
 }
+static inline bool StrToF( const char *str, double &F, bool ignore_whitespace = true ){
+	std::remove_reference< decltype(F) >::type ret;
+	char *pEnd;
+	errno = 0;
+	ret = strtod(str, &pEnd);
+	if(errno) return false; //the standard way of handling strtol etc.
+	while( *pEnd ){
+		if(!ignore_whitespace) return false;
+		if(!isspace(*pEnd)) return false;
+		pEnd++;
+	}
+	F = ret;
+	return true;
+}
 
 // Split URL into scheme and auth+path, if scheme is present (otherwise it's a "URL reference")
 bool GetUrlScheme(const std::string &url, std::string &scheme, std::string &auth_path);

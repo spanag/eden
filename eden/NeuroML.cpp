@@ -256,6 +256,9 @@ struct ImportLogger{
 	void warning(va_list args, const char *filename, const ptrdiff_t file_byte_offset, const char *format) const {
 		_doit(filename, file_byte_offset, format, args);
 	}
+	void warn_experimental( const pugi::xml_node &node, const char *featname ) const {
+		warning(node, "%s is an experimental extension; its behaviour may change in the future.", featname); // TODO add hashset of such things to whine once for each type.
+	}
 };
 
 struct LogWithElement : public ILogProxy{
@@ -1344,7 +1347,7 @@ bool Model::LemsEventPathToString(const Network &net, const Simulation::LemsEven
 	}
 	// experimental extensions
 	else if(type == Path::EVENTREADER){
-		ret += net.data_readers.getName(path.reader.read_seq) + ("["+accurate_string(path.reader.inst_seq)+"]/") + net.data_readers.get(path.reader.read_seq).columns.getName(path.reader.port_seq);
+		ret += net.event_readers.getName(path.reader.read_seq) + ("["+accurate_string(path.reader.inst_seq)+"]/") + net.event_readers.get(path.reader.read_seq).ports.getName(path.reader.port_seq);
 		return true;
 	}
 	else{
@@ -2258,9 +2261,9 @@ bool Model::ParseLemsEventPath_CellProperty(const ILogProxy &log, const CellType
 	}
 }
 // TODO merge into a common skeleton with quantity path parsing
-bool Model::ParseLemsEventPath(const ILogProxy &log, const char *sPath, const char *port_name_or_null, const Network &net, Simulation::LemsEventPath &path) const {
+bool Model::ParseLemsEventPath(const ILogProxy &log, const char *sPath, const char *port_name_or_null_or_empty, const Network &net, Simulation::LemsEventPath &path) const {
 	auto tokens = string_split(std::string(sPath), "/");
-	if( port_name_or_null ) tokens.push_back(port_name_or_null);
+	if( port_name_or_null_or_empty && *port_name_or_null_or_empty ) tokens.push_back(port_name_or_null_or_empty);
 	const std::string first_identifier = string_split(tokens[0],"[")[0];
 	const char *sId = first_identifier.c_str();
 	Int tokens_consumed = 0;
@@ -2305,7 +2308,7 @@ bool Model::ParseLemsEventPath(const ILogProxy &log, const char *sPath, const ch
 			
 			path.reader.port_seq = reader.ports.get_id(sProp);
 			if(path.reader.port_seq < 0){
-				log.error("property %s not found in eventreader %s", sProp, net.data_readers.getName(group_seq));
+				log.error("property %s not found in eventreader %s", sProp, net.event_readers.getName(group_seq));
 				return false;
 			}
 			return true;
@@ -2444,10 +2447,11 @@ const char * RequiredLemsName(const ImportLogger &log, const pugi::xml_node &fro
 	}
 	return ret_id;
 }
+// TODO find and replace with if(!*
 const char * RequiredAttribute(const ImportLogger &log, const pugi::xml_node &from_node, const char *attr_name){
 	const char *ret_attr = from_node.attribute(attr_name).value(); //if missing, null handle returns empty string
 	if(!*ret_attr){
-		log.error(from_node, "must have %s attribute", attr_name);
+		log.error(from_node, "must have \"%s\" attribute", attr_name);
 		return NULL;
 	}
 	return ret_attr;
@@ -3031,11 +3035,13 @@ bool ValidateGetUnits(const ILogProxy &log, const DimensionSet &dimensions, cons
 }
 
 //NeuroML physical quantities consist of a numeric, along with an unit name (such as meter, kilometer, etc.) qualifying the quantity the numeric represents. So NeuroML reader code has to check the unit name, to properly read the quantity.
-template<typename UnitType>
-bool ParseQuantity(const ImportLogger &log, const pugi::xml_node &eLocation, const char *attr_name,  Real &num){
-	
+
+// https://stackoverflow.com/questions/3768862/c-single-template-specialisation-with-multiple-template-parameters
+template<typename UnitType, typename ValueType>
+struct HelpParseQuantity{ static
+bool ParseQuantity(const ImportLogger &log, const pugi::xml_node &eLocation, const char *attr_name, ValueType &num){ 	
 	const char *qty_text = eLocation.attribute(attr_name).value();
-	Real pure_number;
+	double pure_number;
 	char unit_name[100]; //if you want more, contact the author for an upgrade
 	
 	if(!*qty_text){
@@ -3044,7 +3050,7 @@ bool ParseQuantity(const ImportLogger &log, const pugi::xml_node &eLocation, con
 	}
 	
 	//number, followed by unit name (which, conveniently, does not comtain spaces)
-	if(sscanf(qty_text,"%f%99s",&pure_number, unit_name) != 2){
+	if(sscanf(qty_text,"%lf%99s",&pure_number, unit_name) != 2){
 		log.error(eLocation, "%s attribute not containing a number and unit", attr_name);
 		return false;
 	}
@@ -3064,14 +3070,14 @@ bool ParseQuantity(const ImportLogger &log, const pugi::xml_node &eLocation, con
 	for( auto scale : Scales<UnitType>::scales ) known_list += " ", known_list += scale.name;
 	log.error(eLocation, "unknown %s attribute units: %s for %s (supported:%s)", attr_name, unit_name, UnitType::NAME, known_list.c_str() );
 	return false;
-	
-}
+}};
 // specialize for unitless, lacking unit markup
-template<>
-bool ParseQuantity<Dimensionless>(const ImportLogger &log, const pugi::xml_node &eLocation, const char *attr_name, Real &num){
+template<typename ValueType>
+struct HelpParseQuantity<Dimensionless,ValueType>{ static
+bool ParseQuantity(const ImportLogger &log, const pugi::xml_node &eLocation, const char *attr_name, ValueType &num){
 	
 	const char *qty_text = eLocation.attribute(attr_name).value();
-	Real pure_number;
+	double pure_number;
 	
 	if(!*qty_text){
 		log.error(eLocation, "required %s attribute %s missing", Dimensionless::NAME, attr_name);
@@ -3086,11 +3092,17 @@ bool ParseQuantity<Dimensionless>(const ImportLogger &log, const pugi::xml_node 
 	
 	num = pure_number;
 	return true;
-}
-bool ParseLemsQuantity(const ImportLogger &log, const pugi::xml_node &eLocation, const char *attr_name, const DimensionSet &dimensions, const Dimension dimension, Real &num){
+}};
+
+template<typename UnitType, typename ValueType>
+bool ParseQuantity(const ImportLogger &log, const pugi::xml_node &eLocation, const char *attr_name, ValueType &num){
+return HelpParseQuantity<UnitType,ValueType>::ParseQuantity(log, eLocation, attr_name, num); }
+
+template<typename ValueType> 
+bool ParseLemsQuantity(const ImportLogger &log, const pugi::xml_node &eLocation, const char *attr_name, const DimensionSet &dimensions, const Dimension dimension, ValueType &num){
 	
 	const char *qty_text = eLocation.attribute(attr_name).value();
-	Real pure_number;
+	double pure_number;
 	char unit_name[100]; //if you want more, contact the author for an upgrade
 	
 	if(!*qty_text){
@@ -3110,7 +3122,7 @@ bool ParseLemsQuantity(const ImportLogger &log, const pugi::xml_node &eLocation,
 	}
 	
 	//number, followed by unit name (which, conveniently, does not comtain spaces)
-	if(sscanf(qty_text,"%f%99s",&pure_number, unit_name) != 2){
+	if(sscanf(qty_text,"%lf%99s",&pure_number, unit_name) != 2){
 		log.error(eLocation, "%s attribute not containing a number and unit", attr_name);
 		return false;
 	}
@@ -3123,11 +3135,8 @@ bool ParseLemsQuantity(const ImportLogger &log, const pugi::xml_node &eLocation,
 }
 
 bool ParseDimensionAttribute(const ImportLogger &log, const pugi::xml_node &eTag, const DimensionSet &dimensions, Dimension &dimension, const char *sAttributeName = "dimension"){
-	auto sDimension = eTag.attribute(sAttributeName).value();
-	if(!*sDimension){
-		log.error(eTag, "%s attribute missing", sAttributeName); // TODO RequiredAttribute ?
-		return false;
-	}
+	auto sDimension = RequiredAttribute(log, eTag, sAttributeName);
+	if(!sDimension) return false;
 	
 	// find the dimension
 	if( !dimensions.Has(sDimension) ){
@@ -3377,13 +3386,9 @@ bool ParseBiophysicalProperties(
 						}
 						const auto &inhoparm = seg_group.inhomogeneous_parameters.get(inho.parm);
 						
-						auto inhoparm_formula = eInhoVal.attribute("value").value();
-						
 						// now validate the formula. Perhaps this will get differentiated according to parameter type LATER
-						if(!*inhoparm_formula){
-							log.error(eInhoVal, "value not specified");
-							return false;
-						}
+						auto inhoparm_formula = RequiredAttribute(log, eInhoVal, "value");
+						if(!inhoparm_formula) return false;
 						if( !ParseLemsExpression( inhoparm_formula, inho.value ) ){
 							log.error(eInhoVal, "could not parse %s expression", "value");
 							return false;
@@ -3399,11 +3404,8 @@ bool ParseBiophysicalProperties(
 						}
 						assert( inho.value.symbol_refs.size() <= 1 );
 						
-						const char *parm = eVarParm.attribute("parameter").value();
-						if(!*parm){
-							log.error(eVarParm, "parameter attribute not specified");
-							return false;
-						}
+						const char *parm = RequiredAttribute(log, eVarParm, "parameter");
+						if(!parm) return false;
 						
 						if( strcmp(parm, "condDensity") == 0 ){
 							// see for scaling factor: straight from NEURON 
@@ -3560,11 +3562,8 @@ bool ParseBiophysicalProperties(
 bool ParseQ10( const ImportLogger &log, const pugi::xml_node &eQ10, Q10Settings &q10 ){
 	
 	
-	auto type = eQ10.attribute("type").value();
-	if(!*type){
-		log.error(eQ10, "type attribute not specified");
-		return false;
-	}
+	auto type = RequiredAttribute(log, eQ10, "type");
+	if(!type) return false;
 	
 	if( strcmp(type, "q10Fixed") == 0 ){
 		q10.type = Q10Settings::FIXED;
@@ -4648,11 +4647,9 @@ bool parseCompartmentTarget(const ImportLogger &log, const pugi::xml_node &eTarg
 	Int &population_seq, Int &instance_seq, Int &segment_seq, Real &fractionAlong,
 	bool known_population = false // e.g. in cases like inputList
 ){
-	auto targetPath = eTarget.attribute("target").value();
-	if(!*targetPath){
-		log.error(eTarget, "target attribute not found");
-		return false;
-	}
+	auto targetPath = RequiredAttribute(log, eTarget, "target");
+	if(!targetPath) return false;
+	
 	std::string pop_name;
 	Int input_cell_instance_id;
 	if(!(
@@ -4860,15 +4857,21 @@ bool ParseConnectionPreOrPost_Cell(const ImportLogger &log, const pugi::xml_node
 	return true;
 }
 
-bool ParseLoggerBase(const ImportLogger &log, const pugi::xml_node &eLogger, Simulation::LoggerBase &logger){
+bool ParseLoggerBase(const ImportLogger &log, const pugi::xml_node &eLogger, Simulation::LoggerBase &logger, bool is_classic_type){
 	
-	auto sFilename = eLogger.attribute("fileName").value();
-	if(!*sFilename){
-		log.error(eLogger, "fileName atribute missing");
-		return false;
+	if(is_classic_type){
+		const char *sFilename = RequiredAttribute(log, eLogger, "fileName");
+		if(!sFilename) return false;
+		logger.source_url = sFilename;
+		// LATER enforce not using funny things or url's...
+	}
+	else{
+		if(!GetSchemeOrRelpathFromUrl(log, eLogger, "href", logger.source_url)) return false;
+		// NB: validate url on backend, until the url format is standardized LATER (or even better, leave it up to the backend?)
 	}
 	
-	logger.fileName = std::string(sFilename);
+	const char *sFormat = eLogger.attribute("format").value();
+	logger.data_format = sFormat; // NB validate on backend, until the url format is standardized LATER (or even better, leave it up to the backend?)
 	
 	return true;
 }
@@ -5752,7 +5755,7 @@ struct ImportState{
 		}
 		// TODO order them by element name maybe?
 		for (auto eNetEl: eNet.children()){
-			printf("%s\n", eNetEl.name());
+			// printf("%s\n", eNetEl.name());
 			// perhaps annotation stuff?
 			// NOTE wherever there is Standalone, notes, annotation and property tage may exist. Handle properties as they appear, for they must be documented to be used.
 			if(
@@ -6205,12 +6208,8 @@ struct ImportState{
 			else if(strcmp(eNetEl.name(), "inputList") == 0){
 				const auto &eInp = eNetEl;
 				
-				auto list_name = RequiredNmlId(log, eInp);
+				auto list_name = RequiredNmlId(log, eInp, net.input_lists);
 				if(!list_name) return false;
-				if(net.input_lists.has(list_name)){
-					log.error(eInp, "inputList %s already defined", list_name);
-					return false;
-				}
 				
 				Network::InputList list;
 				
@@ -6286,18 +6285,20 @@ struct ImportState{
 				for(const auto &eReaEl : eRea.children()){
 					if( strcmp(eReaEl.name(), sColName) == 0 ){
 						
-						auto name = RequiredNmlId(log, eReaEl);
+						auto name = RequiredNmlId(log, eReaEl, reader.columns);
 						if(!name) return false;
-						if(reader.columns.has(name)){
-							log.error(eReaEl, "%s %s already defined in %s", eReaEl.name(), name, eRea.name());
-							return false;
-						}
 						
 						Network::TimeSeriesReader::InputColumn column = {Dimension::Unity(), dimensions.GetNative(Dimension::Unity())};
 						if(!ParseDimensionAttribute(log, eReaEl, dimensions, column.dimension)) return false;
-						const char *sUnits = RequiredAttribute( log, eReaEl, "units");
-						if(!ValidateGetUnits(LogWithElement(log,eReaEl), dimensions, column.dimension, sUnits, column.units)) return false;
-						
+						const char *sInUnits = "units";
+						if(column.dimension != Dimension::Unity() || *eReaEl.attribute(sInUnits).value()){
+							const char *sUnits = RequiredAttribute( log, eReaEl, sInUnits);
+							if(!sUnits) return false;
+							if(!ValidateGetUnits(LogWithElement(log,eReaEl), dimensions, column.dimension, sUnits, column.units)) return false;
+						}
+						else{
+							column.units = dimensions.GetNative(column.dimension); // by default for dimensionless
+						}
 						reader.columns.add(column, name); // yay!
 					}
 					else{
@@ -6314,7 +6315,6 @@ struct ImportState{
 				net.data_readers.add(reader, name); // yay!
 			}
 			else if(strcmp(eNetEl.name(), "EdenEventSetReader") == 0){
-				printf("waa!!\n");
 				const auto &eRea = eNetEl;
 				
 				auto name = RequiredNmlId(log, eRea, net.event_readers);
@@ -6325,7 +6325,7 @@ struct ImportState{
 				if(!GetSchemeOrRelpathFromUrl(log, eRea, "href", reader.source_url)) return false;
 				// NB validate url on backend, until the url format is standardized LATER (or even better, leave it up to the backend?)
 				
-				const char *sFormat = RequiredAttribute( log, eRea, "format");
+				const char *sFormat = RequiredAttribute(log, eRea, "format");
 				if(!sFormat) return false;
 				reader.data_format = sFormat; // NB validate on backend, until the url format is standardized LATER (or even better, leave it up to the backend?)
 				
@@ -7875,11 +7875,9 @@ struct ImportState{
 		else sim.seed_defined = false;
 		
 		// the network to simulate
-		auto sNetwork = eSim.attribute("target").value();
-		if(!*sNetwork){
-			log.error(eSim, "target attribute missing");
-			return false;
-		}
+		auto sNetwork = RequiredAttribute(log, eSim, "target");
+		if(!sNetwork) return false;
+		
 		sim.target_network = networks.get_id(sNetwork);
 		if(sim.target_network < 0){
 			log.error(eSim, "target network %s not found", sNetwork);
@@ -7899,37 +7897,117 @@ struct ImportState{
 			else if(strcmp(eSimEl.name(), "EventRecord") == 0){
 				// LEMS-only element, probably useful for plugins LATER
 			}
-			else if(strcmp(eSimEl.name(), "OutputFile") == 0){
+			else if(strcmp(eSimEl.name(), "OutputFile") == 0
+				||  strcmp(eSimEl.name(), "EdenOutputFile") == 0 ){
 				const auto &eOutFile = eSimEl;
 				Simulation::DataWriter daw;
+				bool is_classic_type = (strcmp(eSimEl.name(), "OutputFile") == 0);
+				if(is_classic_type) log.warning(eSimEl, eSimEl.name()); 
 				
 				//unique name
-				auto outfi_name = RequiredNmlId(log, eOutFile);
+				auto outfi_name = RequiredNmlId(log, eOutFile, sim.data_writers);
 				if(!outfi_name) return false;
-				if(sim.data_writers.has(outfi_name)){
-					log.error(eOutFile, "OutputFile %s already defined", outfi_name);
-					return false;
-				}
 				
-				if( !ParseLoggerBase(log, eOutFile, daw) ) return false;
+				if( !ParseLoggerBase(log, eOutFile, daw, is_classic_type) ) return false;
+				
+				daw.starting_from = -INFINITY; daw.sampling_interval = 0; daw.up_to_excluding = +INFINITY;
+				if(is_classic_type){
+					// it is what it is
+					daw.data_format = ""; // but format must be this
+				}
+				else{
+					// handle format in the backend for now, but it must not be empty...
+					if(daw.data_format.empty()){
+						log.error(eOutFile, "required format attribute missing");
+						return false;
+					}
+					
+					// check for explicit sampling points!
+					bool uses_explicit_points = false;
+					const char *sESamplPoints = "SamplePoints";
+					for( const pugi::xml_node &eList: eOutFile.children(sESamplPoints) ){
+						
+						if(uses_explicit_points){
+							log.error(eList, "%s already specified", sESamplPoints);
+							return false;
+						}
+						
+						daw.sampling_points.clear();
+						for( const pugi::xml_node &eSamp: eList.children() ){
+							if(strcmp(eSamp.name(), "s") == 0){
+								Real t;
+								if(!ParseQuantity<Time>(log, eSamp, "t", t)) return false;
+								if(!daw.sampling_points.empty()){
+									auto tLast = *daw.sampling_points.rbegin();
+									if(!( tLast < t )){
+										log.error(eSamp, "sample point is not in increasing \"t\" order");
+										return false;
+									}
+								}
+								// TODO check if an integral multiple of dt, otherwise warn and round/ceil...
+						
+								daw.sampling_points.push_back(t);
+							}
+							else{
+								log.error(eList, "unknown sample tag name <%s>, only <s> is recognised", sESamplPoints);
+								return false;
+							}
+						}
+						if(daw.sampling_points.empty()){
+							log.error(eList, "no sampling points in list", sESamplPoints);
+							return false;
+						}
+						daw.sampling_interval = NAN;
+						uses_explicit_points = true;
+					}
+					
+					// if sampling points are not explicit, check for the implicit parms
+					auto MustNotUseExplicitPoints = [&uses_explicit_points, &sESamplPoints](const auto &log, const auto &eOutFile,  const char *sAttrName){
+						if(!uses_explicit_points) return true;
+						else{
+							log.error(eOutFile, "either %s or %s must be specified, not both at once", sAttrName, sESamplPoints);
+							return false;
+						}
+					};
+					
+					// read the extra parms
+					const char *sStartFrom = "starting_from";
+					if(*eOutFile.attribute(sStartFrom).value()){
+						if( !MustNotUseExplicitPoints(log, eOutFile, sStartFrom) ) return false;
+						if( !ParseQuantity<Time>(log, eOutFile, sStartFrom, daw.starting_from) ) return false;
+						// TODO check if an integral multiple of dt, otherwise warn and round/ceil...
+						
+					}
+					const char *sUpToExcl = "up_to_excluding";
+					if(*eOutFile.attribute(sUpToExcl).value()){
+						if( !MustNotUseExplicitPoints(log, eOutFile, sUpToExcl) ) return false;
+						if( !ParseQuantity<Time>(log, eOutFile, sUpToExcl, daw.up_to_excluding) ) return false;
+						if(!( daw.starting_from <= daw.up_to_excluding )){
+							log.error(eSim, "%s must be after %s", sUpToExcl, sStartFrom);
+							return false;
+						}
+						// TODO check if an integral multiple of dt, otherwise warn and round/ceil...
+						
+					}
+					const char *sSamplInterval = "sampling_interval";
+					if(*eOutFile.attribute(sSamplInterval).value()){
+						if( !MustNotUseExplicitPoints(log, eOutFile, sSamplInterval) ) return false;
+						if( !ParseQuantity<Time>(log, eOutFile, sSamplInterval, daw.sampling_interval) ) return false;
+						// TODO check if an integral mEdenOutputFileltiple of dt, otherwise warn and round/ceil...
+						
+					}
+					
+				}
 				
 				for(auto eOutEl: eOutFile.children()){
 					if(strcmp(eOutEl.name(), "OutputColumn") == 0){
 						
-						auto outcol_name = RequiredNmlId(log, eOutEl);
+						auto outcol_name = RequiredNmlId(log, eOutEl, daw.output_columns);
 						if(!outcol_name) return false;
 						
-						if(daw.output_columns.has(outcol_name)){
-							log.error(eOutEl, "output column %s already defined", outcol_name);
-							return false;
-						}
-						
-						Simulation::DataWriter::OutputColumn out;
-						auto out_quantity = eOutEl.attribute("quantity").value();
-						if(!*out_quantity){
-							log.error(eOutEl, "quantity attribute missing");
-							return false;
-						}
+						Simulation::DataWriter::OutputColumn out = { {}, dimensions.GetNative(Dimension::Unity()) };
+						auto out_quantity = RequiredAttribute(log, eOutEl, "quantity");
+						if(!out_quantity) return false;
 						// validate quantity right here right now
 						
 						if(!model.ParseLemsQuantityPath(LogWithElement{log,eOutEl}, out_quantity, net, out.quantity)) return false;
@@ -7944,46 +8022,93 @@ struct ImportState{
 							log.error(eOutEl, "%s is not an immediate state variable; which is not yet supported in EDEN", out_quantity);
 							return false;
 						}
+						if(out.quantity.type == Simulation::LemsQuantityPath::DATAREADER){
+							log.warning(eOutEl, "%s is part of a DataReader; directly recording readers is not supported in EDEN and may result in a dt of lag", out_quantity);
+							// return false;
+						}
+						
+						if(is_classic_type){
+							out.output_units = {"fundamental units", 0, 1.0}; // an unwritten rule coming from jLEMS using these internally
+						}
+						else{
+							const char *sInUnits = "output_units";
+							if(dimension != Dimension::Unity() || *eOutEl.attribute(sInUnits).value()){
+								auto sUnits = RequiredAttribute(log, eOutEl, sInUnits);
+								if(!sUnits) return false;
+								if(!ValidateGetUnits(LogWithElement(log,eOutEl), dimensions, dimension, sUnits, out.output_units)) return false;
+							}
+							else{
+								out.output_units = dimensions.GetNative(dimension); // by default for dimensionless
+							}
+						}
 						
 						daw.output_columns.add(out, outcol_name);
 					}
 					else{
-						//unknown, ignore
+						//unknown (or already handled), ignore
 					}
 				}
 				
 				sim.data_writers.add(daw, outfi_name);
 			}
-			else if(strcmp(eSimEl.name(), "EventOutputFile") == 0){
+			else if(strcmp(eSimEl.name(), "EventOutputFile") == 0
+				||  strcmp(eSimEl.name(), "EdenEventOutputFile") == 0 ){
 				const auto &eOutFile = eSimEl;
 				Simulation::EventWriter evw;
+				bool is_classic_type = (strcmp(eSimEl.name(), "EventOutputFile") == 0);
+				if(is_classic_type) log.warning(eSimEl, eSimEl.name()); 
 				
 				//unique name
-				auto outfi_name = RequiredNmlId(log, eOutFile);
+				auto outfi_name = RequiredNmlId(log, eOutFile, sim.event_writers);
 				if(!outfi_name) return false;
-				if(sim.event_writers.has(outfi_name)){
-					log.error(eOutFile, "EventOutputFile %s already defined", outfi_name);
-					return false;
-				}
 				
-				if( !ParseLoggerBase(log, eOutFile, evw) ) return false;
+				if( !ParseLoggerBase(log, eOutFile, evw, is_classic_type) ) return false;
 				
-				auto sFormat = eOutFile.attribute("format").value();
-				if(!*sFormat){
-					log.error(eOutFile, "format attribute missing");
-					return false;
-				}
-				if(strcmp(sFormat, "TIME_ID") == 0){
-					evw.format = Simulation::EventWriter::TIME_ID;
-				}
-				else if(strcmp(sFormat, "ID_TIME") == 0){
-					evw.format = Simulation::EventWriter::ID_TIME;
+				evw.starting_from = -INFINITY; evw.maximum_interval = +INFINITY; evw.up_to_excluding = +INFINITY;
+				if(is_classic_type){
+					evw.maximum_interval = +INFINITY;
+					if(evw.data_format.empty()){
+						log.error(eOutFile, "required format attribute missing");
+						return false;
+					}
+					if(!( evw.data_format == "TIME_ID" || evw.data_format == "ID_TIME" )){
+						log.error(eOutFile, "unknown format %s", evw.data_format.c_str());
+						return false;
+					}
 				}
 				else{
-					log.error(eOutFile, "unknown format %s", sFormat);
-					return false;
+					// handle format in the backend for now, but it must not be empty...
+					if(evw.data_format.empty()){
+						log.error(eOutFile, "required format attribute missing");
+						return false;
+					}
+					
+					// read the extra parms
+					const char *sStartFrom = "starting_from";
+					if(*eOutFile.attribute(sStartFrom).value()){
+						if( !ParseQuantity<Time>(log, eOutFile, sStartFrom, evw.starting_from) ) return false;
+						// TODO check if an integral multiple of dt, otherwise warn and round/ceil...
+						
+					}
+					const char *sUpToExcl = "up_to_excluding";
+					if(*eOutFile.attribute(sUpToExcl).value()){
+						if( !ParseQuantity<Time>(log, eOutFile, sUpToExcl, evw.up_to_excluding) ) return false;
+						if(!( evw.starting_from <= evw.up_to_excluding )){
+							log.error(eSim, "%s must be after %s", sUpToExcl, sStartFrom);
+							return false;
+						}
+						// TODO check if an integral multiple of dt, otherwise warn and round/ceil...
+						
+					}
+					const char *sMaxInterval = "maximum_interval";
+					if(*eOutFile.attribute(sMaxInterval).value()){
+						if( !ParseQuantity<Time>(log, eOutFile, sMaxInterval, evw.maximum_interval) ) return false;
+						// TODO check if an integral multiple of dt, otherwise warn and round/ceil...
+						
+					}
 				}
 				
+				// and read the columns
 				for(auto eOutEl: eOutFile.children()){
 					if(strcmp(eOutEl.name(), "EventSelection") == 0){
 						
@@ -7995,30 +8120,29 @@ struct ImportState{
 							return false;
 						}
 						
-						if(evw.outputs.hasId(id)){
-							log.error(eOutEl, "output column %s already defined", outsel_name);
-							return false;
-						}
-						
 						Simulation::EventWriter::EventSelection out;
-						auto out_select = eOutEl.attribute("select").value();
-						if(!*out_select){
-							log.error(eOutEl, "select attribute missing");
-							return false;
-						}
-						auto out_eventPort = eOutEl.attribute("eventPort").value();
-						if(!*out_eventPort){
-							log.error(eOutEl, "eventPort attribute missing");
-							return false;
-						}
-						// validate path right here right now
+						auto out_select = RequiredAttribute(log, eOutEl, "select");
+						if(!out_select) return false;
 						
+						// eventPort is optional for new type writers
+						const char *out_eventPort = eOutEl.attribute("eventPort").value();
+						if(is_classic_type){
+							out_eventPort = RequiredAttribute(log, eOutEl, "eventPort");
+							if(!out_eventPort) return false;
+						}
+						
+						// validate path right here right now
 						if(!model.ParseLemsEventPath(LogWithElement{log,eOutEl}, out_select, out_eventPort, net, out.selection)) return false;
+						
+						if(out.selection.type == Simulation::LemsEventPath::EVENTREADER){
+							log.warning(eOutEl, "%s is part of an EventReader; directly recording readers is not supported in EDEN and may result in a dt of lag", out_select);
+							// return false;
+						}
 						
 						evw.outputs.add(out, id);
 					}
 					else{
-						//unknown, ignore
+						// unknown, ignore
 					}
 				}
 				
@@ -8030,7 +8154,7 @@ struct ImportState{
 					log.error(eSimEl, "%s already defined previously", eSimEl.name());
 					return false;
 				}
-				log.warning(eSimEl, "%s is an experimental extension; its behaviour may change in the future.", eSimEl.name()); // TODO add hashset of such things to whine once for each type.
+				log.warn_experimental(eSimEl, eSimEl.name());
 				const char *filename = RequiredAttribute( log, eSimEl, "filename" );
 				if( !filename ) return false;
 				
@@ -8048,11 +8172,8 @@ struct ImportState{
 	
 	bool ParseTarget(const ImportLogger &log, const pugi::xml_node &eTarget){
 		
-		auto sTarget = eTarget.attribute("component").value();
-		if(!*sTarget){
-			log.error(eTarget, "component attribute missing");
-			return false;
-		}
+		auto sTarget = RequiredAttribute(log, eTarget, "component");
+		if(!sTarget) return false;
 		
 		Int sim_id = simulations.get_id(sTarget);
 		if(sim_id < 0){
@@ -8962,17 +9083,10 @@ struct ImportState{
 		// resolve dynamics and conditions, based on states and resolved derived variables
 		auto ParseStateAssignment = [&ResolveSymbolTable](const ImportLogger &log, const pugi::xml_node &eAssign, const auto &new_type, ComponentType::StateAssignment &new_assignment){
 			
-			auto variable = eAssign.attribute("variable").value();
-			auto value = eAssign.attribute("value").value();
-			
-			if(!*variable){
-				log.error(eAssign, "must have \"variable\" attribute");
-				return false;
-			}
-			if(!*value){
-				log.error(eAssign, "must have \"value\" attribute");
-				return false;
-			}
+			auto variable = RequiredAttribute(log, eAssign, "variable");
+			if(!variable) return false;
+			auto value = RequiredAttribute(log, eAssign, "value");
+			if(!value) return false;
 			
 			auto state_seq = new_type.state_variables.get_id(variable);
 			if(state_seq < 0){
@@ -9032,17 +9146,10 @@ struct ImportState{
 			
 			auto new_derivative = new_type.derived_variables.NewContent();
 			
-			auto variable = eDerivative.attribute("variable").value();
-			auto value = eDerivative.attribute("value").value();
-			
-			if(!*variable){
-				log.error(eDerivative, "TimeDerivative must have \"variable\" attribute");
-				return false;
-			}
-			if(!*value){
-				log.error(eDerivative, "TimeDerivative must have \"value\" attribute");
-				return false;
-			}
+			auto variable = RequiredAttribute(log, eDerivative, "variable");
+			if(!variable) return false;
+			auto value = RequiredAttribute(log, eDerivative, "value");
+			if(!value) return false;
 			
 			auto state_seq = new_type.state_variables.get_id(variable);
 			if(state_seq < 0){
@@ -9090,11 +9197,8 @@ struct ImportState{
 			
 			ComponentType::OnCondition new_oncondition;
 			
-			auto test = eOnco.attribute("test").value();
-			if(!*test){
-				log.error(eOnco, "must have \"test\" attribute");
-				return false;
-			}
+			auto test = RequiredAttribute(log, eOnco, "test");
+			if(!test) return false;
 			
 			if( !ParseLemsExpression( test, new_oncondition.test.tab ) ){
 				log.error(eOnco, "could not parse test expression");

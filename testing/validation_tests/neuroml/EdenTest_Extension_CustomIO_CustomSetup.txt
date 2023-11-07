@@ -1,1 +1,3 @@
 set input inliX 0 iPointed DataX[0]/i
+set input ingaD 0 vpeer popCD[0]/v 
+set input ingaX 0 vpeer DataXD[0] 

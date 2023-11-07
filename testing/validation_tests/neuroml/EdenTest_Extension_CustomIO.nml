@@ -41,11 +41,23 @@
             <DerivedVariable name="i" dimension="current" exposure="i" value="iPointed"/>
         </Dynamics>
     </ComponentType>
+    <ComponentType name="RefHalfGap" extends="basePointCurrent"
+        description="Behaves just like a one way gap junction.">
+        <Parameter name="conductance" dimension="conductance"/>
+        <Exposure name="i" />
+        <VariableRequirement name="vpeer" dimension="voltage" />
+        <Requirement name="v" dimension="voltage"/>
+        <Dynamics>
+            <DerivedVariable name="i" exposure="i" dimension="current" value="conductance * (vpeer - v)"/>
+        </Dynamics>
+    </ComponentType>
     
     <RefCurrentsource id="inpX"/>
+    <RefHalfGap id="gapX" conductance="500 pS"/>
     
     <expOneSynapse id="syn0" gbase="1nS" erev="0V" tauDecay="0.5ms"/>
-    <pulseGenerator id="inp0" delay="10ms" duration="19.999ms" amplitude="0.05nA"/> <!-- TODO stop the current source on exactly the timestep, to match how it's necessary to be for streaming and such. -->
+    <pulseGenerator id="inp0"  delay="10ms" duration="19.999ms" amplitude="0.05nA"/> <!-- TODO stop the current source on exactly the timestep, to match how it's necessary to be for streaming and such. -->
+    <pulseGenerator id="inpCD" delay="20ms" duration="19.999ms" amplitude="0.05nA"/> <!-- TODO stop the current source on exactly the timestep, to match how it's necessary to be for streaming and such. -->
 
     <spikeArray id="Inp0"><spike id="0" time="00.001 ms"/></spikeArray>
 	<spikeArray id="Inp1"><spike id="0" time="17.000 ms"/></spikeArray>
@@ -53,17 +65,32 @@
     <spikeArray id="Inp3"><spike id="0" time="35.001 ms"/></spikeArray>
     <spikeArray id="Inp4"><spike id="0" time="36.001 ms"/></spikeArray>
     
+    <!-- Note: the difference between is because of the delayeur introducing a roundoff error EXCEPT when is evenly divisible like 16000 usec
+    This is really the delyeur's fault anc ould eb averted by using rounded off delays or even rounded off timestamps? ... TODO -->
+    <spikeArray id="InpSD">
+        <spike id="0" time="16 ms"/>
+        <spike id="1" time="27.999 ms"/>
+    </spikeArray>
+    <spikeArray id="InpSX">
+        <spike id="0" time="05.999 ms"/>
+        <spike id="1" time="17.999 ms"/>
+    </spikeArray>
+    
     <network id="EdenTestNetwork">
-        <population id="pop0" component="PassiveCell" size="2" />
+        <population id="pop0" component="PassiveCell" size="4" />
+        
         <population id="popS0" component="Inp0" size="1" />
         <population id="popS1" component="Inp1" size="1" />
         <population id="popS2" component="Inp2" size="1" />
         <population id="popS3" component="Inp3" size="1" />
         <population id="popS4" component="Inp4" size="1" />
+        <population id="popSD" component="InpSD" size="1" />
+        <population id="popSX" component="InpSX" size="1" />
+        <population id="popCD" component="PassiveCell" size="2" />
         
-        <inputList id="inli0" component="inp0" population="pop0">
-            <inputW id="0" target="pop0[0]" destination="synapses" weight="1"/>
-        </inputList>
+        <inputList id="inli0"  component="inp0"  population="pop0"><inputW id="0" target="pop0[0]" destination="synapses" weight="1"/></inputList>
+        <inputList id="inliCD" component="inpCD" population="popCD"><inputW id="0" target="0" destination="synapses" weight="1"/></inputList>
+        <inputList id="inliCX" component="inp0"  population="popCD"><inputW id="0" target="1" destination="synapses" weight="1"/></inputList>
         
         <projection id="projS0" presynapticPopulation="popS0" postsynapticPopulation="pop0" synapse="syn0"> <connection id="0" preCellId="0" postCellId="1"/> </projection>
         <projection id="projS1" presynapticPopulation="popS1" postsynapticPopulation="pop0" synapse="syn0"> <connection id="0" preCellId="0" postCellId="1"/> </projection>
@@ -71,35 +98,48 @@
         <projection id="projS3" presynapticPopulation="popS3" postsynapticPopulation="pop0" synapse="syn0"> <connection id="0" preCellId="0" postCellId="1"/> </projection>
         <projection id="projS4" presynapticPopulation="popS4" postsynapticPopulation="pop0" synapse="syn0"> <connection id="0" preCellId="0" postCellId="1"/> </projection>
         
-        <population id="popX" component="PassiveCell" size="2" />
+        <projection id="projSD" presynapticPopulation="popSD" postsynapticPopulation="pop0" synapse="syn0"> <connection id="0" preCellId="0" postCellId="3"/> </projection>
+        
+        
+        <population id="popX" component="PassiveCell" size="4" />
+        
+        <EdenTimeSeriesReader id="DataX"  href="./EdenTest_Extension_CustomIO_TimeSeries.txt" format="ascii_v0" instances="1" >
+            <InputColumn id="i" dimension="current" units="pA"/>
+        </EdenTimeSeriesReader>
+        <EdenTimeSeriesReader id="DataXD"  href="file://timeseriesDelayed.to_sim.pipe" format="ascii_v0" instances="1" >
+            <InputColumn id="v" dimension="voltage" units="V"/>
+        </EdenTimeSeriesReader>
+        
+        <EdenEventSetReader id="SpikeX" href="./EdenTest_Extension_CustomIO_EventSet.txt" format="ascii_v0" instances="1" >
+            <Port id="lalala"/>
+        </EdenEventSetReader> 
+        <EdenEventSetReader id="SpikeY" href="EdenTest_Extension_CustomIO_EventSetMulti.txt" format="ascii_v0" instances="2" >
+            <Port id="zero"/>
+            <Port id="one"/>
+        </EdenEventSetReader>
+        <!-- test indirect loopback with delayeur -->
+        <EdenEventSetReader id="SpikeXD" href="file://spikeDelayed.to_sim.pipe" format="ascii_v0" instances="1" >
+            <Port id="lilili"/>
+        </EdenEventSetReader> 
         
         <inputList id="inliX" component="inpX" population="popX">
             <inputW id="0" target="popX[0]" destination="synapses" weight="1"/>
         </inputList>
         
-        
-        <EdenEventSetReader id="SpikeX" href="./EdenTest_Extension_CustomIO_EventSet.txt" format="ascii_v0" instances="1" >
-            <Port id="lalala"/>
-        </EdenEventSetReader> 
-        <EdenEventSetReader id="SpikeY" href="./EdenTest_Extension_CustomIO_EventSetMulti.txt" format="ascii_v0" instances="2" >
-            <Port id="zero"/>
-            <Port id="one"/>
-        </EdenEventSetReader> 
-        
-        <!-- Since the spike threshold is too high, the synapse can't get a spike from the pre cell, but it still can be triggered by an event source-->
         <projection id="projX" presynapticPopulation="SpikeX" postsynapticPopulation="popX" synapse="syn0">
             <connection id="0" preCellId="0" postCellId="1"/>
         </projection>
         <projection id="projY" presynapticPopulation="SpikeY" postsynapticPopulation="popX" synapse="syn0">
             <connection id="0" preCellId="0" preSegmentId="zero" postCellId="1"/>
-            <connection id="1" preCellId="0" preSegmentId="one" postCellId="1"/>
+            <connection id="1" preCellId="0" preSegmentId="one"  postCellId="1"/>
             <connection id="2" preCellId="1" preSegmentId="zero" postCellId="1"/>
-            <connection id="3" preCellId="1" preSegmentId="one" postCellId="1"/>
+            <connection id="3" preCellId="1" preSegmentId="one"  postCellId="1"/>
         </projection>
         
-        <EdenTimeSeriesReader id="DataX"  href="./EdenTest_Extension_CustomIO_TimeSeries.txt" format="ascii_v0" instances="1" >
-            <InputColumn id="i" dimension="current" units="pA"/>
-        </EdenTimeSeriesReader>
+        <inputList id="ingaD" component="gapX" population="pop0"><inputW id="0" target="pop0[2]" destination="synapses" weight="1"/></inputList>
+        <inputList id="ingaX" component="gapX" population="popX"><inputW id="0" target="popX[2]" destination="synapses" weight="1"/></inputList>
+        
+        <projection id="projXD" presynapticPopulation="SpikeXD" postsynapticPopulation="popX" synapse="syn0"> <connection id="0" preCellId="0" postCellId="3"/> </projection>
         
     </network>
     
@@ -109,9 +149,35 @@
 		<OutputFile id="first" fileName="results.gen.txt">
 			<OutputColumn id="v00" quantity="pop0[0]/v" />
 			<OutputColumn id="v01" quantity="pop0[1]/v" />
+			<OutputColumn id="v02" quantity="pop0[2]/v" />
+			<OutputColumn id="v03" quantity="pop0[3]/v" />
 			<OutputColumn id="vX0" quantity="popX[0]/v" />
             <OutputColumn id="vX1" quantity="popX[1]/v" />
+            <OutputColumn id="vX2" quantity="popX[2]/v" />
+            <OutputColumn id="vX3" quantity="popX[3]/v" />
 		</OutputFile>
+        
+        <EdenOutputFile id="trajepipe" href="file://timeseriesDelayed.from_sim.pipe" format="ascii_v0" sampling_interval="0 ms" >
+            <OutputColumn id="0" quantity="popCD[1]/v" output_units="V"/>
+		</EdenOutputFile>
+        <EdenEventOutputFile id="spikepipe" href="file://spikeDelayed.from_sim.pipe" format="ascii_v0" maximum_interval="10 ms" >
+            <EventSelection id="0" select="popSX[0]/spike"/>
+		</EdenEventOutputFile>
+        
+        <EdenEventOutputFile id="spikerec" href="file:///dev/stdout" format="ascii_v0" maximum_interval="5 ms" >
+            <EventSelection id="0" select="popS0[0]" eventPort="spike"/>
+            <EventSelection id="10" select="SpikeY[0]/zero"/>
+            <EventSelection id="11" select="SpikeY[0]/one" />
+            <EventSelection id="12" select="SpikeY[1]/zero"/>
+            <EventSelection id="13" select="SpikeY[1]/one" />
+		</EdenEventOutputFile>
+        
+        <!-- TODO test direct loopback -->
+        <!-- TODO test correctness of starting_from, up_to_excluding, sampling_interval, maximum interval -->
+        <!-- TODO test sampling points -->
+        <!-- TODO clip to integral multiples of dt -->
+        <!-- LATER log snapshots of state variables when spikes happen, like Brian can ... check what's easy to do in the Monitor class -->
+        
     </Simulation>
     
     <!-- Specify which component to run -->

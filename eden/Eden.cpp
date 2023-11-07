@@ -31,6 +31,7 @@ Parallel simulation engine for ODE-based models
 #include <numeric>
 #include <iterator>
 #include <sstream>
+#include <filesystem>
 
 #include "MMMallocator.h"
 
@@ -111,22 +112,6 @@ static void AppendToVector(CAppendTo &append_to, const CAppendThis &append_this)
 
 // LATER add a helper for single variables
 
-//TODO move this to common
-static bool StrToF( const char *str, double &F, bool ignore_whitespace = true ){
-	std::remove_reference< decltype(F) >::type ret;
-	char *pEnd;
-	errno = 0;
-	ret = strtod(str, &pEnd);
-	if(errno) return false; //the standard way of handling strtol etc.
-	while( *pEnd ){
-		if(!ignore_whitespace) return false;
-		if(!isspace(*pEnd)) return false;
-		pEnd++;
-	}
-	F = ret;
-	return true;
-}
-
 std::string presentable_string( double val ){
 	char tmps[100];
 	sprintf(tmps, "%g", val);
@@ -178,7 +163,7 @@ struct FixedWidthNumberPrinter{
 	}
 	
 	// should have length of column_size + terminator
-	void write( float val, char *buf) const {
+	void write( double val, char *buf) const {
 		const int number_size = getNumberSize();
 		snprintf( buf, number_size + 1, format, val );
 		// Also add some spaces, to delimit columns
@@ -187,7 +172,21 @@ struct FixedWidthNumberPrinter{
 		}
 		buf[number_size+1] = '\0';
 	}
+	std::string get( double val ) const {
+		std::string tmps_column( column_size + 5, '\0' );
+		write(val, tmps_column.data());
+		tmps_column.resize(strlen(tmps_column.c_str()));
+		return tmps_column;
+	}
 };
+// also for recording
+std::string GetTimestampAscii(const FixedWidthNumberPrinter &column_fmt, double time){
+	const ScaleEntry seconds = {"sec",  0, 1.0};
+	const double time_scale_factor = Scales<Time>::native.ConvertTo(1, seconds);
+	// FIXME check that the timestamp is double accurate
+	double time_val = time * time_scale_factor;
+	return column_fmt.get(time_val);
+}
 
 // logging
 struct ILogSimpleProxy : public ILogProxy {
@@ -538,7 +537,10 @@ struct EngineConfig{
 			RawTablesLocator tabloc;
 			double scaleFactor; // in case of float values -- it can be a scaling factor only, because we use the linear kelvins internally and kelvins is the fundamental unit of temperature as well :D
 		};
-		std::string logfile_path;
+		std::string url;
+		double starting_from, up_to_excluding, sampling_interval;
+		std::vector<double> sampling_points; // alternative to implicit. If used, it must have at least one element.
+		
 		std::vector<LogColumn> columns;
 	};
 	struct EventLogger{
@@ -550,8 +552,11 @@ struct EngineConfig{
 			NONE
 			,NEUROML_ID_TIME
 			,NEUROML_TIME_ID
+			,EDEN_ASCII_V0_TIME_MULTI_ID
 		}format;
-		std::string logfile_path;
+		std::string url;
+		double starting_from, up_to_excluding, maximum_interval; // TODO use the Model's info instead maybe? but it's better to maintain isolation like this...
+		
 		std::vector<LogColumn> columns; // for now, this just maps to the same spike_mirror_buffer + std::iota(len(columns))
 		// size_t spike_mirror_buffer; // redundant for now
 	};
@@ -1830,7 +1835,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	
 	// check for spike in/out as well
 	std::vector< std::set<Int> > spiking_outputs_per_cell_per_compartment( cell_types.contents.size() );
-	// NB: HERE make sure it's all types of event writers!!
+	// NB: make sure it's all types of event writers!!
 	for( Int evw_seq = 0; evw_seq < (Int)sim.event_writers.contents.size(); evw_seq++ ){
 		const auto &evw = sim.event_writers.get(evw_seq);
 		for( Int col_seq = 0; col_seq < (Int)evw.outputs.size(); col_seq++ ){
@@ -2856,7 +2861,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				auto Index = subsig.statevars_to_states.at(seq).index;
 				
 				if( state_variable.dynamics == ComponentType::StateVariable::DYNAMICS_NONE ){
-					// keep it unchanged
+					// keep it unchanged - TODO put this as default to handle all the funny updates that may take place!
 					sprintf(tmps, "	%s = %s;", Add->ReferTo_StateNext(Index).c_str(), Add->ReferTo_State(Index).c_str() );
 					ret += tab+tmps+"\n";
 				}
@@ -9214,13 +9219,18 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			EngineConfig::TrajectoryLogger &logger = engine_config.trajectory_loggers[daw_seq];
 			
-			logger.logfile_path = daw.fileName;
+			logger.url = daw.source_url;
+			
+			logger.starting_from     = daw.starting_from    ;
+			logger.up_to_excluding   = daw.up_to_excluding  ;
+			logger.sampling_interval = daw.sampling_interval;
+			logger.sampling_points   = daw.sampling_points  ;
 			
 			for( Int col_seq = 0; col_seq < (Int)daw.output_columns.contents.size(); col_seq++ ){
 				
 				const auto &col = daw.output_columns.get(col_seq);
 				const auto &path = col.quantity;
-				LogInsideDataWriter log_proxy{col_seq, daw.fileName};
+				LogInsideDataWriter log_proxy{col_seq, daw.source_url};
 				
 				EngineConfig::TrajectoryLogger::LogColumn column;
 				
@@ -9259,13 +9269,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					log_proxy("internal error: get qty path type"); return false;
 				}
 				
-				
-				// TODO scales should be strictly defined for lems quantities !					
 				const LemsUnit native = dimensions.GetNative(dimension);
-				
-				// use fundamental units for now
-				const ScaleEntry fundamental_units = {"fundamental units" ,  0, 1.0}; 
-				const LemsUnit desired = fundamental_units;
+				const LemsUnit desired = col.output_units;
 				
 				column.scaleFactor = native.ConvertTo(1, desired);
 				}
@@ -9281,12 +9286,16 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		for( Int evw_seq = 0; evw_seq < (Int)sim.event_writers.contents.size(); evw_seq++ ){
 			const auto &evw = sim.event_writers.get(evw_seq);
 			auto &logger = engine_config.event_loggers[evw_seq];
-			LogInsideDataWriter log_proxy{0, evw.fileName};
+			LogInsideDataWriter log_proxy{0, evw.source_url};
+			logger.url = evw.source_url;
+			if(evw.data_format == "TIME_ID") logger.format = EngineConfig::EventLogger::Format::NEUROML_TIME_ID;
+			else if(evw.data_format == "ID_TIME") logger.format = EngineConfig::EventLogger::Format::NEUROML_ID_TIME;
+			else if(evw.data_format == "ascii_v0") logger.format = EngineConfig::EventLogger::Format::EDEN_ASCII_V0_TIME_MULTI_ID;
+			else{ log_proxy("invalid logger format type: %s", evw.data_format.c_str()); assert(false); return false; }
 			
-			logger.logfile_path = evw.fileName;
-			if(evw.format == Simulation::EventWriter::TIME_ID) logger.format = EngineConfig::EventLogger::Format::NEUROML_TIME_ID;
-			else if(evw.format == Simulation::EventWriter::ID_TIME) logger.format = EngineConfig::EventLogger::Format::NEUROML_ID_TIME;
-			else{ log_proxy("invalid logger format type: %d", (int)evw.format); assert(false); return false; }
+			logger.starting_from    = evw.starting_from   ;
+			logger.up_to_excluding  = evw.up_to_excluding ;
+			logger.maximum_interval = evw.maximum_interval;
 			
 			// create a row for the writer, in tabs; one sxpike slot per element per column
 			size_t spike_target_table = tabs.global_tables_state_i64_arrays.size(); // SOON allow for multi spikke implementation
@@ -9296,7 +9305,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			for( Int col_seq = 0; col_seq < (Int)evw.outputs.size(); col_seq++ ){
 				const auto &col = evw.outputs.atSeq(col_seq);
 				const auto &path = col.selection;
-				LogInsideDataWriter log_proxy{col_seq, evw.fileName};
+				LogInsideDataWriter log_proxy{col_seq, evw.source_url};
 				
 				EngineConfig::EventLogger::LogColumn column;
 				column.id = evw.outputs.getId(col_seq);
@@ -9341,7 +9350,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	// Now apply customsetup parameter override statements (if not done early on)
 	
 	const auto &statements = sim.custom_init.statements;
-	if(!statements.empty()) printf("Aplying customizations...\n");
+	if(!statements.empty()) printf("Applying customizations...\n");
 	
 	for( Int statement_seq = 0; statement_seq < (int)statements.size(); statement_seq++ ){
 		const Simulation::CustomSetup::Statement &set = statements[statement_seq];
@@ -10438,15 +10447,12 @@ int main(int argc, char **argv){
 	//-------------------> crunch the numbers
 	// set up printing in logfiles
 	const int column_width = 16;
-	char tmps_column[ column_width + 5 ];
 	FixedWidthNumberPrinter column_fmt(column_width, '\t', 0);
 	
-	// open the logs, one for each logger
-	std::vector<FILE *> trajectory_open_files, spike_open_files;
 	struct LineReader_File{
 		Int lines_read_so_far;
 		
-		std::string filename;
+		std::string filename; // just for logging for now TODO
 		FILE *open_file;
 		
 		LineReader_File(const std::string &_fn, FILE *_f): filename(_fn), open_file(_f){
@@ -10459,6 +10465,7 @@ int main(int argc, char **argv){
 			while(1){
 				if(!fgets(buf, BUFSIZ, open_file)) break;
 				line += buf;
+				// printf("recv line chunk so far: '%s'\n", line.c_str());fflush(stdout);
 				assert(!line.empty());
 				// if line ends with (CR)LF, strip and deliver the whole line
 				if(*line.rbegin() == '\n'){
@@ -10490,21 +10497,58 @@ int main(int argc, char **argv){
 			fclose(open_file); open_file = NULL;
 		}
 	};
+	struct LineWriter_File{
+		Int lines_written_so_far;
+		
+		std::string filename; // just for logging for now TODO
+		FILE *open_file;
+		
+		LineWriter_File(const std::string &_fn, FILE *_f): filename(_fn), open_file(_f){
+			lines_written_so_far = 0;
+		}
+		
+		bool PutFrameLines(const std::vector<std::string> &lines){
+			for(const auto &line : lines){
+				// printf("send frame %s\n", line.c_str());fflush(stdout);
+				if(fputs(line.c_str(), open_file) < 0) return false; // TODO enqueue instead and also handle EAGAIN when using OS IO ...
+				if(fputc('\n', open_file) < 0) return false; // also the newline, nicer ways to append ... LATER
+			}
+			return true;
+		}
+		
+		bool IsActive() const {
+			return bool(open_file) and not ( ferror(open_file) );
+		}
+		bool IsBad() const {
+			return not bool(open_file) or bool( ferror(open_file) );
+		}
+		void Close(){
+			fclose(open_file); open_file = NULL;
+		}
+	};
 	
+	// NB: all (values, event id's) in internal units; translate them at serialisation time
+	// (eg. how to do string values in a binary format, probably use id's there?)
 	struct AbstractFrame{
 		static constexpr double NEVER_BEFORE(){return -INFINITY;}
 		static constexpr double NEVER_AGAIN (){return +INFINITY;}
 	};
 	struct TimeseriesFrame : public AbstractFrame{
-		RawTables::Table_F32 values;
+		
 		double timestamp;
+		
+		RawTables::Table_F32 values;
+		
 		TimeseriesFrame(){ timestamp = NEVER_BEFORE(); }
 	};
 	struct EventsetFrame : public AbstractFrame{
-		// two parallel vectors, for instance, port pairs
-		RawTables::Table_F32 instances;
-		RawTables::Table_F32 instance_ports;
+		
 		double timestamp;
+		
+		// two parallel vectors, for instance, port pairs
+		std::vector<Int> instances;
+		std::vector<int> instance_ports; // unused for writers!
+		
 		EventsetFrame(){ timestamp = NEVER_BEFORE(); }
 	};
 	struct TimeseriesReader_File : public LineReader_File{
@@ -10569,7 +10613,7 @@ int main(int argc, char **argv){
 			TimeseriesFrame new_frame;
 			if(!LineToFrame(line, new_frame)) return false;
 			
-			// ingore non monotonic timestamps
+			// ignore non monotonic timestamps
 			if(!( next_frame.timestamp < new_frame.timestamp )) return false;
 			
 			// update the frame ! yay!
@@ -10660,7 +10704,7 @@ int main(int argc, char **argv){
 			EventsetFrame new_frame;
 			if(!LineToFrame(line, new_frame)) return false;
 			
-			// ingore non monotonic timestamps
+			// ignore non monotonic timestamps
 			if(!( next_frame.timestamp < new_frame.timestamp )) return false;
 			
 			// update the frame ! yay!
@@ -10669,35 +10713,180 @@ int main(int argc, char **argv){
 		}
 	};
 	
+	struct TimeseriesWriter : public LineWriter_File{
+		const EngineConfig::TrajectoryLogger &logger;
+		const FixedWidthNumberPrinter &column_fmt;
+		
+		TimeseriesFrame last_frame; // must be peeked to enforce interval constraints
+		int next_sample; // for walking through explicit pooints
+		
+		TimeseriesWriter(const EngineConfig::TrajectoryLogger &_w, const FixedWidthNumberPrinter &_fm,
+			const std::string &_fn, FILE *_f): LineWriter_File(_fn, _f), logger(_w), column_fmt(_fm){
+			if(!logger.sampling_points.empty()) next_sample = 0; // first sample
+			else next_sample = -1; //unused
+		}
+		
+		bool FrameToLines(const TimeseriesFrame &frame, std::vector<std::string> &lines){
+			
+			std::string sTime = GetTimestampAscii(column_fmt, frame.timestamp);
+			// printf("%f %s\n", frame.timestamp, sTime.c_str());
+			if(1){//logger.format == EngineConfig::EventLogger::Format::EDEN_ASCII_V0){
+				lines.assign(1,{}); std::string &line = lines[0];
+				line += sTime;
+				for( int i = 0; i < (int)logger.columns.size(); i++ ){
+					line += ' ';
+					line += column_fmt.get(frame.values[i] * logger.columns[i].scaleFactor).c_str();
+					// LATER if ever do timeseries "columns"
+				}
+				return true;
+			}
+			else{ assert(false); return false; }
+		}
+		// TODO deduplicate?
+		bool EmitFrame( const TimeseriesFrame &new_frame ){
+			// serialize
+			std::vector<std::string> lines;
+			if(!FrameToLines(new_frame, lines)) return false;
+			// and send
+			if(!PutFrameLines(lines)) return false;
+			
+			// update the frame ! yay!
+			last_frame = new_frame;
+			return true;
+		}
+	};
+	
+	struct EventWriter : public LineWriter_File{
+		const EngineConfig::EventLogger &logger;
+		const FixedWidthNumberPrinter &column_fmt;
+		
+		EventsetFrame last_frame; // must be peeked to enforce minimum interval constraints
+		
+		EventWriter(const EngineConfig::EventLogger &_w, const FixedWidthNumberPrinter &_fm,
+			const std::string &_fn, FILE *_f): LineWriter_File(_fn, _f), logger(_w), column_fmt(_fm){
+			// all set
+		}
+		
+		bool FrameToLines(const EventsetFrame &frame, std::vector<std::string> &lines){
+			
+			std::string sTime = GetTimestampAscii(column_fmt, frame.timestamp);
+			// printf("%f %s\n", frame.timestamp, sTime.c_str());
+			if(logger.format == EngineConfig::EventLogger::Format::EDEN_ASCII_V0_TIME_MULTI_ID){
+				lines.assign(1,{}); std::string &line = lines[0];
+				line += sTime;
+				for(Int instance : frame.instances){
+					line += ' ';
+					line += accurate_string( logger.columns[instance].id );
+					// LATER if ever do instance_ports
+				}
+				return true;
+			}
+			else{
+				lines.clear();
+				for(Int instance : frame.instances){
+					if(logger.format == EngineConfig::EventLogger::Format::NEUROML_ID_TIME){
+						std::string_view timestamp_trimmed = sTime;
+    					timestamp_trimmed.remove_prefix(std::min(timestamp_trimmed.find_first_not_of(" "), timestamp_trimmed.size()));
+    					timestamp_trimmed.remove_suffix(timestamp_trimmed.size() - std::min(timestamp_trimmed.find_last_not_of(" ")+1, timestamp_trimmed.size()));
+						lines.push_back( accurate_string( logger.columns[instance].id ) + " " + std::string(timestamp_trimmed) );
+					}
+					else if(logger.format == EngineConfig::EventLogger::Format::NEUROML_TIME_ID){
+						lines.push_back( sTime + " " + accurate_string( logger.columns[instance].id ) );
+					}
+					else{ assert(false); return false; }
+				}
+				return true;
+			}
+		}
+		// TODO deduplicate?
+		bool EmitFrame( const EventsetFrame &new_frame ){
+			// serialize
+			std::vector<std::string> lines;
+			if(!FrameToLines(new_frame, lines)) return false;
+			// and send
+			if(!PutFrameLines(lines)) return false;
+			
+			// update the frame ! yay!
+			last_frame = new_frame;
+			return true;
+		}
+	};
+	
+	// open the streams, one for each streamer
 	std::vector<TimeseriesReader_File> timeseries_readers;
 	std::vector<EventsetReader_File> eventset_readers;
+	std::vector<EventWriter> event_output_streams;
+	std::vector<TimeseriesWriter> trajectory_output_streams;
 	
-	for(const auto &logger : engine_config.trajectory_loggers){
+	// TODO abstract away read and data streams while keeping a common selector
+	// XXX make select() work on Windows as well, with events for fd's
+	// and them do the same with the recent event based epoll() and kqueue() or so
+	// but unbuffered stdio may also work in the short term
+	auto GetDataStream = []( const std::string &for_what, const std::string &url,// const std::string &format,
+		bool write_not_read, bool events_not_trajes, FILE *&fout
+	){
+		// convert URL reference to vars, enums and such
+		std::string filename;
+		std::string scheme, auth_path;
+		if(!GetUrlScheme(url, scheme, auth_path)){
+			// it's a file path, by default
+			filename = url;
+		}
+		else if(scheme == "file"){
+			filename = auth_path;
+		}
+		else{
+			printf("unknown URI scheme %s (suffix %s) for %s \"%s\"", scheme.c_str(), auth_path.c_str(), for_what.c_str(), url.c_str() );
+			exit(1);
+		}
+		// completely disable buffering for magical files like pipes
+		// XXX explicitly flush instead
+		
+		// detect special file ! TODO check for windows as well
+		bool is_magical_file = !std::filesystem::is_regular_file(std::filesystem::u8path(filename));
+		const char *openflags = (write_not_read) ? "wb" : ((is_magical_file)?"r+t":"rt");
+		printf("Opening file %s %s...\n", filename.c_str(), openflags);fflush(stdout);
+		fout = fopen( filename.c_str(), openflags); // TODO ...
+		if(!fout){
+			auto errcode = errno;// NB: keep errno right away before it's overwritten
+			printf("Could not open \"%s\" : %s\n", filename.c_str(), strerror(errcode) );
+			exit(1);
+		}
+		if(write_not_read){
+			if(is_magical_file){
+				printf("Setvbuf file %s...\n", filename.c_str());fflush(stdout);
+				setvbuf(fout, NULL, _IONBF, 0);
+			}
+		}
+		printf("Opened file %s\n", filename.c_str());fflush(stdout);
+		return true;
+	};
+	// TODO consider opening some streams in GenerateModel, so they will be wrapped by and object (and dted) some day
+	for(int i = 0; i < (int) engine_config.trajectory_loggers.size(); i++){
+		const auto &logger = engine_config.trajectory_loggers[i];
 		#ifdef USE_MPI
 		assert( my_mpi.rank == EXTERNAL_IO_NODE);
 		#endif
-		const char *path = logger.logfile_path.c_str();
-		FILE *fout = fopen( path, "wt");
-		if(!fout){
-			auto errcode = errno;// NB: keep errno right away before it's overwritten
-			printf("Could not open trajectory log \"%s\" : %s\n", path, strerror(errcode) );
-			exit(1);
-		}
-		trajectory_open_files.push_back(fout);
+		
+		// TODO check format, when there is more than one
+		
+		FILE *fout = NULL;
+		if(!GetDataStream("trajectory log", logger.url, true, false, fout)) return false;
+		trajectory_output_streams.push_back({logger, column_fmt, logger.url, fout}); // XXX where to store filename or whatever?
 	}
 	for(const auto &logger : engine_config.event_loggers){
 		#ifdef USE_MPI
 		assert( my_mpi.rank == EXTERNAL_IO_NODE);
 		#endif
-		const char *path = logger.logfile_path.c_str();
-		FILE *fout = fopen( path, "wt");
-		if(!fout){
-			auto errcode = errno;// NB: keep errno right away before it's overwritten
-			printf("Could not open spike log \"%s\" : %s\n", path, strerror(errcode) );
-			exit(1);
-		}
-		spike_open_files.push_back(fout);
+		
+		// TODO care about the format, when it starts to matter
+		// (it's already detected at generate time, and converted to enum for event writers atm)
+		
+		FILE *fout = NULL;
+		if(!GetDataStream("event log", logger.url, true, true, fout)) return false;
+		event_output_streams.push_back({logger, column_fmt, logger.url, fout}); // XXX where to store filename or whatever?
 	}
+	printf("Opening data readers...\n"); fflush(stdout);
 	for(const auto &reader : engine_config.timeseries_readers){
 		#ifdef USE_MPI
 		assert( my_mpi.rank == EXTERNAL_IO_NODE);
@@ -10733,6 +10922,7 @@ int main(int argc, char **argv){
 		}
 		timeseries_readers.push_back({reader, filename, fin});
 	}
+	printf("Opening event readers...\n"); fflush(stdout);
 	// TODO deduplicate...
 	for(const auto &reader : engine_config.event_sets_readers){
 		#ifdef USE_MPI
@@ -10773,7 +10963,7 @@ int main(int argc, char **argv){
 	
 	// prepare engine for crunching
 	
-	printf("Allocating state buffers...\n");
+	printf("Allocating state buffers...\n"); fflush(stdout);
 	// allocate at least two state vectors, to iterate in parallel
 	RawTables::Table_F32 state_one = tabs.global_initial_state; // eliminate redundancy LATER
 	RawTables::Table_F32 state_two(tabs.global_initial_state.size(), NAN);
@@ -10967,7 +11157,7 @@ int main(int argc, char **argv){
 	// need multiple initialization steps, to make sure the dependency chains of all state variables are resolved
 	for( long long step = -3; time <= engine_config.t_final; step++ ){
 		
-		// same as tabs but for the raw raw tables this time !
+		// same as tabs but for the raw raw tables this time at right before step !
 		auto GetSingleF32 = [&global_state_now, &global_tables_stateNow_f32, &global_tables_const_f32_arrays, &tabs](const RawTablesLocator &tabloc) -> float & {
 			assert(tabloc.forma_type == RawTablesLocator::FormatType::F32);
 			if(tabloc.layou_type == RawTablesLocator::LayoutType::FLAT){
@@ -11000,7 +11190,7 @@ int main(int argc, char **argv){
 			}
 		};
 		auto SetSpikeFlagNow = [
-			&global_tables_stateNow_i64
+			&global_tables_stateNow_i64, &global_tables_stateNext_i64
 		]( const RawTablesLocator &tabloc){
 			if(!(  tabloc.forma_type == RawTablesLocator::I64
 				&& tabloc.varia_type == RawTablesLocator::STATE
@@ -11016,196 +11206,29 @@ int main(int argc, char **argv){
 		bool initializing = step <= 0;
 		const float dt = engine_config.dt;
 		
-		// FIXME move writes here ?
-		if( !initializing ){
-			// input what needs to be input
-			
-			// time series: these are tricky in that the timestamp of the data to be read must be equal to, or after, the timestep to be run now.
-			// If the file has ended, values for the last timestamp are held.
-			// This allows variable sampling rates, which are very useful for both source related, and transfer volume trelated, reasons.  TODO handle the ramifications of reduced sampling rates.
-			// FIXME mention the slack as a good measure in the user guide.
-			// TODO put some epsilon in timestamp checking? will it be innocuous even when fooled? probably, if the sampling rate is too high... can be off by one frame at most...
-			for(size_t i = 0; i < engine_config.timeseries_readers.size(); i++){
-				#ifdef USE_MPI
-				assert(my_mpi.rank == EXTERNAL_IO_NODE);
-				#endif
-				auto &dar = engine_config.timeseries_readers[i];
-				auto &reader = timeseries_readers[i];
-				// overwrite both stateNow and stateNext to avoid copying over on each timestep when swapping buffers.
-				// LATER do sth more generic for more than double buffering - or just overwrite on every step?
-				auto ApplyFrame = [&](){
-					auto SetState = [
-						&global_tables_stateNow_f32, &global_tables_stateNext_f32
-					]( const RawTablesLocator &tabloc, Real value ){
-						if(!(  tabloc.forma_type == RawTablesLocator::F32
-							&& tabloc.varia_type == RawTablesLocator::STATE
-							&& tabloc.layou_type == RawTablesLocator::TABLE
-						)){
-							printf("internal error: data reader value not is not table state f32\n");
-							exit(2);
-						}
-						global_tables_stateNow_f32 [tabloc.table][tabloc.entry] = value;
-						global_tables_stateNext_f32[tabloc.table][tabloc.entry] = value;
-					};
-					
-					assert(!reader.next_frame.values.empty()); // or just do if not empty LATER, leave uninit'd ...
-					
-					auto tabloc = dar.tabloc;
-					for(int i = 0; i < (int)reader.next_frame.values.size(); i++){
-						tabloc.entry = i;
-						SetState(tabloc, reader.next_frame.values[i]);
-					}
-				};
-				
-				// read the data line: timestamp in sec followed by instances*columns numbers in specified scales
-				
-				// the logic is:
-				// if timestamp is before now, we must get a new one
-				// if new timestamp is still before (but after the last received timestep), apply and repeat
-				// if it's equal to now, apply and proceed
-				// if it is after now, proceed. then how does it get applied when skipped??
-				// the answer is of course, to keep a second timestap on whether this one is stale. Or clear the timestamp..
-				// But the most robust way (also for tolerance etc.?) is to maintain a timestamp of last timestamp read.
-				// Thus the condition of whether we need a new frame is:
-				// last frame read + max allowed slack < now.
-				// And before that, we need to check if it wasn't yet time to read the frame, but now it is (last frame read + max allowed slack <= now). Another cheap way would be to clear the contents i guess.
-				// if it's time for the upcoming timestamp to take effect (and it hadn't been last timstamp, of course)
-				// then apply the timestamp and grab a new one?? TODO tolerance!
-				// also: ignore timestanps which appear non monotonically TODO
-				// bool fetched_new_frame = false;
-				bool applied_frame = false;
-				// TODO keep current frame as well, i guess
-				double time_to_read_until = time;
-				while( (reader.next_frame.timestamp <= time_to_read_until) ){
-					if( (reader.next_frame.timestamp >= 0) && !reader.next_frame.values.empty() ){ // or check with "last processed frame" timestamp
-						ApplyFrame();
-						applied_frame = true;
-						// reader.next_frame.values.clear();
-					}
-					if(reader.next_frame.timestamp == time_to_read_until) break; // we don't need more frames to do this timestep
-					// otherwise we need more...
-					// make more efficient LATER if needed, by skipping over based on timestamp or sth ... or rather not?
-					if(reader.IsActive()){
-						bool fetch_ok = reader.FetchFrame();
-						if(reader.IsBad()){
-							fprintf(stderr, "Error encountered for reader with url %s , exiting\n", dar.url.c_str());
-							exit(1);
-						}
-						if(fetch_ok){
-							// maybe handle it as well ... or skip if <= last timestep?
-						}
-					}
-					else{
-						// end of file, it's guaranteed no more frames will happen
-						// do keep that frame though, i guess?
-						break;
-						// reader.next_frame.timestamp = reader.next_frame.NEVER_AGAIN();
-					}
-				}
-				// LATER restructure logic, to not double update on every timestep (dependeing on implementation, level of buffering etc...)
-				// TODO put some expicit slack for timestamps to linger, like max_sampling_period, to allow more concurrency.
-				
-				// check for some problematic cases
-				if(reader.next_frame.timestamp < 0){
-					fprintf(stderr, "data reader with url %s had no valid samples, exiting\n", dar.url.c_str());
-					exit(1);
-				}
-				if(time == 0 && !applied_frame ){
-					fprintf(stderr, "data reader with url %s had no sample for t = 0, exiting\n", dar.url.c_str());
-					exit(1);
-				}
-				// TODO read the stamps for t = 0 before initializing !!! but then, how are hooked together? easily due to not running on init?? or mention to the guide that data will not necessarily be ready?? or just enforce an initial value?? initialization is ill defined anyway ...
-				// or rather, use the init file to take care of it?
-				
-				// done refreshing reader
-			}
-			// event sets: these are tricky in that the timestamp of the data to be read must be equal to, or after, the timestep to be run now.
-			// If the file has ended, no further events are delivered.
-			// TODO put some epsilon in timestamp checking? will it be innocuous even when fooled? probably, if the sampling rate is too high... can be off by one frame at most...
-			for(size_t i = 0; i < engine_config.event_sets_readers.size(); i++){
-				#ifdef USE_MPI
-				assert(my_mpi.rank == EXTERNAL_IO_NODE);
-				#endif
-				auto &evr = engine_config.event_sets_readers[i];
-				auto &reader = eventset_readers[i];
-				
-				auto ApplyFrame = [&](){
-					const auto &instances      = reader.next_frame.instances     ;
-					const auto &instance_ports = reader.next_frame.instance_ports;
-					
-					for(Int i = 0; i < (Int)instances.size(); i++){
-						Int event_index = instances[i] * evr.ports.size() + instance_ports[i];
-						auto tabloc = evr.spike_destination_tables[event_index];
-						if(!(  tabloc.forma_type == RawTablesLocator::I64
-							&& tabloc.varia_type == RawTablesLocator::CONST
-							&& tabloc.layou_type == RawTablesLocator::TABLE
-						)){
-							printf("internal error: event reader value not is not table const i64, instead: %s\n", tabloc.Stringify().c_str());
-							exit(2);
-						}// LATER tabloc.entry == -1 or sth
-						const auto &vec = tabs.global_tables_const_i64_arrays[tabloc.table];
-						for(size_t i = 0; i < vec.size(); i++ ){
-							TabEntryRef_Packed packed_ref = vec[i];// GetSingleI64?
-							RawTablesLocator tablocc = {(ptrdiff_t) -1, -1, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::I64};
-							(TabEntryRef &)tablocc = GetDecodedTableEntryId(packed_ref);
-							SetSpikeFlagNow(tablocc);
-						}
-					}
-				};
-				
-				// read the data line: timestamp in sec followed by instance[!port] ids TODO maybe use the strings for ports?
-				
-				// if it's time for the upcoming timestamp to take effect (and it hadn't been last timstamp, of course)
-				// then apply the timestamp and grab a new one?? TODO tolerance!
-				// also: ignore timestanps which appear non monotonically FIXME
-				// FIXME add some steps to skipping old timestamps...
-				
-				// bool applied_frame = false;
-				// TODO keep current frame as well, i guess
-				
-				double time_to_read_until = time;
-				// printf("%f %f %f\n", time,dt,time_to_read_until);
-				// NB: handle all spikes before the timestep, but not exactly *on* the timestep; leave those to be activated on the next timestep (like those on time + epsilon), in line with how cells < actually for spikes...
-				while( (reader.next_frame.timestamp < time_to_read_until) ){
-					if( (reader.next_frame.timestamp >= 0) && !reader.next_frame.instances.empty() ){ // or check with "last processed frame" timestamp
-						ApplyFrame();
-						// applied_frame = true;
-						reader.next_frame.instances.clear();
-					}
-					if(reader.next_frame.timestamp == time_to_read_until) break; // NB: this won't happen, keep it for the intent
-					// otherwise we need more...
-					// make more efficient LATER if needed, by skipping over based on timestamp or sth ... or rather not?
-					if(reader.IsActive()){
-						bool fetch_ok = reader.FetchFrame();
-						if(reader.IsBad()){
-							fprintf(stderr, "Error encountered for reader with url %s , exiting\n", evr.url.c_str());
-							exit(1);
-						}
-						if(fetch_ok){
-							// maybe handle it as well ... or skip if <= last timestep?
-						}
-					}
-					else{
-						// end of file, it's guaranteed no more events will happen
-						reader.next_frame.timestamp = reader.next_frame.NEVER_AGAIN();
-					}
-				}
-				
-				// TODO put some expicit slack for timestamps to linger, like max_sampling_period, to allow more concurrency.
-				
-				// check for some problematic cases
-				// let an empty file be a valid event set though?
-				// if(reader.next_frame.timestamp < 0){
-				// 	fprintf(stderr, "data reader with url %s had no valid samples, exiting\n", evr.url.c_str());
-				// 	exit(1);
-				// }
-				
-				// TODO preload events originating from the past before initializing?
-				// or rather, use the init file to take care of it?
-				
-				// done refreshing reader
-			}
-		}
+		// Exchange the necessary information before crunching
+		
+		// XXX Output'ing before input'ing means external inputs (from a source external to the sim) need to be broadcast to all recipients, directly!! Or face a timestep shift!
+		// circular flows are then like reconciling two parallel communication planes ... which of course can't be reordered relative to each other.
+		// but then how do circular flows work?? 
+		// by breaking transmissions i guess: reading a value and writing that value down simply can't be done within a single timestep when more than one node is involved.
+		// does this mean that readers have to load stuff for the *next* timestep? which can't be finished without allowing the writes for these same timesteps to be in parallel.
+		// if node 0 is to be the mediator as it stands now, then the only way that other nodes can be informed on time is that they receive AFTER node 0 reads streams and the only way for node 0 to send valid data to streams is to write streams AFTER it receives from other nodes. This can be resolved by syncing with mpi (as much as possible) then syncing with streams then RE syncing with mpi to broadcast the valid file mirrors (as far as the stream dependencies are concerned). The current configuration (first send+recv mpi then send+recv streams) will cause a timestep (NaN for first!!!) delay to the picture of remote nodes on input streams.
+
+		// conclusions:
+		// - ban recording of sources, or at least condemn them and accept 1*dt delay on everything (perhaps add nan default value, also for init)
+		// - and then we can't sustainably do fetch all info from mpi to node 0 -> send streams from node 0 -> recv from node 0 -> send info from node 0 because granularity is all stuff per node, not per element -> inverted sequence if only node 0, but otherwise circular dependency!! by accepting that node 0 may need to inform remote, send all mpi -> recv from mpi -> send streams -> recv from streams -> send again! all mpi for read streams, recv likewise for the really latest info, in the general case where many may .
+		// how did we get so wrong? by restricting io to particular nodes, which necessitates a gather BEFORE writing streams and a broadcast AFTER writing streams.
+		// Music and other schemes intruding MPI_Allgather are simpler, but they intrude into MPI i guess? also can't handle p2p (not that it's that nice as it stands now, p2p introduces another phase...).
+		// It would still be overcome if all related nodes asked the external process directly, but then the external process would need to be aware of and support that...
+		// - the current single mpi phase -> single stream phase gives LAGGED info about INPUT streams to all non/IO MPI nodes.
+		// - Thus an additional MPI phase needs to be added, to defer exchanging only the fresh INPUT values from getters to subscribers. (remember, now recording input is allowed to be LAGGED) -> it would be eliminated if somehow no node needed stream input indirectly ie. got it directly instead.
+		// or the exchange phase for input streams can also be done simultaneously and *out of sequence* with the regular exchange phase, which iirc MPI ensures can *not be done be messages are sent in order between each pair of nodes*
+
+		// And the clean way to record stuff in a LAGGED way is to record first, receive after, ... TOOD how does this work with events then?? how are they not on the wrong buffer??
+		// by writing BOTH the before and after buffers, just like how timeseries currently hack sparse events! and LATER add overwriters to do just that throughout the buffers...
+
+		// FIXME also consider last unit before... or some other margin ...for 32bit float tolerance 
 		
 		#ifdef USE_MPI
 		auto NetMessage_ToString = []( size_t buf_value_len, const auto &buf ){
@@ -11356,6 +11379,292 @@ int main(int argc, char **argv){
 		
 		#endif
 		
+		// output what needs to be output
+		if( !initializing ){
+			// printf("step output %d\n", (int)step);fflush(stdout);
+			// XXX there is a possible dependency loop when a node needs to log remote  data ... !!! the only way to resolve this is for the owning node to send all the (local or read from file) data directly, making cosimulation + mpi problematic !! introduce explicit delays to readers or otherwise determine phases??
+			// for now interleave recv mpi -> (send recorder -> recv file soon to be made async).
+			// XXX test starting_from, up_to_excluding, interval
+			for(size_t i = 0; i < engine_config.trajectory_loggers.size(); i++){
+				#ifdef USE_MPI
+				assert(my_mpi.rank == EXTERNAL_IO_NODE);
+				#endif
+				const auto &logger = engine_config.trajectory_loggers[i];
+				TimeseriesWriter &writer = trajectory_output_streams[i];
+				
+				auto GetColumnValue = [
+					&GetSingleF32
+				]( const EngineConfig::TrajectoryLogger::LogColumn &column ){
+					if(column.tabloc.forma_type != RawTablesLocator::F32){
+						printf("internal error: logged value not is not float\n");
+						exit(2);
+					}
+					// Note: scaling is done on the node writing down the log! to keep the units consistent
+					return GetSingleF32(column.tabloc);
+				};
+				auto GetTheFrame = [&GetColumnValue](const EngineConfig::TrajectoryLogger &logger, auto &valvec){
+					valvec.resize(logger.columns.size());
+					// fetch all values
+					for( int j = 0; j < (int)logger.columns.size(); j++ ){
+						valvec[j] = GetColumnValue(logger.columns[j]);
+					}
+				};
+				
+				// if it's time to record
+				if( !logger.sampling_points.empty() ){
+					while(writer.next_sample < (int)logger.sampling_points.size() && logger.sampling_points[writer.next_sample] <= time ){
+						TimeseriesFrame new_frame;
+						new_frame.timestamp = logger.sampling_points[writer.next_sample];
+						GetTheFrame(logger, new_frame.values);
+						writer.EmitFrame(new_frame);
+						writer.next_sample++;
+					}
+				}
+				else if( (logger.starting_from <= time) && (time < logger.up_to_excluding) && (writer.last_frame.timestamp + logger.sampling_interval <= time) ){
+					TimeseriesFrame new_frame;
+					new_frame.timestamp = time;
+					GetTheFrame(logger, new_frame.values);
+					// printf("send timeseries %d %d\n", (int)step, (int)i); fflush(stdout);
+					writer.EmitFrame(new_frame);
+				}
+			}
+			for( int i = 0; i < (int)engine_config.event_loggers.size(); i++){
+				#ifdef USE_MPI
+				assert(my_mpi.rank == EXTERNAL_IO_NODE);
+				#endif
+				const auto &logger = engine_config.event_loggers[i];
+				EventWriter &writer = event_output_streams[i];
+				
+				auto GetColumnValue = [
+					&GetSingleI64
+				]( const EngineConfig::EventLogger::LogColumn &column ) -> long long &{
+					if(column.tabloc.forma_type != RawTablesLocator::I64){
+						printf("internal error: logged value not is not int\n");
+						exit(2);
+					}
+					return GetSingleI64(column.tabloc);
+				};
+				// fetch all values, to actually also clear them in the process, TODO more elegant...
+				std::vector<Int> instances; // TODO last_frame.clear()
+				for( int j = 0; j < (int)logger.columns.size(); j++ ){
+					const auto &column = logger.columns[j];
+					long long &col_val = GetColumnValue(column);
+					if(col_val){
+						instances.push_back(j);
+					}
+					col_val = 0;
+				}
+				// if it's time to record
+				if( (logger.starting_from <= time) && (time < logger.up_to_excluding) ){
+					// and there is something, or it's been a while since last frame (then emit an empty one to inform that nothing happened)
+					if( (instances.size() > 0) || (writer.last_frame.timestamp + logger.maximum_interval <= time) ){
+						EventsetFrame new_frame;
+						new_frame.timestamp = time;
+						new_frame.instances = instances;
+						// printf("send events %d %d\n", (int)step, (int)i); fflush(stdout);
+						writer.EmitFrame(new_frame);
+					}
+				}
+			}
+			// printf("done output %d\n", (int)step);fflush(stdout);
+			// NOTE: event writers that need to be in a tight (1*sync period) closed loop must be output _after_ the time in which they were emitted, so that the event readers can input them for the timestep right after. Another constraint is that at the latest timestamp emitted must match or exceed the timestep to be run, for the receiving
+		}
+		
+		// input what needs to be input
+		if( !initializing ){
+			
+			// printf("input step %d\n", (int)step);fflush(stdout);
+			
+			// time series: these are tricky in that the timestamp of the data to be read must be equal to, or after, the timestep to be run now.
+			// If the file has ended, values for the last timestamp are held.
+			// This allows variable sampling rates, which are very useful for both source related, and transfer volume trelated, reasons.  TODO handle the ramifications of reduced sampling rates.
+			// FIXME mention the slack as a good measure in the user guide.
+			// TODO put some epsilon in timestamp checking? will it be innocuous even when fooled? probably, if the sampling rate is too high... can be off by one frame at most...
+			for(size_t i = 0; i < engine_config.timeseries_readers.size(); i++){
+				#ifdef USE_MPI
+				assert(my_mpi.rank == EXTERNAL_IO_NODE);
+				#endif
+				auto &dar = engine_config.timeseries_readers[i];
+				auto &reader = timeseries_readers[i];
+				// overwrite both stateNow and stateNext to avoid copying over on each timestep when swapping buffers.
+				// LATER do sth more generic for more than double buffering - or just overwrite on every step?
+				auto ApplyFrame = [&](){
+					auto SetState = [
+						&global_tables_stateNow_f32, &global_tables_stateNext_f32
+					]( const RawTablesLocator &tabloc, Real value ){
+						if(!(  tabloc.forma_type == RawTablesLocator::F32
+							&& tabloc.varia_type == RawTablesLocator::STATE
+							&& tabloc.layou_type == RawTablesLocator::TABLE
+						)){
+							printf("internal error: data reader value not is not table state f32\n");
+							exit(2);
+						}
+						global_tables_stateNow_f32 [tabloc.table][tabloc.entry] = value;
+						global_tables_stateNext_f32[tabloc.table][tabloc.entry] = value;
+					};
+					
+					assert(!reader.next_frame.values.empty()); // or just do if not empty LATER, leave uninit'd ...
+					
+					auto tabloc = dar.tabloc;
+					for(int i = 0; i < (int)reader.next_frame.values.size(); i++){
+						tabloc.entry = i;
+						SetState(tabloc, reader.next_frame.values[i]);
+					}
+				};
+				
+				// read the data line: timestamp in sec followed by instances*columns numbers in specified scales
+				
+				// the logic is:
+				// if timestamp is before now, we must get a new one
+				// if new timestamp is still before (but after the last received timestep), apply and repeat
+				// if it's equal to now, apply and proceed
+				// if it is after now, proceed. then how does it get applied when skipped??
+				// the answer is of course, to keep a second timestap on whether this one is stale. Or clear the timestamp..
+				// But the most robust way (also for tolerance etc.?) is to maintain a timestamp of last timestamp read.
+				// Thus the condition of whether we need a new frame is:
+				// last frame read + max allowed slack < now.
+				// And before that, we need to check if it wasn't yet time to read the frame, but now it is (last frame read + max allowed slack <= now). Another cheap way would be to clear the contents i guess.
+				// if it's time for the upcoming timestamp to take effect (and it hadn't been last timstamp, of course)
+				// then apply the timestamp and grab a new one?? TODO tolerance!
+				// also: ignore timestanps which appear non monotonically TODO
+				// bool fetched_new_frame = false;
+				bool applied_frame = false;
+				// TODO keep current frame as well, i guess
+				double time_to_read_until = time;
+				while( (reader.next_frame.timestamp <= time_to_read_until) ){
+					if( (reader.next_frame.timestamp >= 0) && !reader.next_frame.values.empty() ){ // or check with "last processed frame" timestamp
+						ApplyFrame();
+						applied_frame = true;
+						// reader.next_frame.values.clear();
+					}
+					if(reader.next_frame.timestamp == time_to_read_until) break; // we don't need more frames to do this timestep
+					// otherwise we need more...
+					// make more efficient LATER if needed, by skipping over based on timestamp or sth ... or rather not?
+					if(reader.IsActive()){
+						// printf("fetch timeseries %d %d\n", (int)step, (int)i); fflush(stdout);
+						bool fetch_ok = reader.FetchFrame();
+						if(reader.IsBad()){
+							fprintf(stderr, "Error encountered for reader with url %s , exiting\n", dar.url.c_str());
+							exit(1);
+						}
+						if(fetch_ok){
+							// maybe handle it as well ... or skip if <= last timestep?
+						}
+					}
+					else{
+						// end of file, it's guaranteed no more frames will happen
+						// do keep that frame though, i guess?
+						break;
+						// reader.next_frame.timestamp = reader.next_frame.NEVER_AGAIN();
+					}
+				}
+				// LATER restructure logic, to not double update on every timestep (dependeing on implementation, level of buffering etc...)
+				// TODO put some expicit slack for timestamps to linger, like max_sampling_period, to allow more concurrency.
+				
+				// check for some problematic cases
+				if(reader.next_frame.timestamp < 0){
+					fprintf(stderr, "data reader with url %s had no valid samples, exiting\n", dar.url.c_str());
+					exit(1);
+				}
+				if(time == 0 && !applied_frame ){
+					fprintf(stderr, "data reader with url %s had no sample for t = 0, exiting\n", dar.url.c_str());
+					exit(1);
+				}
+				// TODO read the stamps for t = 0 before initializing !!! but then, how are hooked together? easily due to not running on init?? or mention to the guide that data will not necessarily be ready?? or just enforce an initial value?? initialization is ill defined anyway ...
+				// or rather, use the init file to take care of it?
+				
+				// done refreshing reader
+			}
+			// event sets: these are tricky in that the timestamp of the data to be read must be equal to, or after, the timestep to be run now.
+			// If the file has ended, no further events are delivered.
+			// TODO put some epsilon in timestamp checking? will it be innocuous even when fooled? probably, if the sampling rate is too high... can be off by one frame at most...
+			for(size_t i = 0; i < engine_config.event_sets_readers.size(); i++){
+				#ifdef USE_MPI
+				assert(my_mpi.rank == EXTERNAL_IO_NODE);
+				#endif
+				auto &evr = engine_config.event_sets_readers[i];
+				auto &reader = eventset_readers[i];
+				
+				auto ApplyFrame = [&](){
+					const auto &instances      = reader.next_frame.instances     ;
+					const auto &instance_ports = reader.next_frame.instance_ports;
+					
+					for(Int i = 0; i < (Int)instances.size(); i++){
+						Int event_index = instances[i] * evr.ports.size() + instance_ports[i];
+						auto tabloc = evr.spike_destination_tables[event_index];
+						if(!(  tabloc.forma_type == RawTablesLocator::I64
+							&& tabloc.varia_type == RawTablesLocator::CONST
+							&& tabloc.layou_type == RawTablesLocator::TABLE
+						)){
+							printf("internal error: event reader value not is not table const i64, instead: %s\n", tabloc.Stringify().c_str());
+							exit(2);
+						}// LATER tabloc.entry == -1 or sth
+						const auto &vec = tabs.global_tables_const_i64_arrays[tabloc.table];
+						for(size_t i = 0; i < vec.size(); i++ ){
+							TabEntryRef_Packed packed_ref = vec[i];// GetSingleI64?
+							RawTablesLocator tablocc = {(ptrdiff_t) -1, -1, RawTablesLocator::TABLE, RawTablesLocator::STATE, RawTablesLocator::I64};
+							(TabEntryRef &)tablocc = GetDecodedTableEntryId(packed_ref);
+							SetSpikeFlagNow(tablocc);
+						}
+					}
+				};
+				
+				// read the data line: timestamp in sec followed by instance[!port] ids TODO maybe use the strings for ports?
+				
+				// if it's time for the upcoming timestamp to take effect (and it hadn't been last timstamp, of course)
+				// then apply the timestamp and grab a new one?? TODO tolerance!
+				// also: ignore timestanps which appear non monotonically FIXME
+				// FIXME add some steps to skipping old timestamps...
+				
+				// bool applied_frame = false;
+				// TODO keep current frame as well, i guess
+				
+				double time_to_read_until = time;
+				// printf("%f %f %f\n", time,dt,time_to_read_until);
+				// NB: handle all spikes before the timestep, but not exactly *on* the timestep; leave those to be activated on the next timestep (like those on time + epsilon), in line with how cells < actually for spikes...
+				while( (reader.next_frame.timestamp < time_to_read_until) ){
+					if( (reader.next_frame.timestamp >= 0) && !reader.next_frame.instances.empty() ){ // or check with "last processed frame" timestamp
+						ApplyFrame();
+						// applied_frame = true;
+						reader.next_frame.instances.clear();
+					}
+					if(reader.next_frame.timestamp == time_to_read_until) break; // NB: this won't happen, keep it for the intent
+					// otherwise we need more...
+					// make more efficient LATER if needed, by skipping over based on timestamp or sth ... or rather not?
+					if(reader.IsActive()){
+						// printf("fetch events %d %d\n", (int)step, (int)i); fflush(stdout);
+						bool fetch_ok = reader.FetchFrame();
+						if(reader.IsBad()){
+							fprintf(stderr, "Error encountered for reader with url %s , exiting\n", evr.url.c_str());
+							exit(1);
+						}
+						if(fetch_ok){
+							// maybe handle it as well ... or skip if <= last timestep?
+						}
+					}
+					else{
+						// end of file, it's guaranteed no more events will happen
+						reader.next_frame.timestamp = reader.next_frame.NEVER_AGAIN();
+					}
+				}
+				
+				// TODO put some expicit slack for timestamps to linger, like max_sampling_period, to allow more concurrency.
+				
+				// check for some problematic cases
+				// let an empty file be a valid event set though?
+				// if(reader.next_frame.timestamp < 0){
+				// 	fprintf(stderr, "data reader with url %s had no valid samples, exiting\n", evr.url.c_str());
+				// 	exit(1);
+				// }
+				
+				// TODO preload events originating from the past before initializing?
+				// or rather, use the init file to take care of it?
+				
+				// done refreshing reader
+			}
+			// printf("done input %d\n", (int)step); fflush(stdout);
+		}
+		
 		//prepare for parallel iteration
 		
 		// Execute all work items
@@ -11381,85 +11690,6 @@ int main(int argc, char **argv){
 				printf("item %lld end\n", item);
 				fflush(stdout);
 			}
-		}
-		
-		if( !initializing ){
-			// output what needs to be output
-			auto write_timestamp = [&tmps_column, &column_fmt](FILE *fout, double time){
-				const ScaleEntry seconds = {"sec",  0, 1.0};
-				const double time_scale_factor = Scales<Time>::native.ConvertTo(1, seconds);
-				// #FIXME check that the timestamp is double accurate
-				double time_val = time * time_scale_factor;
-				column_fmt.write( time_val, tmps_column );
-				fprintf(fout, "%s", tmps_column);
-			};
-			for(size_t i = 0; i < engine_config.trajectory_loggers.size(); i++){
-				#ifdef USE_MPI
-				assert(my_mpi.rank == EXTERNAL_IO_NODE);
-				#endif
-				const auto &logger = engine_config.trajectory_loggers[i];
-				FILE *& fout = trajectory_open_files[i];
-				
-				write_timestamp(fout, time);
-				
-				auto GetColumnValue = [
-					&GetSingleF32
-				]( const EngineConfig::TrajectoryLogger::LogColumn &column ){
-					if(column.tabloc.forma_type != RawTablesLocator::F32){
-						printf("internal error: logged value not is not float\n");
-						exit(2);
-					}
-					// Note: scaling is done on the node writing down the log! to keep the units consistent
-					return GetSingleF32(column.tabloc) * column.scaleFactor;
-				};
-				for( const auto &column : logger.columns ){
-					char tmps_column[ column_width + 5 ];
-					
-					float col_val = GetColumnValue(column);
-					column_fmt.write( col_val, tmps_column );
-					fprintf( fout, "\t%s", tmps_column );
-					// fprintf( fout, "\t%f", col_val );
-				}
-				fprintf(fout, "\n");
-			}
-			for( int i = 0; i < (int)engine_config.event_loggers.size(); i++){
-				#ifdef USE_MPI
-				assert(my_mpi.rank == EXTERNAL_IO_NODE);
-				#endif
-				const auto &logger = engine_config.event_loggers[i];
-				FILE *& fout = spike_open_files[i];
-				
-				auto GetColumnValue = [
-					&GetSingleI64
-				]( const EngineConfig::EventLogger::LogColumn &column ) -> long long &{
-					if(column.tabloc.forma_type != RawTablesLocator::I64){
-						printf("internal error: logged value not is not float\n");
-						exit(2);
-					}
-					return GetSingleI64(column.tabloc);
-				};
-				for( const auto &column : logger.columns ){
-					long long &col_val = GetColumnValue(column);
-					if(col_val){
-						if(logger.format == EngineConfig::EventLogger::Format::NEUROML_ID_TIME){
-							fprintf( fout, "%ld ", column.id );
-							write_timestamp(fout, time);
-							fprintf(fout, "\n");
-						}
-						else if(logger.format == EngineConfig::EventLogger::Format::NEUROML_TIME_ID){
-							write_timestamp(fout, time);
-							fprintf( fout, " %ld\n", column.id );
-						}
-						else{
-							assert(false);
-						}
-						// fprintf( fout, "\t%f", col_val );
-					}
-					col_val = 0;
-				}
-				// fprintf(fout, "\n");
-			}
-			// NOTE: event writers that need to be in a tight (1*sync period) closed loop must be output _after_ the time in which they were emitted, so that the event readers can input them for the timestep right after. Another constraint is that at the latest timestamp emitted must match or exceed the timestep to be run, for the receiving
 		}
 		
 		// output state dump
@@ -11533,8 +11763,8 @@ int main(int argc, char **argv){
 	// done!
 	
 	// close loggers
-	for( auto &fout : trajectory_open_files ){ fclose(fout); fout = NULL; }
-	for( auto &fout : spike_open_files ){ fclose(fout); fout = NULL; }
+	for( auto &writer : trajectory_output_streams ){ writer.Close(); }
+	for( auto &writer : event_output_streams ){ writer.Close(); }
 	for( auto &reader : timeseries_readers ){ reader.Close(); }
 	for( auto &reader : eventset_readers ){ reader.Close(); }
 	

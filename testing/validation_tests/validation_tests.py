@@ -28,35 +28,35 @@ tests = [
 	'sim_file': test_nml_dir + 'LEMS_EdenTest_PassiveCompartment.xml',
 },
 {
-    'type': 'half_vs_half',
-    'sim_file': 'neuroml/' + 'EdenTest_Extension_CustomSetup.nml',
-    'validation_criteria':[
-        ["popA/0/izTonicSpiking/v"  , "pop0[0]/v", "exact"],
-        ["popB/0/izPhasicSpiking/v" , "pop0[1]/v", "exact"],
-        ["popC/0/izTonicBursting/v" , "pop0[2]/v", "exact"],
-        ["popD/0/izPhasicBursting/v", "pop0[3]/v", "exact"],
-        ["popE/0/izMixedMode/v"     , "pop0[4]/v", "exact"],
-        ["popp[0]/0/v"              , "popp[2]/0/v", "exact"],
-        ["popp[1]/0/v"              , "popp[3]/0/v", "exact"],
-    ]
+	'type': 'half_vs_half',
+	'sim_file': 'neuroml/' + 'EdenTest_Extension_CustomSetup.nml',
+	'validation_criteria':[
+		["popA/0/izTonicSpiking/v"  , "pop0[0]/v", "exact"],
+		["popB/0/izPhasicSpiking/v" , "pop0[1]/v", "exact"],
+		["popC/0/izTonicBursting/v" , "pop0[2]/v", "exact"],
+		["popD/0/izPhasicBursting/v", "pop0[3]/v", "exact"],
+		["popE/0/izMixedMode/v"     , "pop0[4]/v", "exact"],
+		["popp[0]/0/v"              , "popp[2]/0/v", "exact"],
+		["popp[1]/0/v"              , "popp[3]/0/v", "exact"],
+	]
 },
 {
-    'type': 'half_vs_half',
-    'sim_file': 'neuroml/' + 'EdenTest_Extension_VariableRequirement.nml',
-    'validation_criteria':[
-        ["popA[0]/v", "pRp[0]/v", "exact"],
-        ["popA[0]/u", "pSp[0]/u", "exact"],
-        ["popB[0]/v", "pRp[1]/v", "exact"],
-        ["popB[0]/u", "pSp[1]/u", "exact"],
-    ]
+	'type': 'half_vs_half',
+	'sim_file': 'neuroml/' + 'EdenTest_Extension_VariableRequirement.nml',
+	'validation_criteria':[
+		["popA[0]/v", "pRp[0]/v", "exact"],
+		["popA[0]/u", "pSp[0]/u", "exact"],
+		["popB[0]/v", "pRp[1]/v", "exact"],
+		["popB[0]/u", "pSp[1]/u", "exact"],
+	]
 },
 {
-    'type': 'half_vs_half',
-    'sim_file': 'neuroml/' + 'EdenTest_Extension_CustomIO.nml',
-    'validation_criteria':[
-        ["pop0[0]/v", "popX[0]/v", "exact"],
-        ["pop0[1]/v", "popX[1]/v", "exact"],
-    ]
+	'type': 'half_vs_half',
+	'sim_file': 'neuroml/' + 'EdenTest_Extension_CustomIO.nml',
+	'validation_criteria':[
+		["pop0[0]/v", "popX[0]/v", "exact"],
+		["pop0[1]/v", "popX[1]/v", "exact"],
+	]
 },
 {
 	'type': 'validate_vs_neuron',
@@ -244,10 +244,36 @@ tests = [
 },
 
 ]
-res = RunTests(tests, verbose = True)
-if res is True:
-	print('All tests passed')
-	sys.exit(0)
-else:
-	print('%d tests failed !' % len(res))
-	sys.exit(1)
+
+# add some auxiliary processes, just to test pipes for now
+import subprocess
+concurrent_processes = []
+fifo_pair_filenames = [('event', 'spikeDelayed.from_sim.pipe','spikeDelayed.to_sim.pipe'), ('trajectory', 'timeseriesDelayed.from_sim.pipe','timeseriesDelayed.to_sim.pipe'),]
+runtime_dir = '.'
+try:
+	for type, s_a, a_s in fifo_pair_filenames:
+		s_a, a_s = ( f'{runtime_dir}/'+x for x in (s_a, a_s))
+		subprocess.call(['rm', s_a, a_s]);
+		subprocess.call(['mkfifo', s_a, a_s]);
+		p = subprocess.Popen(['python', 'delayeur.py', '0.010', type, f'{s_a}', f'{a_s}'])
+		concurrent_processes.append(p)
+	
+	# now run the tests
+	res = RunTests(tests, verbose = True)
+	if res is True:
+		print('All tests passed')
+		sys.exit(0)
+	else:
+		print('%d tests failed !' % len(res))
+		sys.exit(1)
+	
+finally:
+	# clean up after the processes
+	for p in concurrent_processes:
+		try:
+			p.wait(timeout=0.1) # give some time for graceful shutdown of aux processes
+		except subprocess.TimeoutExpired: pass
+	if any(p for p in concurrent_processes if p.returncode is None): print('Terminating remaining processes...')
+	for p in (p for p in concurrent_processes if p.returncode is None):
+		print(p)
+		p.kill()

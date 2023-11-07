@@ -2474,27 +2474,44 @@ struct Simulation{
 	};
 	
 	struct LoggerBase{
-		std::string fileName;
+		// more of a "url reference" in that relative paths are also accepted
+		std::string source_url, data_format; // NB: for new type loggers, they are to be parsed by the backend, for now, standardize LATER
 	};
 	//for state variable trajectories
 	struct DataWriter : public LoggerBase{
 		struct OutputColumn{
-			
 			LemsQuantityPath quantity;
+			// extensions!
+			LemsUnit output_units; // fundamental units if classic
+			// TODO ScaleEntry instead?
 		};
+		
+		// for classic data writers, format is unset
+		
+		// same for both classic and eden types
 		CollectionWithNames<OutputColumn> output_columns;
+		
+		// extensions!
+		double starting_from, up_to_excluding, sampling_interval; // default: -inf, +inf, dt (also valid in, and just like with classic)
+		// If sampling interval is NaN: then use the explicit list.
+		std::vector<double> sampling_points; // alternative to implicit. If used, it must have at least one element.
+		
 	};
-	//for spikes or other discrete events
+	// An EventWriter is a stream of pikes or other discrete events, coming from various EventPaths in the model.
 	struct EventWriter : public LoggerBase{
 		struct EventSelection{
-			
 			LemsEventPath selection; // the component's port, 
 		};
-		enum{
-			TIME_ID,
-			ID_TIME
-		} format; // as seen in https://github.com/LEMS/jLEMS/blob/development/src/main/java/org/lemsml/jlems/core/type/simulation/EventWriter.java#L18
+		
+		// for classic event writers, acceptable formats are "TIME_ID" and "ID_TIME";  see also https://github.com/LEMS/jLEMS/blob/development/src/main/java/org/lemsml/jlems/core/type/simulation/EventWriter.java#L18
+		
+		// same for both classic and eden types
 		CollectionWithIds<EventSelection> outputs;
+		
+		// extensions!
+		// XXX make these have double precision, by adding the relevant
+		double starting_from, up_to_excluding, maximum_interval; // also valid for classic, default: -inf, +inf, (0 for new type OR +inf for classic type)
+		// TODO allow for buffer limits as well!!
 	};
 	
 	// extensions!
@@ -2556,7 +2573,7 @@ struct Simulation{
 	
 	
 	// ---> fields
-	
+	// use double values for absolute time values LATER, also for children elements of course
 	Real length; // duration, that's how it's called in LEMS
 	Real step; // timestep, likewise
 	
@@ -2645,8 +2662,8 @@ struct Model{
 	bool ParseLemsEventPath_InputInstance(const ILogProxy &log, const InputSource &input, const std::vector<std::string> &tokens, Simulation::InputInstanceEventPath &path, Int &tokens_consumed ) const;
 	bool ParseLemsEventPath_ArtificialCell(const ILogProxy &log, const ArtificialCell &cell,  const std::vector<std::string> &tokens, Simulation::LemsEventPath::Cell &path_cell, Int &tokens_consumed) const;
 	bool ParseLemsEventPath_CellProperty(const ILogProxy &log, const CellType &cell_type, const std::vector<std::string> &tokens, Simulation::LemsEventPath &path, Int &tokens_consumed ) const;
-	// NB: port name is simply appended to the lemspath, if not NULL
-	bool ParseLemsEventPath(const ILogProxy &log, const char *sPath, const char *port_name_or_null, const Network &net, Simulation::LemsEventPath &path) const;
+	// NB: port name is simply appended to the lemspath, if not NULL or ""
+	bool ParseLemsEventPath(const ILogProxy &log, const char *sPath, const char *port_name_or_null_or_empty, const Network &net, Simulation::LemsEventPath &path) const;
 	
 	Model(){ target_simulation = -1; }
 };
