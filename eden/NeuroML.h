@@ -882,7 +882,8 @@ struct ComponentType{
 	};
 	
 	struct StateAssignment{
-		Int state_seq;
+		Int state_seq; // negative if unused
+		Int wrireq_seq;// alternative, negative if unused
 		ResolvedTermTable value;
 	};
 	struct EventOut{
@@ -921,8 +922,8 @@ struct ComponentType{
 			DERIVED,
 			
 			// nonstandard EDEN extension, but it's necessary for real models, oh well
-			VARREQ,
-			
+			VARREQ, // basically a (BBCORE)POINTER
+			WRIREQ  // access the enclosing scope's variables and modify them, beware of multiple mechs altering the state of a compartment at once!
 			// magical requirements are in CommonRequirements
 			
 		}type;
@@ -933,6 +934,8 @@ struct ComponentType{
 				case REQUIREMENT: return "Requirement";
 				case STATE      : return "StateVariable";
 				case DERIVED    : return "DerivedVariable";
+				case VARREQ     : return "VariableRequirement";
+				case WRIREQ     : return "WritableRequirement";
 				default: return "Invalid";
 			}
 		}
@@ -1115,6 +1118,7 @@ struct ComponentType{
 	
 	// nonstandard EDEN extension, but it's necessary for real models, oh well
 	CollectionWithNames<Requirement> variable_requirements;
+	CollectionWithNames<Requirement> writable_requirements;
 	
 	CollectionWithNames<NamespaceThing> name_space;
 	
@@ -1135,25 +1139,49 @@ struct ComponentType{
 	// same with event_outputs for artificial cells LATER
 	
 	
-	const Dimension getExposureDimension(const char *name) const {
-		if( !exposures.has(name) ) return Dimension();
-		return getExposureDimension( exposures.get_id(name) );
-	}
-	const Dimension getExposureDimension( Int exp_seq ) const{
+	// properties of exposures and requirements and namespace entries
+	bool GetExposureAndDimension( Int exp_seq, Dimension &dim_out, ComponentType::Exposure::Type &exp_type ) const {
+		if(exp_seq < 0) return false;
 		// perhaps invalidtype internal error LATER?
-		if( !exposures.has(exp_seq) ) return Dimension();
+		if( !exposures.has(exp_seq) ) return false;
 		auto exp = exposures.get(exp_seq);
+		exp_type = exp.type;
 		if(exp.type == Exposure::STATE){
-			return state_variables.get(exp.seq).dimension;
+			dim_out = state_variables.get(exp.seq).dimension;
 		}
 		else if(exp.type == Exposure::DERIVED){
-			return derived_variables.get(exp.seq).dimension;
+			dim_out = derived_variables.get(exp.seq).dimension;
 		}
 		else{
-			// internal error
-			return Dimension();
+			// internal error? unknown anyway...
+			return false;
+		}
+		return true;
+	}
+	bool GetExposureAndDimension( Int exp_seq, Dimension &dim_out ) const {
+		ComponentType::Exposure::Type exp_type;
+		return GetExposureAndDimension(exp_seq, dim_out, exp_type);
+	}
+	const Dimension getExposureDimension( Int exp_seq ) const{
+		Dimension dim; ComponentType::Exposure::Type exp_type;
+		if(!GetExposureAndDimension(exp_seq, dim, exp_type)) return Dimension();
+		else return dim;
+	}
+	const Dimension getExposureDimension(const char *name) const {
+		if( !exposures.has(name) ) return Dimension();
+		else return getExposureDimension( exposures.get_id(name) );
+	}
+	bool GetCurrentOutputAndDimension( Dimension &dim_out ) const;
+	bool GetVoltageRequirementAndDimension( Dimension &dim_out ) const;
+	
+	bool GetRequirementAndDimension( Int req_seq, Dimension &dim_out ) const {
+		if( !requirements.has(req_seq) ) return false;
+		else{
+			dim_out = requirements.get(req_seq).dimension;
+			return true;
 		}
 	}
+	
 	const Dimension getNamespaceEntryDimension(Int seq) const {
 		// perhaps invalidtype LATER?
 		if( !name_space.has(seq) ) return Dimension();
@@ -1176,25 +1204,14 @@ struct ComponentType{
 		else if(exp.type == NamespaceThing::VARREQ){
 			return variable_requirements.get(exp.seq).dimension;
 		}
+		else if(exp.type == NamespaceThing::WRIREQ){
+			return writable_requirements.get(exp.seq).dimension;
+		}
 		else{
 			assert(false);
 			return Dimension();
 		}
 	}
-	
-	// dimensions of native exposures
-	bool GetExposureAndDimension( Int exp_seq, Dimension &dim_out ) const;
-	bool GetRequirementAndDimension( Int req_seq, Dimension &dim_out ) const {
-		if( !requirements.has(req_seq) ) return false;
-		else{
-			dim_out = requirements.get(req_seq).dimension;
-			return true;
-		}
-	}
-	
-	bool GetCurrentOutputAndDimension( Dimension &dim_out ) const;
-	bool GetVoltageRequirementAndDimension( Dimension &dim_out ) const;
-	
 	
 	void debug_print( const DimensionSet &dimensions ) const ;
 };
@@ -2006,7 +2023,7 @@ struct ArtificialCell{
 	Int spike_source_seq;
 	
 	bool GetCurrentInputAndDimension( const CollectionWithNames<ComponentType> &component_types, Dimension &dim_out ) const;
-	bool GetVoltageExposureAndDimension( const CollectionWithNames<ComponentType> &component_types, Dimension &dim_out ) const;
+	bool GetVoltageExposureAndDimension( const CollectionWithNames<ComponentType> &component_types, Dimension &dim_out, ComponentType::Exposure::Type &exp_type ) const;
 	
 	bool HasSpikeIn ( const CollectionWithNames<ComponentType> &component_types ) const;
 	bool HasSpikeOut( const CollectionWithNames<ComponentType> &component_types, const CollectionWithNames<InputSource> &input_sources ) const;
@@ -2027,7 +2044,7 @@ struct CellType{
 	ArtificialCell artificial;
 	
 	bool GetCurrentInputAndDimension( const CollectionWithNames<ComponentType> &component_types, Dimension &dim_out ) const;
-	bool GetVoltageExposureAndDimension( const CollectionWithNames<ComponentType> &component_types, Dimension &dim_out ) const;
+	bool GetVoltageExposureAndDimension( const CollectionWithNames<ComponentType> &component_types, Dimension &dim_out, ComponentType::Exposure::Type &exp_type ) const;
 	
 	bool HasSpikeIn ( const CollectionWithNames<ComponentType> &component_types ) const;
 	bool HasSpikeOut( const CollectionWithNames<ComponentType> &component_types, const CollectionWithNames<InputSource> &input_sources ) const;

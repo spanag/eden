@@ -44,10 +44,10 @@ tests = [
 	'type': 'half_vs_half',
 	'sim_file': 'neuroml/' + 'EdenTest_Extension_VariableRequirement.nml',
 	'validation_criteria':[
-		["popA[0]/v", "pRp[0]/v", "exact"],
-		["popA[0]/u", "pSp[0]/u", "exact"],
+		["popA[0]/v", "pRp[0]/v", { 'type': 'box', 'dt': 0, 'dv': 0.0000005 }], # due to numerical roundoff really
+		["popA[0]/u", "pSp[0]/u", { 'type': 'box', 'dt': 0, 'dv': 1.5e-18 }], # due to numerical roundoff really
 		["popB[0]/v", "pRp[1]/v", "exact"],
-		["popB[0]/u", "pSp[1]/u", "exact"],
+		["popB[0]/u", "pSp[1]/u", { 'type': 'box', 'dt': 0, 'dv': 1.5e-18 }], # due to numerical roundoff really
 	]
 },
 {
@@ -56,7 +56,16 @@ tests = [
 	'validation_criteria':[
 		["pop0[0]/v", "popX[0]/v", "exact"],
 		["pop0[1]/v", "popX[1]/v", "exact"],
+		["pop0[2]/v", "popX[2]/v", { 'type': 'box', 'dt': 0, 'dv': 0.000006 }], # due to numerical roundoff really
+        ["pop0[3]/v", "popX[3]/v", "exact"],
 	]
+},
+{
+	'sim_file': 'neuroml/' + 'EdenTest_Extension_WritableRequirement.nml',
+	'type': 'half_vs_half',
+	'validation_criteria': [
+		["proj0[0]/post/flag", "pop0[0]/flag", "exact"],
+	],
 },
 {
 	'type': 'validate_vs_neuron',

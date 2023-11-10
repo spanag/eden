@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Make synapses able to directly alter artificial cells -->
+<!-- TODO make the equivalent on physical cells as well -->
+<neuroml id=" NML_EdenTestNetwork1">
+<ComponentType name="AlterableCell"
+	extends=""
+	description="A cell with a state variable that will be accessed from certain synapses.">
+	<!-- Inherited -->
+	<!-- <Attachments name="synapses" type="basePointCurrentDL"/> -->
+	<Requirement name="iSyn" dimension="current" />
+    <!-- needed because the synapses must extend baseSynapse -->
+    <Constant name="VOLT" dimension="voltage" value="1 V"/>
+	<Dynamics>
+        <!-- FIXME if voltage is a derivedvariable, this deficiency is not being detected and it fails at codegen!! -->
+        <!-- <DerivedVariable name="v" exposure="v" dimension="voltage" value="0*VOLT" /> -->
+        <StateVariable name="v" exposure="v" dimension="voltage"/>
+        <StateVariable name="flag" dimension="none"/>
+		<OnStart>
+			<StateAssignment variable="flag" value="-0.42"/>
+		</OnStart>
+	</Dynamics>
+</ComponentType>
+ <!-- extends="baseSynapse" is needed for it to be registered as a synaptic component type, TODO -->
+<ComponentType name="FlagSynapseBasic" extends="baseSynapse"
+	description="A synapse with a flag inside it, asserted on spike in.">
+    <!-- <EventPort name="in" direction="in"/> -->
+    <Constant name="AMP" dimension="current" value="1 A"/>
+	<Dynamics>
+        <StateVariable name="flag" dimension="none"/>
+        <!-- TODO allow dimensionless I ... -->
+		<DerivedVariable name="i" exposure="i" dimension="current" value="0 * AMP" />
+		<OnStart>
+			<StateAssignment variable="flag" value="-0.42" />
+		</OnStart>
+		<OnEvent port="in">
+			<StateAssignment variable="flag" value="+0.42" />
+		</OnEvent>
+	</Dynamics>
+</ComponentType>
+<ComponentType name="FlagSynapseExtra" extends="baseSynapse"
+	description="A synapse with a flag OUTSIDE it, asserted on spike in. This may prevent simultaneous processing, but Brian users can't live without it.">
+    <Constant name="AMP" dimension="current" value="1 A"/>
+    <!-- <EventPort name="in" direction="in"/> -->
+    <WritableRequirement name="flag" dimension="none"/>
+	<Dynamics>
+        <!-- TODO allow dimensionless I ... -->
+		<!-- <DerivedVariable name="I" exposure="I" dimension="none" value="0" /> -->
+		<DerivedVariable name="i" exposure="i" dimension="current" value="0 * AMP" />
+		<OnEvent port="in">
+			<StateAssignment variable="flag" value="+0.42" /> <!-- TODO LATER refresh the image of the variable after this change, as well as the rest of the namespace derived from it. DerivedVariables are great and yet awful... -->
+		</OnEvent>
+	</Dynamics>
+</ComponentType>
+
+<AlterableCell id="cell"/>
+<spikeArray id="spik"><spike id="0" time="01.001 ms"/></spikeArray>
+
+<FlagSynapseBasic id="old_syn"/>
+<FlagSynapseExtra id="new_syn"/>
+
+<network id="EdenTestNetwork">
+    <population id="popS" component="spik" size="1"/>
+    <population id="pop0" component="cell" size="1"/>
+    
+    <projection id="proj0" presynapticPopulation="popS" postsynapticPopulation="pop0" synapse="old_syn"><connection id="0" preCellId="0" postCellId="0"/></projection>
+    <projection id="proj1" presynapticPopulation="popS" postsynapticPopulation="pop0" synapse="new_syn"><connection id="0" preCellId="0" postCellId="0"/></projection>
+</network>
+
+<Simulation id="sim1" length="5.03ms" step="0.010ms" target="EdenTestNetwork">
+    <OutputFile id="first" fileName="results.gen.txt">
+        <OutputColumn id="flagOld" quantity="proj0[0]/post/flag" />
+        <OutputColumn id="flagNew" quantity="pop0[0]/flag" />
+    </OutputFile>
+</Simulation>
+<!-- Specify which component to run -->
+<Target component="sim1"/>
+</neuroml>

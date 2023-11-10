@@ -486,6 +486,12 @@ void DimensionSet::AddDefaults(){
 	Add(Dimension( 1, 2,-4,-1, 0, 0, 0), {"voltage_per_time"       , { "mV_per_usec"      ,   3 }, { { "V_per_sec"      , 0 }, { "mV_per_msec"   ,   0 }, { "mV_per_usec"   ,   3 } } });	
 }
 
+// a helper for logging dimensions
+struct HelpStringifyDim{
+	const DimensionSet &dimensions;
+	std::string operator()(const Dimension &dim) const { return dimensions.Stringify(dim); };
+};
+
 //------------------> Misc utilities
 
 // map core components to LEMS core implementations
@@ -493,14 +499,6 @@ const char *LEMS_CoreComponents_filename = "LEMS_CoreComponents.inc.xml";
 
 
 //------------------> Model object code
-
-bool ComponentType::GetExposureAndDimension( Int exp_seq, Dimension &dim_out ) const {
-	if( exp_seq >= 0 ){
-		dim_out = getExposureDimension( exp_seq );
-		return true;
-	}
-	else return false;
-}
 bool ComponentType::GetCurrentOutputAndDimension( Dimension &dim_out ) const {
 	return GetExposureAndDimension( common_exposures.current, dim_out );
 }
@@ -664,10 +662,10 @@ bool ArtificialCell::GetCurrentInputAndDimension( const CollectionWithNames<Comp
 		else return false;
 	}
 }
-bool ArtificialCell::GetVoltageExposureAndDimension( const CollectionWithNames<ComponentType> &component_types, Dimension &dim_out ) const {
+bool ArtificialCell::GetVoltageExposureAndDimension( const CollectionWithNames<ComponentType> &component_types, Dimension &dim_out, ComponentType::Exposure::Type &exptype_out ) const {
 	if( type == COMPONENT ){
 		const auto &comptype = component_types.get( component.id_seq );
-		return comptype.GetExposureAndDimension( comptype.common_exposures.membrane_voltage, dim_out );
+		return comptype.GetExposureAndDimension( comptype.common_exposures.membrane_voltage, dim_out, exptype_out );
 	}
 	else if( type == SPIKE_SOURCE ){
 		return false; // perhaps something else LATER
@@ -683,12 +681,14 @@ bool ArtificialCell::GetVoltageExposureAndDimension( const CollectionWithNames<C
 			
 		){
 			dim_out = LEMS_Voltage;
+			exptype_out = ComponentType::Exposure::Type::STATE; // it so happens
 			return true;
 		}
 		else if(
 			type == FN || type == FN_1969
 		){
 			dim_out = Dimension::Unity();
+			exptype_out = ComponentType::Exposure::Type::STATE; // it so happens
 			return true;
 		}
 		else return false; // TODO DL core components
@@ -748,13 +748,14 @@ bool CellType::GetCurrentInputAndDimension( const CollectionWithNames<ComponentT
 		return true;
 	}
 }
-bool CellType::GetVoltageExposureAndDimension( const CollectionWithNames<ComponentType> &component_types, Dimension &dim_out ) const {
+bool CellType::GetVoltageExposureAndDimension( const CollectionWithNames<ComponentType> &component_types, Dimension &dim_out, ComponentType::Exposure::Type &exptype_out ) const {
 	if( type == ARTIFICIAL ){
-		return artificial.GetVoltageExposureAndDimension( component_types, dim_out );
+		return artificial.GetVoltageExposureAndDimension( component_types, dim_out, exptype_out );
 	}
 	else{
 		// it's a physical cell
 		dim_out = LEMS_Voltage;
+		exptype_out = ComponentType::Exposure::Type::STATE;
 		return true;
 	}
 }
@@ -1996,7 +1997,7 @@ bool Model::ParseLemsQuantityPath(const ILogProxy &log, const char *qty_str, con
 		
 		// now branch according to property type
 		if(!(tokens_consumed+2 <= (Int)tokens.size())){
-			log.error("incomplete path for projection element");
+			log.error("incomplete path for projection element"); // TODO better logging when eg "post" is missing
 			return false;
 		}
 		
@@ -3648,8 +3649,8 @@ bool ValidateComponentTypeInterface(
 	const std::map< std::string, ComponentType::Requirement > &required_exposures,
 	const std::map< std::string, ComponentType::EventPortIn > &provided_event_inputs,
 	const std::map< std::string, ComponentType::EventPortOut > &required_event_outputs
+	,bool allow_writable_requirements = false
 ){
-	
 	//  each of the component's requirements must be matched by a provided requirement
 	for( auto keyval : comp.requirements.names ){
 		auto reqname = keyval.first;
@@ -3672,6 +3673,12 @@ bool ValidateComponentTypeInterface(
 		// check dimensions
 		if( req.dimension != creq.dimension ){
 			log.error(eEntityUsing, "requirement %s dimensions mismatch: expected %s, got %s", reqname, dimensions.Stringify(req.dimension).c_str(), dimensions.Stringify(creq.dimension).c_str());
+			return false;
+		}
+		
+		// check writable requirements: well actually this is situational and should be checked for every combination of parent and child component types, TODO someday. Until then this is just a special calse for synapses, TODO inputs
+		if(!(allow_writable_requirements || comp.writable_requirements.size() <= 0)){
+			log.error(eEntityUsing, "component %s has WritableRequirement>s, which are not allowed for this mechanism type", type);
 			return false;
 		}
 		
@@ -3708,7 +3715,7 @@ bool ValidateComponentTypeInterface(
 		
 		auto exp_seq = comp.exposures.get_id(expname);
 		if( exp_seq < 0 ){
-			log.error(eEntityUsing, "component %s lacks required exposure %s", type, expname);
+			log.error(eEntityUsing, "component %s lacks required exposure %s", type, expname); // HERE relax this to a warning or sth, for multiflux synapses...
 			return false;
 		}
 		// const ComponentType::Exposure &cexp = comp.exposures.get(exp_seq);
@@ -3755,11 +3762,12 @@ bool ParseInlineComponentInstance(
 	const std::map< std::string, ComponentType::Requirement  > &required_exposures, 
 	const std::map< std::string, ComponentType::EventPortIn  > &provided_event_inputs,
 	const std::map< std::string, ComponentType::EventPortOut > &required_event_outputs,
-	ComponentInstance &instance 
+	ComponentInstance &instance,
+	bool allow_writable_requirements = false
 ){
 	if( !ParseComponentInstance(log, eInstance, component_types, dimensions, type, instance) ) return false;
 	const auto &comp = component_types.get(instance.id_seq);
-	if( !ValidateComponentTypeInterface(log, eInstance, comp, dimensions, type, provided_requirements, required_exposures, provided_event_inputs, required_event_outputs ) ) return false;
+	if( !ValidateComponentTypeInterface(log, eInstance, comp, dimensions, type, provided_requirements, required_exposures, provided_event_inputs, required_event_outputs, allow_writable_requirements ) ) return false;
 	if( !ValidateComponentInstanceCompleteness(log, eInstance, comp, type, instance) ) return false;
 	
 	return true;
@@ -4008,7 +4016,7 @@ bool ParseComponentInstanceSynapticComponent(const ImportLogger &log, const pugi
 		CoverCommonEventIn( "in", provided_event_inputs );
 	//}
 	
-	if( !ParseInlineComponentInstance(log, eInstance, component_types, dimensions, type, provided_requirements, required_exposures, provided_event_inputs, required_event_outputs, instance) ) return false;
+	if( !ParseInlineComponentInstance(log, eInstance, component_types, dimensions, type, provided_requirements, required_exposures, provided_event_inputs, required_event_outputs, instance, true) ) return false;
 	
 	return true;
 }
@@ -4952,8 +4960,12 @@ struct ImportState{
 		Dimension bound_cell_current_dimension;
 		Dimension syn_voltage_dimension;
 		Dimension bound_cell_voltage_dimension;
+		ComponentType::Exposure::Type bound_cell_voltage_dimension_type;
 		Dimension syn_vpeer_dimension;
 		Dimension peer_cell_voltage_dimension;
+		ComponentType::Exposure::Type peer_cell_voltage_dimension_type;
+		
+		HelpStringifyDim strdim = {dimensions};
 		
 		// bound cell compatible wrt current
 		if( syncomp.GetCurrentOutputAndDimension( component_types, syn_current_dimension ) ){
@@ -4968,7 +4980,7 @@ struct ImportState{
 		}
 		// bound cell compatible wrt voltage
 		if( syncomp.GetVoltageInputAndDimension( component_types, syn_voltage_dimension ) ){
-			if( !bound_cell.GetVoltageExposureAndDimension( component_types, bound_cell_voltage_dimension ) ){
+			if( !bound_cell.GetVoltageExposureAndDimension( component_types, bound_cell_voltage_dimension, bound_cell_voltage_dimension_type ) ){
 				log.error( eConn, "synapse %s requires voltage but cell %s does not expose voltage", syncomp_name, bound_cell_name);
 				return false;
 			}
@@ -4977,14 +4989,48 @@ struct ImportState{
 				return false;
 			}
 		}
+		// check if the bound cell is compatible wrt writablerequirements
+		if(syncomp.type == SynapticComponent::Type::COMPONENT){
+			const auto &comptype = component_types.get( syncomp.component.id_seq );
+			const auto &wrireqs = comptype.writable_requirements;
+			for(int i = 0; i < (int)wrireqs.size(); i++){
+				const char *wrireq_name = wrireqs.getName(i);
+				const auto &wrireq = wrireqs.get(i);
+				if(!(bound_cell.type == CellType::Type::ARTIFICIAL && bound_cell.artificial.component.id_seq >= 0)){
+					log.error( eConn, "there are WritableRequirements in synapse type %s, yet cell %s is not represented by a LEMS component", syncomp_name, bound_cell_name);
+					return false;
+				}
+				const auto &bound_comptype = component_types.get( bound_cell.artificial.component.id_seq );
+				const char *bound_comptype_name = component_types.getName( bound_cell.artificial.component.id_seq );
+				if(!bound_comptype.state_variables.has(wrireq_name)){
+					log.error( eConn, "WritableRequirement %s in synapse type %s is not a StateVariable in cell type %s's component type %s", wrireq_name, syncomp_name, bound_cell_name, bound_comptype_name);
+					return false;
+				}
+				const ComponentType::StateVariable &var = bound_comptype.state_variables.get(wrireq_name);
+				const auto var_dimension = var.dimension, wrireq_dimension = wrireq.dimension;
+				if(!(wrireq_dimension == var_dimension)){
+					log.error( eConn, "WritableRequirement %s in synapse type %s has dimension %s, whereas on cell type %s's component type %s it has diemnsion %s", wrireq_name, syncomp_name, strdim(wrireq_dimension).c_str(), bound_cell_name, bound_comptype_name, strdim(var_dimension).c_str());
+					return false;
+				}
+			}
+		}
+		
+		
 		// peer cell compatible wrt vpeer
 		if( syncomp.GetVpeerInputAndDimension( component_types, syn_vpeer_dimension ) ){
-			if( !peer_cell.GetVoltageExposureAndDimension( component_types, peer_cell_voltage_dimension ) ){
+			if( !peer_cell.GetVoltageExposureAndDimension( component_types, peer_cell_voltage_dimension, peer_cell_voltage_dimension_type ) ){
 				log.error( eConn, "synapse %s exposes current but cell %s does not receive current", syncomp_name, bound_cell_name);
 				return false;
 			}
 			if( syn_vpeer_dimension != peer_cell_voltage_dimension ){
 				log.error( eConn, "synapse %s requires Vpeer as %s but cell %s exposes voltage as %s", syncomp_name, dimensions.Stringify(syn_vpeer_dimension).c_str(), bound_cell_name, dimensions.Stringify(peer_cell_voltage_dimension).c_str() );
+				return false;
+			}
+			
+			// this is a current limitation of Eden tbh, and it could be overridden... check it here anyway until Eden can support it.
+			// LATER implemnt this by adding a state variable footprint for the relevant variable, either as observer or as delayed bloat
+			if(peer_cell_voltage_dimension_type != ComponentType::Exposure::Type::STATE){
+				log.error( eConn, "voltage exposure of cell %s is not also a state variable; which is not yet supported in EDEN", peer_cell_name );
 				return false;
 			}
 		}
@@ -5021,6 +5067,7 @@ struct ImportState{
 		Dimension cello_current_dimension;
 		Dimension input_voltage_dimension;
 		Dimension cello_voltage_dimension;
+		ComponentType::Exposure::Type cello_voltage_dimension_exposure_type;
 		
 		// cell compatible wrt current
 		if( input.GetCurrentOutputAndDimension( component_types, synaptic_components, input_current_dimension ) ){
@@ -5035,7 +5082,7 @@ struct ImportState{
 		}
 		// cell compatible wrt voltage
 		if( input.GetVoltageInputAndDimension( component_types, synaptic_components, input_voltage_dimension ) ){
-			if( !cello.GetVoltageExposureAndDimension( component_types, cello_voltage_dimension ) ){
+			if( !cello.GetVoltageExposureAndDimension( component_types, cello_voltage_dimension, cello_voltage_dimension_exposure_type ) ){
 				log.error( eInputInstance, "input source %s requires voltage but cell %s does not expose voltage", input_name, cello_name);
 				return false;
 			}
@@ -7902,7 +7949,7 @@ struct ImportState{
 				const auto &eOutFile = eSimEl;
 				Simulation::DataWriter daw;
 				bool is_classic_type = (strcmp(eSimEl.name(), "OutputFile") == 0);
-				if(is_classic_type) log.warning(eSimEl, eSimEl.name()); 
+				if(!is_classic_type) log.warn_experimental(eSimEl, eSimEl.name());
 				
 				//unique name
 				auto outfi_name = RequiredNmlId(log, eOutFile, sim.data_writers);
@@ -8661,6 +8708,7 @@ struct ImportState{
 			// "Children", TODO
 			
 			"VariableRequirement", // an extension
+			"WritableRequirement", // another extension
 			
 			"Text", // for annotations
 		};
@@ -8751,6 +8799,8 @@ struct ImportState{
 			if( !ParseStatevarOrRequirement(log, eProp, new_type.requirements, new_type.name_space, ComponentType::NamespaceThing::REQUIREMENT, "requirement" ) ) return false; }
 		for(const pugi::xml_node &eProp : kids.by_name.getOrNew("VariableRequirement") ){
 			if( !ParseStatevarOrRequirement(log, eProp, new_type.variable_requirements, new_type.name_space, ComponentType::NamespaceThing::VARREQ, "variable requirement" ) ) return false; }
+		for(const pugi::xml_node &eProp : kids.by_name.getOrNew("WritableRequirement") ){
+			if( !ParseStatevarOrRequirement(log, eProp, new_type.writable_requirements, new_type.name_space, ComponentType::NamespaceThing::WRIREQ, "writable requirement" ) ) return false; }
 		
 		for(const pugi::xml_node &ePort : kids.by_name.getOrNew("EventPort") ){
 			
@@ -8786,6 +8836,7 @@ struct ImportState{
 		
 		
 		//auxiliaries for Dynamics parsing
+		// TODO explain if they are detected outside <Dynamics> ! for ease of use
 		static const std::vector< const char * > known_dynamics_child_types = {
 			"StateVariable",
 			"DerivedVariable",
@@ -9088,14 +9139,21 @@ struct ImportState{
 			auto value = RequiredAttribute(log, eAssign, "value");
 			if(!value) return false;
 			
-			auto state_seq = new_type.state_variables.get_id(variable);
-			if(state_seq < 0){
+			new_assignment.state_seq = new_type.state_variables.get_id(variable);
+			new_assignment.wrireq_seq = new_type.writable_requirements.get_id(variable);
+			
+			if(new_assignment.state_seq >= 0){
+				assert(!(new_assignment.wrireq_seq >= 0));
+				// auto &state_variable = new_type.state_variables.get(state_seq);
+				// nothing else to do
+			}
+			else if(new_assignment.wrireq_seq >= 0){
+				// nothing else to do
+			}
+			else{
 				log.error(eAssign, "unknown state variable %s", variable);
 				return false;
 			}
-			// auto &state_variable = new_type.state_variables.get(state_seq);
-			
-			new_assignment.state_seq = state_seq;
 			
 			if( !ParseLemsExpression( value, new_assignment.value.tab ) ){
 				log.error(eAssign, "could not parse value expression");

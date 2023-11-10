@@ -314,7 +314,7 @@ def RunTest(
 	):
 		# TODO add jLEMS
 		test_filename = test['sim_file']
-		
+		ok = True
 		testcase_type = 'test'
 		if typ == 'validate_vs_neuron':
 			testcase_type = 'vs. NEURON'
@@ -412,7 +412,7 @@ def RunTest(
 		res = VerifySimResults( results_Neuron, results_Eden, criteria,
 			events_Neuron=events_Neuron, events_Eden=events_Eden,
 			skip_missing_criteria=skip_missing, explain_verification_on_fail=explain_verification_on_fail)
-		if res is True:
+		if res is True and ok:
 			ok = True
 			print('PASS %s %s' % ( test_filename, testcase_type ) )
 	else:

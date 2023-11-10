@@ -2513,19 +2513,17 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			return ExpressionInfix(expression, type, dimensions, random_call_counter, dim_out);
 		}
 		static std::string GetExposureVar(const ComponentType &type, Int exp_seq){
-			std::string ret = "Lems_";
+			std::string ret;
 			const auto &exp = type.exposures.get(exp_seq);
 			if(exp.type == ComponentType::Exposure::STATE){
-				ret += "state";
+				ret += "Lems_state_"  +std::string(type.state_variables.getName(exp.seq));
 			}
 			else if(exp.type == ComponentType::Exposure::DERIVED){
-				ret += "derived";
+				ret += "Lems_derived_"+itos(exp.seq);
 			}
 			else{
-				ret += "unknown";
+				ret += "Lems_unknown_"+itos(exp.seq);
 			}
-			ret += "_";
-			ret += itos(exp.seq);
 			
 			return ret;
 		};
@@ -2575,12 +2573,27 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			return ret;
 		}
-		/*
-		static void ApplySubsigToInstance(const ComponentType &type, const CellInternalSignature::ComponentSubSignature &subsig, const ISignatureAppender *Add){
-			// mutates parametrization of components?; singletons and multitudes are separately synapses and inputs, other parms are semi-standard
+		// static void ApplySubsigToInstance(const ComponentType &type, const CellInternalSignature::ComponentSubSignature &subsig, const ISignatureAppender *Add){
+		// 	// mutates parametrization of components?; singletons and multitudes are separately synapses and inputs, other parms are semi-standard
+		// }
+		static std::string ExposeStatevars(const ComponentType &type, const CellInternalSignature::ComponentSubSignature &subsig, const ISignatureAppender *Add, const std::string &tab){//, bool after_not_before){
+			bool after_not_before = false;
+			std::string ret = tab+"// state variables \n";
+			// Lambda is syntax sugar over class with operator(), so each lambda is in fact its own unique type, even if they are identical.
+			// https://stackoverflow.com/questions/76066090/operands-to-have-different-types-with-matching-auto-functors#comment134151381_76066090
+			auto doit = [&] (size_t idx){ return (after_not_before)
+				? Add->ReferTo_StateNext(idx)
+				: Add->ReferTo_State    (idx) ;};
+			for(size_t i = 0; i < type.state_variables.contents.size(); i++){
+				// NB: to avoid glue structs etc for WritableRequirement to work, string names are used
+				ret += tab +"float Lems_state_"+type.state_variables.getName(i)
+					+" = ("+doit(subsig.statevars_to_states.at(i).index) +");\n";
+			}
+			return ret;
 		}
-		*/
+		
 		// Assume inputs have already been defined, this is what the component assigns itself (derived etc.)
+		// NB: Assume that statevars have been exposed, due to Fun they may be either stateNow(for readonly) OR stateNext(for updating outside Assigned)
 		static std::string Assigned(const ComponentType &type, const DimensionSet &dimensions, const CellInternalSignature::ComponentSubSignature &subsig, const ISignatureAppender *Add, const std::string &for_what, const std::string &line_prefix, Int &random_call_counter, bool debug = false){
 			const auto &tab = line_prefix; // for a more convenient name
 			char tmps[2000];
@@ -2601,7 +2614,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				{"rateScale "			, &ComponentType::CommonRequirements::gate_rate_scale },
 				{"Vpeer"				, &ComponentType::CommonRequirements::peer_voltage },
 				{"block_factor"			, &ComponentType::CommonRequirements::block_factor },
-				{"plasticity_factor"	, &ComponentType::CommonRequirements::plasticity_factor },
 				{"plasticity_factor"	, &ComponentType::CommonRequirements::plasticity_factor },
 				{"external_current"		, &ComponentType::CommonRequirements::external_current },
 			};
@@ -2644,7 +2656,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				ret += tab+tmps+"\n";
 			}
 			
-			
 			// TODO clarify better by keeping the actual names
 			ret += tab+"// aeternal constants "+for_what+"\n";
 			for(int i = 0; i < (int)type.constants.contents.size(); i++){
@@ -2657,14 +2668,18 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				sprintf(tmps, "float Lems_varreq_%d = GetSingleF32(global_state_table_f32_arrays, %s);", i, Add->ReferTo_Cinst(subsig.varreqs_to_constints.at(i).index).c_str() );
 				ret += tab+tmps+"\n";
 			}
+			// WritableRequirements like Lems_state but actually pointers, let the compile sort out all the aliasing taking place
+			for(int i = 0; i < (int)type.writable_requirements.contents.size(); i++){
+				// NB: to avoid glue structs etc for WritableRequirement to work, string names are used
+				// NB: this may get to be more complicated onward...
+				const char *sParelmName = type.writable_requirements.getName(i); // NB: needs strings to be loaded, capture by name is resolved here ! TODO resolve it at matching stage, i guess as part of the children compinst
+				assert(i >= 0);
+				sprintf(tmps, "float *Lems_wrireq_%s = &Lems_state_%s;", sParelmName, sParelmName );
+				ret += tab+tmps+"\n";
+			}
 			ret += tab+"// fixed properties "+for_what+"\n";
 			for(size_t i = 0; i < type.properties.contents.size(); i++){
 				sprintf(tmps, "float Lems_property_%zd = %s;", i, Add->ReferTo_Const(subsig.properties_to_constants.at(i).index).c_str() );
-				ret += tab+tmps+"\n";
-			}
-			ret += tab+"// state variables "+for_what+"\n";
-			for(size_t i = 0; i < type.state_variables.contents.size(); i++){
-				sprintf(tmps, "float Lems_state_%zd = %s;", i, Add->ReferTo_State(subsig.statevars_to_states.at(i).index).c_str() );
 				ret += tab+tmps+"\n";
 			}
 			
@@ -2677,31 +2692,31 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			ret += tab+"// common read-only namespace? "+for_what+"\n";
 			// TODO eliminate, for less confusion to readers and compilers
 			for(size_t i = 0; i < type.name_space.contents.size(); i++){
-				// TODO this should be mutable only for state and derived variables!
-				sprintf(tmps, "float *Lems_assigned_%zd = &Lems_", i); 
-				ret += tab+tmps;
-				auto namet = type.name_space.get(i).type;
-				if(namet == ComponentType::NamespaceThing::CONSTANT){
-					ret += "constant";
-				}
-				else if(namet == ComponentType::NamespaceThing::PROPERTY){
-					ret += "property";
-				}
-				else if(namet == ComponentType::NamespaceThing::REQUIREMENT){
-					ret += "requirement";
-				}
-				else if(namet == ComponentType::NamespaceThing::VARREQ){
-					ret += "varreq";
-				}
-				else if(namet == ComponentType::NamespaceThing::STATE){
-					ret += "state";
-				}
-				else if(namet == ComponentType::NamespaceThing::DERIVED){
-					ret += "derived";
-				}
+				// NB: this should be mutable only for state and derived and wrireq variables!
 				
-				sprintf(tmps, "_%ld;\n", type.name_space.get(i).seq);
-				ret += tmps;
+				auto namet = type.name_space.get(i).type;
+				typedef ComponentType::NamespaceThing::Type Type;
+				auto GetTypeNameCode = [](Type & typ){
+					switch(typ){
+						case Type::CONSTANT    : return "constant"   ;
+						case Type::PROPERTY    : return "property"   ;
+						case Type::REQUIREMENT : return "requirement";
+						case Type::VARREQ      : return "varreq"     ;
+						case Type::WRIREQ      : return "wrireq"     ;
+						case Type::STATE       : return "state"      ;
+						case Type::DERIVED     : return "derived"    ;
+						default                : return "";
+					}
+				};
+				const char *typenam = GetTypeNameCode(namet);
+				
+				if(namet == Type::WRIREQ){
+					sprintf(tmps, "float *Lems_assigned_%zd =  Lems_%s_%s;\n" , i, typenam, type.name_space.getName(i)); }// change to per container LATER if need be
+				else if(namet == Type::STATE ){
+					sprintf(tmps, "float *Lems_assigned_%zd =  &Lems_%s_%s;\n" , i, typenam, type.name_space.getName(i)); }
+				else sprintf(tmps, "float *Lems_assigned_%zd = &Lems_%s_%ld;\n", i, typenam, (long)type.name_space.get(i).seq);
+				
+				ret +=  tab+tmps;
 			}
 			
 			ret += tab+"// compute derived "+for_what+"\n";
@@ -2800,10 +2815,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// XXX A sequence of AssignState commands may have state variables assigned with values of other, previously assigned state variables (possibly even modifying derived variables !!!)
 			// So subsequent AssignState commands should keep track of which state variables were modified, and use the updated values.
 			// On the other hand, no other NeuroML implementation seems to correct derived variables for the updated value, so there's that.
-			std::vector< std::vector<int> > statevar_to_assigned( type.state_variables.contents.size() );
+			// std::vector< std::vector<int> > statevar_to_assigned( type.state_variables.contents.size() );
 			for(int i = 0; i < (int)type.name_space.contents.size(); i++){
 				auto namet = type.name_space.get(i).type;
-				auto ref_seq = type.name_space.get(i).seq;
+				// auto ref_seq = type.name_space.get(i).seq;
 				if(namet == ComponentType::NamespaceThing::CONSTANT){
 					// skip
 				}
@@ -2817,7 +2832,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					// skip
 				}
 				else if(namet == ComponentType::NamespaceThing::STATE){
-					statevar_to_assigned[ref_seq].push_back(i);
+					// statevar_to_assigned[ref_seq].push_back(i);
 				}
 				else if(namet == ComponentType::NamespaceThing::DERIVED){
 					// XXX fix me !
@@ -2826,18 +2841,29 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 			
 			auto Emit_AssignState = [&](const ComponentType::StateAssignment &assign){
-				auto state_seq = assign.state_seq;
-				auto Index = subsig.statevars_to_states.at(state_seq).index;
-				
-				sprintf(tmps, "		%s = ", Add->ReferTo_StateNext(Index).c_str() );
-				auto expression_string = ExpressionInfix(assign.value, type, dimensions, random_call_counter);
-				ret += tab+tmps+expression_string+";\n";
-				for( auto assigned_seq : statevar_to_assigned[state_seq] ){
-					sprintf(tmps, "		Lems_assigned_%d = &(%s) ", assigned_seq, Add->ReferTo_StateNext(Index).c_str() );
-					ret += tab+tmps+ ";\n";
+				if( assign.state_seq >= 0 ){
+					auto state_seq = assign.state_seq;
+					const char *varname = type.state_variables.getName(state_seq);
+					auto Index = subsig.statevars_to_states.at(state_seq).index;
+					sprintf(tmps, "		Lems_state_%s = ", varname );
+					auto expression_string = ExpressionInfix(assign.value, type, dimensions, random_call_counter);
+					ret += tab+tmps+expression_string+";\n";
+					 // NB: writing to stateNext is a devious trick to override the integrator's action
+					sprintf(tmps, "		%s = Lems_state_%s;\n", Add->ReferTo_StateNext(Index).c_str(), varname );
+					ret += tab+tmps;
+					// XXX more things, derived from the changed state, should be updated !
+					// for( auto assigned_seq : statevar_to_assigned[state_seq] ){
+						// sprintf(tmps, "		Lems_assigned_%d = &(%s) ", assigned_seq, Add->ReferTo_StateNext(Index).c_str() );
+						// ret += tab+tmps+ ";\n";
+					// }
 				}
+				else if( assign.wrireq_seq >= 0 ){
+					sprintf(tmps, "\t\t *Lems_wrireq_%s = ",  type.writable_requirements.getName(assign.wrireq_seq) );
+					auto expression_string = ExpressionInfix(assign.value, type, dimensions, random_call_counter);
+					ret += tab+tmps+expression_string+";\n";
+				}
+				// XXX update the rest of the derived variables on both levels someday ... how to do this though? maybe having an "assigned stack" is a better approach?
 			};
-			
 			auto Emit_EventOut = [&](const ComponentType::EventOut &evout){				
 				sprintf(tmps, "		Lems_evout_%ld = 1", evout.port_seq );
 				ret += tab+tmps+";\n";
@@ -2855,14 +2881,29 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			ret += tab+"	// dynamics"+"\n";
 			ret += tab+"	// (highest up is lowest priority)"+"\n";
 			
+			// Before WritableRequirement, the logic was simple and compatible with VariableRequirement:
+			// stateNext = integrate(stateNow)
+			// if condition(stateNow): disregard regular integration, overwrite stateNext with f(stateNow)
+			// So here's the thing: 
+			// If back-to-back updates also apply to the integration as well, then:
+			//   1. the integrands will interfere with each other.
+			//   2. if integrating after conditional resetting, then the reset will not be exact
+			//   3. if integrating before condiiotnal changes, 
+			// deliberately preserve this behavior
+			// Now that state variables are possibly allowed to be updated from stateNow due to attachments,
+			// we need to maintain temp storage for the vars to be integrated, independently of each other!
+			// smuggle the "pre integrated" (ie now + possible updated from attachments!) "integrated" value somewher -> "state" vars
+			// and yes, WritableRequirement is still not compatible with VariableRequirement atm. And it will be a bit tricky to override if we want to...
+			
+			// Do not use updated values for Fwd euler, it may be better numerically but it's even better to mimic jLEMS.
 			ret += tab+"	// time derivatives"+"\n";
 			for(size_t seq = 0; seq < type.state_variables.contents.size(); seq++){
+				const char *varname =  type.state_variables.getName(seq);
 				const auto &state_variable = type.state_variables.get(seq);
 				auto Index = subsig.statevars_to_states.at(seq).index;
-				
 				if( state_variable.dynamics == ComponentType::StateVariable::DYNAMICS_NONE ){
-					// keep it unchanged - TODO put this as default to handle all the funny updates that may take place!
-					sprintf(tmps, "	%s = %s;", Add->ReferTo_StateNext(Index).c_str(), Add->ReferTo_State(Index).c_str() );
+					// NB: this is a devious trick to let the integrated value be overwritten. AND not interfere with the values of the other variables being integrated in parallel!
+					sprintf(tmps, "	%s = Lems_state_%s;", Add->ReferTo_StateNext(Index).c_str(), varname);
 					ret += tab+tmps+"\n";
 				}
 				else if( state_variable.dynamics == ComponentType::StateVariable::DYNAMICS_CONTINUOUS ){
@@ -2876,8 +2917,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					sprintf(tmps, "	float Lems_derivative_%zd = ", seq );
 					ret += tab + tmps + expression_string + ";\n";
 					
-					
-					sprintf(tmps, "	%s = %s + dt * Lems_derivative_%zd%s;", Add->ReferTo_StateNext(Index).c_str(), Add->ReferTo_State(Index).c_str(), seq, Convert::Suffix(conversion_factor).c_str() );
+					sprintf(tmps, "	%s = Lems_state_%s + dt * Lems_derivative_%zd%s;", Add->ReferTo_StateNext(Index).c_str(), varname, seq, Convert::Suffix(conversion_factor).c_str() );
 					ret += tab+tmps+"\n";
 				}
 				else{
@@ -2990,9 +3030,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			
 			component = DescribeLems::AllocateSignature(model.dimensions, comptype, compinst, &AppendSingle, for_what + " LEMS");
 			
-			
 			code += tab+"// LEMS component\n";
-			std::string lemscode = DescribeLems::Assigned(comptype, model.dimensions, component, &AppendSingle, for_what, tab, random_call_counter, debug );
+			std::string lemscode =
+				  DescribeLems::ExposeStatevars (comptype, component, &AppendSingle, tab)
+				+ DescribeLems::Assigned(comptype, model.dimensions, component, &AppendSingle, for_what, tab, random_call_counter, debug );
 			code += lemscode;
 			
 			// also add integration code here, to finish with component code (and get event outputs !)
@@ -3055,7 +3096,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			code += tab+requirement_code;
 			
 			code += tab+"// LEMS component\n";
-			std::string lemscode = DescribeLems::Assigned(comptype, model.dimensions, compsubsig, &AppendMulti, for_what, tab, random_call_counter, debug );
+			std::string lemscode =
+				  DescribeLems::ExposeStatevars (comptype, compsubsig, &AppendMulti, tab)
+				+ DescribeLems::Assigned(comptype, model.dimensions, compsubsig, &AppendMulti, for_what, tab, random_call_counter, debug );
 			code += lemscode;
 			
 			code += tab+"// integrate inline\n";
@@ -4813,7 +4856,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					const auto &comptype = model.component_types.get(conc_model.component.id_seq);
 					
 					distimpl.component = DescribeLems::AllocateSignature(dimensions, comptype, conc_model.component, &AppendSingle, for_what + " LEMS");
-					std::string lemscode = DescribeLems::Assigned(comptype, dimensions, distimpl.component, &AppendSingle, for_what, tab, random_call_counter);
+					std::string lemscode =
+						  DescribeLems::ExposeStatevars (comptype, distimpl.component, &AppendSingle, tab)
+						+ DescribeLems::Assigned(comptype, dimensions, distimpl.component, &AppendSingle, for_what, tab, random_call_counter);
 					ionpool_code += lemscode;
 					
 					// update later on
@@ -5906,7 +5951,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					ionpool_code +=  tab+"// LEMS component\n";
 					const auto &comptype = model.component_types.get(conc_model.component.id_seq);
 					
-					std::string lemscode = DescribeLems::Assigned(comptype, model.dimensions, distimpl.component, &AppendSingle, for_what, tab, random_call_counter, config.debug);
+					std::string lemscode =
+						  DescribeLems::ExposeStatevars (comptype, distimpl.component, &AppendSingle, tab)
+						+ DescribeLems::Assigned(comptype, model.dimensions, distimpl.component, &AppendSingle, for_what, tab, random_call_counter, config.debug);
 					ionpool_code += lemscode;
 					
 					// numerical integration code here
@@ -6582,9 +6629,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						aig.Index_Statevar_Voltage = aig.component.statevars_to_states[ voltage_thing.seq ].index;
 					}
 					else{
-						// printf("artificial cell noes not expose voltage as state variable\n");
+						// printf("artificial cell does not expose voltage as state variable\n");
 						// return false; // perhaps reconsider LATER
 					}
+					// in NeuroML.cpp, it should have been checked if the target of the electrical synapse is a statevar!! otherwise they can't work!
+					// LATER make a footprint for them anyway !
 				}
 			};
 			auto MaybeDetermineComponentVoltage = [ &MaybeDetermineComponentVoltage_Lems ](
@@ -6765,10 +6814,21 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// 	- after the LEMS vars it depends on 
 				// 	- , and *before* the LEMS vars that depend on it
 				// 	good luck with that
-				// for now, just expose voltage which is sure (?) to be available
-				// TODO something more elegant
+				// for now, just expose voltage which is sure (?) to be available?
+				// TODO something more elegant, also check how LEMS handles this
 				MaybeDetermineComponentVoltage(cell, aig);
 				
+				// expose statevars for ALL of the scope, this also makes sense
+				if( cell.component.ok() ){
+					const auto &compinst = cell.component;
+					const auto &comptype = model.component_types.get(compinst.id_seq);
+					auto &subsig = aig.component;
+					// we can't expose the derived namespace because it may depend on Isyn ... but we can expose the statevars at least.
+					ccde += DescribeLems::ExposeStatevars (comptype, subsig, &AppendSingle, tab);
+				} // else hardcoded exposures LATER
+				
+				ccde += "	float external_current = 0;";
+				ccde += "	{"; // open attachment exposure scope
 				if( aig.Index_Statevar_Voltage >= 0 ){
 					sprintf(tmps, "	const float Vcomp = local_state[%zd]; \n", (size_t)aig.Index_Statevar_Voltage); ccde += tmps;
 				}
@@ -6795,20 +6855,20 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					}
 				}
 				
-				ccde += "	float external_current = I_synapses_total + I_input_total;\n";
+				ccde += "	external_current = I_synapses_total + I_input_total;\n";
 				// unfortunately G_input_total can't be used to improve the integrator since arbitrary I dynamics are at play. (Unless the LEMS component exposes the interation of I into V rule to be accessible somehow...)
-				
+				ccde += "	}"; // close attachment exposure scope
 				// internal dynamics
 				
 				// no other native, only LEMSified implementations for now
 				if( cell.component.ok() ){
 					const auto &compinst = cell.component;
 					const auto &comptype = model.component_types.get(compinst.id_seq);
-					
 					auto &component = aig.component;
 					
 					ccde += tab+"// LEMS assigned\n";
-					std::string lemscode = DescribeLems::Assigned(comptype, model.dimensions, component, &AppendSingle, for_what, tab, cell_wig.random_call_counter, config.debug && 0 );
+					std::string lemscode =
+						DescribeLems::Assigned(comptype, model.dimensions, component, &AppendSingle, for_what, tab, cell_wig.random_call_counter, config.debug && 0 );
 					ccde += lemscode;
 					
 					// also add integration code here, to finish with component code (and get event outputs !)
