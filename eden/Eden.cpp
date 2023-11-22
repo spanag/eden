@@ -2774,7 +2774,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					}
 				}
 				else if(dervar.type == ComponentType::DerivedVariable::Type::SELECT){
-					// HERE !! also gather them in the child aggregation stage i guess
 					ret += tab +"Lems_derived_"+std::to_string(seq)+" = Lems_select_"+dervar_name+";\n";
 				}
 				else{
@@ -3357,7 +3356,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					if(dervar.type != ComponentType::DerivedVariable::Type::SELECT) continue;
 					const char *exponame = dervar.select_synapse_exposure.c_str();
 					if(!comptype.exposures.has(exponame)) continue;
-					ret += tab+"Lems_select_"+dervar_name+" += weight * Lems_exposure_proper_"+exponame+";\n"; // HERE handle weight!
+					ret += tab+"Lems_select_"+dervar_name+" += weight * Lems_exposure_proper_"+exponame+";\n"; // XXX resolve the confusion between weight Property and hardcoded weight!
 				}
 			}
 			return ret;
@@ -10524,11 +10523,12 @@ int main(int argc, char **argv){
 	
 	struct LineReader_File{
 		Int lines_read_so_far;
+		bool debug_netcode;
 		
 		std::string filename; // just for logging for now TODO
 		FILE *open_file;
 		
-		LineReader_File(const std::string &_fn, FILE *_f): filename(_fn), open_file(_f){
+		LineReader_File(const std::string &_fn, FILE *_f, bool _dd): debug_netcode(_dd), filename(_fn), open_file(_f){
 			lines_read_so_far = 0;
 		}
 		
@@ -10538,7 +10538,7 @@ int main(int argc, char **argv){
 			while(1){
 				if(!fgets(buf, BUFSIZ, open_file)) break;
 				line += buf;
-				// printf("recv line chunk so far: '%s'\n", line.c_str());fflush(stdout);
+				if(debug_netcode){ printf("recv line chunk so far: '%s'\n", line.c_str());fflush(stdout); }
 				assert(!line.empty());
 				// if line ends with (CR)LF, strip and deliver the whole line
 				if(*line.rbegin() == '\n'){
@@ -10572,17 +10572,18 @@ int main(int argc, char **argv){
 	};
 	struct LineWriter_File{
 		Int lines_written_so_far;
+		bool debug_netcode;
 		
 		std::string filename; // just for logging for now TODO
 		FILE *open_file;
 		
-		LineWriter_File(const std::string &_fn, FILE *_f): filename(_fn), open_file(_f){
+		LineWriter_File(const std::string &_fn, FILE *_f, bool _dd): debug_netcode(_dd), filename(_fn), open_file(_f){
 			lines_written_so_far = 0;
 		}
 		
 		bool PutFrameLines(const std::vector<std::string> &lines){
 			for(const auto &line : lines){
-				// printf("send frame %s\n", line.c_str());fflush(stdout);
+				if(debug_netcode){ printf("send frame %s\n", line.c_str());fflush(stdout); }
 				if(fputs(line.c_str(), open_file) < 0) return false; // TODO enqueue instead and also handle EAGAIN when using OS IO ...
 				if(fputc('\n', open_file) < 0) return false; // also the newline, nicer ways to append ... LATER
 			}
@@ -10610,7 +10611,7 @@ int main(int argc, char **argv){
 		
 		double timestamp;
 		
-		RawTables::Table_F32 values;
+		RawTables::Table_F32 values; // TODO use a neutral std::vector
 		
 		TimeseriesFrame(){ timestamp = NEVER_BEFORE(); }
 	};
@@ -10624,12 +10625,14 @@ int main(int argc, char **argv){
 		
 		EventsetFrame(){ timestamp = NEVER_BEFORE(); }
 	};
+	const ScaleEntry seconds = {"sec",  0, 1.0};
+	const double EPS_TIMESTAMP = seconds.ConvertTo(1e-9, Scales<Time>::native); // if sim duration exceeds 100 days or dt reaches 1 nsec, contact the author for a better fix
 	struct TimeseriesReader_File : public LineReader_File{
 		const EngineConfig::TrajectoryReader &reader;
 		
 		TimeseriesFrame next_frame; // must be peeked to ensure that data up to that point are most recent
 		
-		TimeseriesReader_File(const EngineConfig::TrajectoryReader &_r, const std::string &_fn, FILE *_f): LineReader_File(_fn, _f), reader(_r){
+		TimeseriesReader_File(const EngineConfig::TrajectoryReader &_r, const std::string &_fn, FILE *_f, bool debug_netcode = false): LineReader_File(_fn, _f, debug_netcode), reader(_r){
 			// all set
 		}
 		
@@ -10654,6 +10657,7 @@ int main(int argc, char **argv){
 				return false;
 			}
 			frame.timestamp = seconds.ConvertTo(frame.timestamp, Scales<Time>::native); // adjust units to native
+			// NB: could offset input timestamps by +epsilon offset, to permit exchange of frames on exactly each timestep. Instead, read_until is being offset against.
 			
 			frame.values.resize(value_tokens_to_read);
 			
@@ -10699,7 +10703,7 @@ int main(int argc, char **argv){
 		
 		EventsetFrame next_frame; // must be peeked to ensure that data up to that point are most recent
 		
-		EventsetReader_File(const EngineConfig::EventSetReader &_r, const std::string &_fn, FILE *_f): LineReader_File(_fn, _f), reader(_r){
+		EventsetReader_File(const EngineConfig::EventSetReader &_r, const std::string &_fn, FILE *_f, bool debug_netcode = false): LineReader_File(_fn, _f, debug_netcode), reader(_r){
 			// all set
 		}
 		
@@ -10724,6 +10728,7 @@ int main(int argc, char **argv){
 				return false;
 			}
 			frame.timestamp = seconds.ConvertTo(frame.timestamp, Scales<Time>::native); // adjust units to native
+			// NB: could offset input timestamps by +epsilon offset, to permit exchange of frames on exactly each timestep. Instead, read_until is being offset against.
 			
 			Int value_tokens_to_read = provided_tokens - expected_tokens;
 			frame.instances     .resize(value_tokens_to_read);
@@ -10794,7 +10799,7 @@ int main(int argc, char **argv){
 		int next_sample; // for walking through explicit pooints
 		
 		TimeseriesWriter(const EngineConfig::TrajectoryLogger &_w, const FixedWidthNumberPrinter &_fm,
-			const std::string &_fn, FILE *_f): LineWriter_File(_fn, _f), logger(_w), column_fmt(_fm){
+			const std::string &_fn, FILE *_f, bool debug_netcode = false): LineWriter_File(_fn, _f, debug_netcode), logger(_w), column_fmt(_fm){
 			if(!logger.sampling_points.empty()) next_sample = 0; // first sample
 			else next_sample = -1; //unused
 		}
@@ -10836,7 +10841,7 @@ int main(int argc, char **argv){
 		EventsetFrame last_frame; // must be peeked to enforce minimum interval constraints
 		
 		EventWriter(const EngineConfig::EventLogger &_w, const FixedWidthNumberPrinter &_fm,
-			const std::string &_fn, FILE *_f): LineWriter_File(_fn, _f), logger(_w), column_fmt(_fm){
+			const std::string &_fn, FILE *_f, bool debug_netcode = false): LineWriter_File(_fn, _f, debug_netcode), logger(_w), column_fmt(_fm){
 			// all set
 		}
 		
@@ -10934,7 +10939,7 @@ int main(int argc, char **argv){
 		printf("Opened file %s\n", filename.c_str());fflush(stdout);
 		return true;
 	};
-	// TODO consider opening some streams in GenerateModel, so they will be wrapped by and object (and dted) some day
+	// TODO consider opening some streams in GenerateModel, so they will be wrapped by an object (and dted) some day
 	for(int i = 0; i < (int) engine_config.trajectory_loggers.size(); i++){
 		const auto &logger = engine_config.trajectory_loggers[i];
 		#ifdef USE_MPI
@@ -10944,8 +10949,8 @@ int main(int argc, char **argv){
 		// TODO check format, when there is more than one
 		
 		FILE *fout = NULL;
-		if(!GetDataStream("trajectory log", logger.url, true, false, fout)) return false;
-		trajectory_output_streams.push_back({logger, column_fmt, logger.url, fout}); // XXX where to store filename or whatever?
+		if(!GetDataStream("trajectory log", logger.url, true, false, fout)) return(2);
+		trajectory_output_streams.push_back({logger, column_fmt, logger.url, fout, config.debug_netcode}); // XXX where to store filename or whatever?
 	}
 	for(const auto &logger : engine_config.event_loggers){
 		#ifdef USE_MPI
@@ -10956,8 +10961,8 @@ int main(int argc, char **argv){
 		// (it's already detected at generate time, and converted to enum for event writers atm)
 		
 		FILE *fout = NULL;
-		if(!GetDataStream("event log", logger.url, true, true, fout)) return false;
-		event_output_streams.push_back({logger, column_fmt, logger.url, fout}); // XXX where to store filename or whatever?
+		if(!GetDataStream("event log", logger.url, true, true, fout)) return(2);
+		event_output_streams.push_back({logger, column_fmt, logger.url, fout, config.debug_netcode}); // XXX where to store filename or whatever?
 	}
 	printf("Opening data readers...\n"); fflush(stdout);
 	for(const auto &reader : engine_config.timeseries_readers){
@@ -10993,7 +10998,7 @@ int main(int argc, char **argv){
 			printf("Could not open time series input \"%s\" : %s\n", filename.c_str(), strerror(errcode) );
 			exit(1);
 		}
-		timeseries_readers.push_back({reader, filename, fin});
+		timeseries_readers.push_back({reader, filename, fin, config.debug_netcode});
 	}
 	printf("Opening event readers...\n"); fflush(stdout);
 	// TODO deduplicate...
@@ -11023,14 +11028,14 @@ int main(int argc, char **argv){
 			printf("unknown URI scheme %s (suffix %s) for event set reader \"%s\"\n", scheme.c_str(), auth_path.c_str(), url.c_str() );
 			exit(1);
 		}
-		
+		printf("Opening event reader %s ...\n", filename.c_str()); fflush(stdout);
 		FILE *fin = fopen( filename.c_str(), "rt"); // TODO what about pipes, should it be r+ ?
 		if(!fin){
 			auto errcode = errno;// NB: keep errno right away before it's overwritten
 			printf("Could not open time series input \"%s\" : %s\n", filename.c_str(), strerror(errcode) );
 			exit(1);
 		}
-		eventset_readers.push_back({reader, filename, fin});
+		eventset_readers.push_back({reader, filename, fin, config.debug_netcode});
 	}
 	// TODO XXX move to nonblocking API for streams with feedback!
 	
@@ -11454,7 +11459,7 @@ int main(int argc, char **argv){
 		
 		// output what needs to be output
 		if( !initializing ){
-			// printf("step output %d\n", (int)step);fflush(stdout);
+			if(config.debug_netcode){printf("step output %d\n", (int)step);fflush(stdout);}
 			// XXX there is a possible dependency loop when a node needs to log remote  data ... !!! the only way to resolve this is for the owning node to send all the (local or read from file) data directly, making cosimulation + mpi problematic !! introduce explicit delays to readers or otherwise determine phases??
 			// for now interleave recv mpi -> (send recorder -> recv file soon to be made async).
 			// XXX test starting_from, up_to_excluding, interval
@@ -11539,14 +11544,14 @@ int main(int argc, char **argv){
 					}
 				}
 			}
-			// printf("done output %d\n", (int)step);fflush(stdout);
+			if(config.debug_netcode){printf("done output %d\n", (int)step);fflush(stdout);}
 			// NOTE: event writers that need to be in a tight (1*sync period) closed loop must be output _after_ the time in which they were emitted, so that the event readers can input them for the timestep right after. Another constraint is that at the latest timestamp emitted must match or exceed the timestep to be run, for the receiving
-		}
+		}// XXX show how to debug encoding / timing / other funny pipe issues.
 		
 		// input what needs to be input
 		if( !initializing ){
 			
-			// printf("input step %d\n", (int)step);fflush(stdout);
+			if(config.debug_netcode){printf("input step %d\n", (int)step);fflush(stdout);}
 			
 			// time series: these are tricky in that the timestamp of the data to be read must be equal to, or after, the timestep to be run now.
 			// If the file has ended, values for the last timestamp are held.
@@ -11603,7 +11608,7 @@ int main(int argc, char **argv){
 				// bool fetched_new_frame = false;
 				bool applied_frame = false;
 				// TODO keep current frame as well, i guess
-				double time_to_read_until = time;
+				double time_to_read_until = std::max(time-EPS_TIMESTAMP,0.);
 				while( (reader.next_frame.timestamp <= time_to_read_until) ){
 					if( (reader.next_frame.timestamp >= 0) && !reader.next_frame.values.empty() ){ // or check with "last processed frame" timestamp
 						ApplyFrame();
@@ -11692,7 +11697,7 @@ int main(int argc, char **argv){
 				// bool applied_frame = false;
 				// TODO keep current frame as well, i guess
 				
-				double time_to_read_until = time;
+				double time_to_read_until = std::max(time-EPS_TIMESTAMP,0.);
 				// printf("%f %f %f\n", time,dt,time_to_read_until);
 				// NB: handle all spikes before the timestep, but not exactly *on* the timestep; leave those to be activated on the next timestep (like those on time + epsilon), in line with how cells < actually for spikes...
 				while( (reader.next_frame.timestamp < time_to_read_until) ){
@@ -11705,7 +11710,7 @@ int main(int argc, char **argv){
 					// otherwise we need more...
 					// make more efficient LATER if needed, by skipping over based on timestamp or sth ... or rather not?
 					if(reader.IsActive()){
-						// printf("fetch events %d %d\n", (int)step, (int)i); fflush(stdout);
+						if(config.debug_netcode){ printf("fetch events %d %d %f %f %a %a\n", (int)step, (int)i, reader.next_frame.timestamp, time_to_read_until, reader.next_frame.timestamp, time_to_read_until); fflush(stdout); }
 						bool fetch_ok = reader.FetchFrame();
 						if(reader.IsBad()){
 							fprintf(stderr, "Error encountered for reader with url %s , exiting\n", evr.url.c_str());
@@ -11735,7 +11740,7 @@ int main(int argc, char **argv){
 				
 				// done refreshing reader
 			}
-			// printf("done input %d\n", (int)step); fflush(stdout);
+			if(config.debug_netcode){printf("done input %d\n", (int)step); fflush(stdout);}
 		}
 		
 		//prepare for parallel iteration

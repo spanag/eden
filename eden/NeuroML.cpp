@@ -3719,7 +3719,7 @@ bool ValidateComponentTypeInterface(
 		
 		auto exp_seq = comp.exposures.get_id(expname);
 		if( exp_seq < 0 ){
-			log.error(eEntityUsing, "component %s lacks required exposure %s", type, expname); // HERE relax this to a warning or sth, for multiflux synapses...
+			log.error(eEntityUsing, "component %s lacks required exposure %s", type, expname); // XXX relax this to a warning or sth, for multiflux synapses...
 			return false;
 		}
 		// const ComponentType::Exposure &cexp = comp.exposures.get(exp_seq);
@@ -4936,7 +4936,7 @@ struct ImportState{
 			Dimension syn_dim;
 			if(!comptype_syn.GetExposureAndDimension(comptype_syn.exposures.get_id(exponame), syn_dim)){
 				if(comptype_syn.name_space.has(exponame)){
-					log.error( eConn, "cell type %s dervar %s requires attribute %s from attachment %s, which contains it but does not expose it; please provide an exposure with name %s or change the name of that attribute, to prevent ambiguity", bound_cell_name, dervar_name, exponame, syncomp_name, exponame );
+					log.error( eConn, "cell type %s derived variable %s requires attribute %s from attachment %s, which contains it but does not expose it; please provide an exposure with name %s or change the name of that attribute, to prevent ambiguity", bound_cell_name, dervar_name, exponame, syncomp_name, exponame );
 					return false;
 				} // are there more places where the exponame could hide?
 				continue; // LATER decide whether to whine if exposure is absent on syncomp
@@ -4947,7 +4947,7 @@ struct ImportState{
 			}
 			// let it pass!
 			attachments_accepted++;
-		}//HERE
+		}
 		return true;
 	}
 	// TODO cache type compatibility checks with a hash table
@@ -8100,6 +8100,10 @@ struct ImportState{
 					if(*eOutFile.attribute(sSamplInterval).value()){
 						if( !MustNotUseExplicitPoints(log, eOutFile, sSamplInterval) ) return false;
 						if( !ParseQuantity<Time>(log, eOutFile, sSamplInterval, daw.sampling_interval) ) return false;
+						if(daw.sampling_interval < 0){
+							log.error(eSim, "%s can't be negative", sSamplInterval);
+							return false;
+						}
 						// TODO check if an integral mEdenOutputFileltiple of dt, otherwise warn and round/ceil...
 						
 					}
@@ -8210,6 +8214,10 @@ struct ImportState{
 					const char *sMaxInterval = "maximum_interval";
 					if(*eOutFile.attribute(sMaxInterval).value()){
 						if( !ParseQuantity<Time>(log, eOutFile, sMaxInterval, evw.maximum_interval) ) return false;
+						if(evw.maximum_interval < 0){
+							log.error(eSim, "%s can't be negative", sMaxInterval);
+							return false;
+						}
 						// TODO check if an integral multiple of dt, otherwise warn and round/ceil...
 						
 					}
@@ -8991,7 +8999,6 @@ struct ImportState{
 						if( !ParseDerivedValue( log, eDerived, "value", new_dervar.value ) ) return false;
 					}
 					else if( *select ){
-						// HERE also check if select and exposures of syn's match!
 						new_dervar.type = ComponentType::DerivedVariable::Type::SELECT;
 						const char *must_start_with = "synapses[*]/";
 						if(!(strstr(select,must_start_with) == select)){
