@@ -1,4 +1,5 @@
 Latest
+- Add support for alternative fluxes to artificial cells, via <DerivedVariable select="synapses[*]/<id>" reduce="add" />
 - Add support for <EventOutputFile> raster output
 - Add experimental extension to NeuroML: 'EdenEventOutputFile' and 'EdenEventOutputFile' which are enhanced versions of adding more options: active interval and sampling period (or explicit sampling points), URL and data format
 - Add experimental extension to NeuroML: 'EventSetReader' for streaming spike series data from external sources, into the simulation. Access to these spike series is through another NeuroML extension, so that they can be eligible spike sources along with cell populations.

@@ -61,6 +61,14 @@ tests = [
 	]
 },
 {
+	'sim_file': 'neuroml/' + 'EdenTest_Extension_Multiflux.nml',
+	'type': 'half_vs_half',
+	'validation_criteria': [
+		["pop0[0]/v", "popX[0]/v", "exact"],
+		["pop0[1]/v", "popX[0]/vb", "exact"],
+	],
+},
+{
 	'sim_file': 'neuroml/' + 'EdenTest_Extension_WritableRequirement.nml',
 	'type': 'half_vs_half',
 	'validation_criteria': [

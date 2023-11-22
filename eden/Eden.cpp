@@ -2576,9 +2576,21 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// static void ApplySubsigToInstance(const ComponentType &type, const CellInternalSignature::ComponentSubSignature &subsig, const ISignatureAppender *Add){
 		// 	// mutates parametrization of components?; singletons and multitudes are separately synapses and inputs, other parms are semi-standard
 		// }
+		static std::string ExposeSelectsum(const ComponentType &type, const CellInternalSignature::ComponentSubSignature &subsig, const ISignatureAppender *Add, const std::string &tab){
+			std::string ret = tab+"// select sums\n";
+			const auto &dervars = type.derived_variables;
+			for(int i = 0; i < (int)dervars.size(); i++){
+				const char *dervar_name = dervars.getName(i);
+				const auto &dervar = dervars.get(i);
+				if(dervar.type != ComponentType::DerivedVariable::Type::SELECT) continue;
+				// NB: to avoid glue structs etc for WritableRequirement to work, string names are used
+				ret += tab +"float Lems_select_"+dervar_name+" = 0;\n";
+			}
+			return ret;
+		}
 		static std::string ExposeStatevars(const ComponentType &type, const CellInternalSignature::ComponentSubSignature &subsig, const ISignatureAppender *Add, const std::string &tab){//, bool after_not_before){
 			bool after_not_before = false;
-			std::string ret = tab+"// state variables \n";
+			std::string ret = tab+"// state variables\n";
 			// Lambda is syntax sugar over class with operator(), so each lambda is in fact its own unique type, even if they are identical.
 			// https://stackoverflow.com/questions/76066090/operands-to-have-different-types-with-matching-auto-functors#comment134151381_76066090
 			auto doit = [&] (size_t idx){ return (after_not_before)
@@ -2591,7 +2603,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 			return ret;
 		}
-		
 		// Assume inputs have already been defined, this is what the component assigns itself (derived etc.)
 		// NB: Assume that statevars have been exposed, due to Fun they may be either stateNow(for readonly) OR stateNext(for updating outside Assigned)
 		static std::string Assigned(const ComponentType &type, const DimensionSet &dimensions, const CellInternalSignature::ComponentSubSignature &subsig, const ISignatureAppender *Add, const std::string &for_what, const std::string &line_prefix, Int &random_call_counter, bool debug = false){
@@ -2718,12 +2729,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 				ret +=  tab+tmps;
 			}
-			
 			ret += tab+"// compute derived "+for_what+"\n";
 			for(size_t i = 0; i < type.derived_variables_topological_order.size(); i++){
 				Int seq = type.derived_variables_topological_order[i];
 				const auto &dervar = type.derived_variables.get(seq);
-				
+				const char *dervar_name = type.derived_variables.getName(seq);
 				if(dervar.type == ComponentType::DerivedVariable::VALUE){
 					sprintf(tmps, "Lems_derived_%ld = ", seq);
 					assert( dervar.cases.size() == 0 );
@@ -2761,6 +2771,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						ret += tab + "}\n";
 					}
 				}
+				else if(dervar.type == ComponentType::DerivedVariable::Type::SELECT){
+					// HERE !! also gather them in the child aggregation stage i guess
+					ret += tab +"Lems_derived_"+std::to_string(seq)+" = Lems_select_"+dervar_name+";\n";
+				}
 				else{
 					sprintf(tmps, "internal error: assigned derived variable %ld type %d\n", seq, dervar.type);
 					return tmps; // why not
@@ -2769,7 +2783,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// 	sprintf(tmps, "printf(\"derived %zd = %%.17g \\n\", Lems_derived_%zd);\n", seq, seq); ret += tab+tmps;
 				// }
 			}
-			
 			return ret;
 		}
 		// NOTE exposures should be added after dynamics, because spikes outputs are triggered on OnCondition atatements !
@@ -2781,7 +2794,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			ret += tab+"// exposures "+for_what+"\n";
 			
 			std::vector<std::string> exposure_lines;
-			// XXX sort the keys first, because hashtable is unordered; LATER if it occurs or matters I guess?
+			// NB: sort the keys first, because hashtable is unordered; LATER if it occurs or matters I guess?
 			for( auto keyval : ComponentType::CommonExposures::names ){
 				auto name = keyval.first;
 				auto ptr = keyval.second;
@@ -2789,6 +2802,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					exposure_lines.push_back( "float Lems_exposure_"+std::string(name)+" = " + GetExposureVar(type, type.common_exposures.*ptr)+";\n" );
 				}
 			}
+			for(int expo_seq = 0; expo_seq < (int)type.exposures.size(); expo_seq++){
+				const char *exponame = type.exposures.getName(expo_seq);
+				ret += tab+"float Lems_exposure_proper_"+exponame+" = "+GetExposureVar(type, expo_seq)+";\n";
+			} // TODO merge i guess...
 			std::sort(exposure_lines.begin(), exposure_lines.end());
 			for(auto line : exposure_lines) ret += tab+line;
 			
@@ -2800,6 +2817,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					eventout_lines.push_back( "char Lems_eventout_"+std::string(name)+" = Lems_evout_"+itos(type.common_event_outputs.*ptr)+";\n" );
 				}
 			}
+			// LATER arbitrary spikeout as well
 			std::sort(eventout_lines.begin(), eventout_lines.end());
 			for(auto line : eventout_lines) ret += tab+line;
 			
@@ -3091,7 +3109,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			{
 			const auto &bat = tab;
 			std::string tab = bat + "\t";
-			
 			code += tab+"// External Requirements\n";
 			code += tab+requirement_code;
 			
@@ -3100,17 +3117,14 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				  DescribeLems::ExposeStatevars (comptype, compsubsig, &AppendMulti, tab)
 				+ DescribeLems::Assigned(comptype, model.dimensions, compsubsig, &AppendMulti, for_what, tab, random_call_counter, debug );
 			code += lemscode;
-			
 			code += tab+"// integrate inline\n";
 			std::string lemsupdate = DescribeLems::Update(comptype, model.dimensions, compsubsig, &AppendMulti ,for_what, tab, random_call_counter, debug);
 			code += lemsupdate;
 			}
-			
 			code += tab+"// expose inline\n";
 			code += DescribeLems::Exposures( comptype, for_what, tab, debug );
 			code += tab+"// External Exposures\n";
 			code += tab+exposure_code;
-			
 			return code;
 		}
 		
@@ -3327,11 +3341,22 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// helpers for common cell parts (like synapses that may stick to any type of cell)
 		
 		// TODO use a crude approximation of Δi/Δv when conductance is missing!
-		auto ExposeCurrentMaybeConductanceFromLems = [ ](const auto &comptype, const char *exponame_i, const char *exponame_g, const auto &tab){
+		auto ExposeCurrentMaybeConductanceFromLems = [ ](const auto &comptype, const auto *comptype_parent_maybe, const char *exponame_i, const char *exponame_g, const auto &tab){
 			std::string ret;
 			ret += tab+exponame_i+" = Lems_exposure_i;\n";
 			if( comptype.common_exposures.conductance >= 0 ){
 				ret += tab+exponame_g+" = Lems_exposure_g;\n";
+			}
+			if(comptype_parent_maybe){
+				const auto &dervars = comptype_parent_maybe->derived_variables;
+				for(int i = 0; i < (int)dervars.size(); i++){
+					const char *dervar_name = dervars.getName(i);
+					const auto &dervar = dervars.get(i);
+					if(dervar.type != ComponentType::DerivedVariable::Type::SELECT) continue;
+					const char *exponame = dervar.select_synapse_exposure.c_str();
+					if(!comptype.exposures.has(exponame)) continue;
+					ret += tab+"Lems_select_"+dervar_name+" += weight * Lems_exposure_proper_"+exponame+";\n"; // HERE handle weight!
+				}
 			}
 			return ret;
 		};
@@ -3342,7 +3367,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		](
 			const std::string &tab, const std::string &for_what,
 			const std::string &require_line, const std::string &expose_line,
-			Int id_id,
+			Int id_id, const ComponentType *comptype_parent_maybe,
 			CellInternalSignature::SynapticComponentImplementation &synimpl,
 			const SignatureAppender_Table &AppendMulti,
 			const InlineLems_AllocatorCoder &DescribeLemsInline,
@@ -3456,7 +3481,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// TODO eliminate redundant allocations for same component type
 				
 				code += "	{\n"; // special handling start
-				auto ExposeFromLems = [&](const auto &comptype){ return ExposeCurrentMaybeConductanceFromLems(comptype, "Exposure_i", "Exposure_g", tab+"\t"); };
+				auto ExposeFromLems = [&](const auto &comptype){ return ExposeCurrentMaybeConductanceFromLems(comptype, comptype_parent_maybe, "Exposure_i", "Exposure_g", tab+"\t"); };
 				// now what to do with the special type
 				if(syncomp.type == SynapticComponent::Type::BLOCKING_PLASTIC ){
 					std::string for_what = for_that + " Blocking/Plastic Synapse";
@@ -3534,7 +3559,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			Int &random_call_counter,
 			const std::string &for_what,
 			const std::string &tab,
-			Int id_id,
+			Int id_id, const ComponentType *comptype_parent_maybe,
 			auto &synapse_impls,
 			std::string &ccde
 		){
@@ -3557,7 +3582,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			size_t table_Weight = synimpl.Table_Weight  = AppendMulti.Constant(for_what+" Weight");
 
 			sprintf(tmps, "	const float     *Weight  = local_const_table_f32_arrays[%zd];\n", table_Weight); ccde += tmps;
-			
 			// allocate and expose tables for spike and Vpeer communication, as needed
 			if( needs_spike ){
 				
@@ -3604,7 +3628,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				printf("internal error: synapse type %ld should receive spikes or Vpeer, or have LEMS properties, or any other way to determine its physical existence\n", id_id);
 				return false;
 			}
-			
 			auto GetGenericRequirementCode = [ & ](){
 				std::string require_line;
 				
@@ -3612,6 +3635,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				if( uses_weight ){
 					require_line += "\n" + tab + "float weight = Weight[instance];\n";
 				}
+				else require_line += "\n" + tab + "float weight = 1;\n";
 				
 				
 				if( needs_spike ){
@@ -3671,9 +3695,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					require_line += "\n" + tab + "\tfflush(stdout);";
 					}
 					require_line += "\n" + tab + "\tVpeer = global_state_table_f32_arrays[table_id][entry_id];";
-					// require_line += "\n" + tab + "\tprintf(\"vpeo.\\n\");";
-					// require_line += "\n" + tab + "\tfflush(stdout);";
-					
 					require_line += "\n" + tab + "}";
 				}
 				
@@ -3697,7 +3718,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			ccde   += tab+"for(long long instance = 0; instance < Instances; instance++){\n";
 			
 			std::string syn_internal_code;
-			if( !DescribeGenericSynapseInternals( tab, for_what, require_line, expose_line, id_id, synimpl, AppendMulti, DescribeLemsInline, syn_internal_code ) ) return false;
+			if( !DescribeGenericSynapseInternals( tab, for_what, require_line, expose_line, id_id, comptype_parent_maybe, synimpl, AppendMulti, DescribeLemsInline, syn_internal_code ) ) return false;
 			ccde   += syn_internal_code;
 			
 			ccde   += tab+"}\n"; // for loop end
@@ -3718,7 +3739,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			Int &random_call_counter,
 			const std::string &for_what,
 			const std::string &tab,
-			Int id_id,
+			Int id_id, const ComponentType *comptype_parent_maybe,
 			auto &input_impls,
 			std::string &ccde
 		){
@@ -3875,7 +3896,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					std::string expose_line = "I_syn_aggregate += Exposure_i * weight; G_syn_aggregate += Exposure_g * weight;";
 					
 					std::string syn_internal_code;
-					if( !DescribeGenericSynapseInternals( tab, for_what, require_line, expose_line, GetSynapseIdId(input_source.synapse), inpimpl.synimpl, AppendMulti, DescribeLemsInline, syn_internal_code ) ) return false;
+					if( !DescribeGenericSynapseInternals( tab, for_what, require_line, expose_line, GetSynapseIdId(input_source.synapse), comptype_parent_maybe, inpimpl.synimpl, AppendMulti, DescribeLemsInline, syn_internal_code ) ) return false;
 					ccde   += syn_internal_code;
 					
 					ccde   += tab+"}\n"; // for loop end
@@ -3899,7 +3920,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					// XXX move these temp vars into the same closer scope where the exposure is done... or roll into ExposeCurrentMaybeConductanceFromLems
 					expose_line += tab+"	float Exposure_i = NAN;\n"; // the component *must* specify current
 					expose_line += tab+"	float Exposure_g = 0;\n"; // NOTE Exposing conductance is optional. If missing, assume 0 which reverts to Fwd Euler style handling 
-					expose_line += ExposeCurrentMaybeConductanceFromLems(comptype, "Exposure_i", "Exposure_g", tab);
+					expose_line += ExposeCurrentMaybeConductanceFromLems(comptype, comptype_parent_maybe, "Exposure_i", "Exposure_g", tab);
 					expose_line += "	I_input_total += Exposure_i * weight; G_input_total += Exposure_g * weight;\n";
 				
 					// TODO return bool for error handling
@@ -5904,7 +5925,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			sprintf(tmps, "	float G_synapses_total = 0;\n"); ccde += tmps; // FIXME
 			
 			for(Int id_id : comp_def.synaptic_component_types.toArray()){
-				if( !ImplementSynapseType( AppendSingle, AppendMulti, DescribeLemsInline, random_call_counter, for_what + " Synapse type "+std::to_string(id_id), tab, id_id, comp_impl.synapse, ccde ) ) return false;
+				if( !ImplementSynapseType( AppendSingle, AppendMulti, DescribeLemsInline, random_call_counter, for_what + " Synapse type "+std::to_string(id_id), tab, id_id, NULL, comp_impl.synapse, ccde ) ) return false;
 			}
 			
 			// add inputs
@@ -5915,7 +5936,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				
 			// generate tables and code for each input type
 			for(Int id_id : comp_def.input_types.toArray()){
-				if( !ImplementInputSource( AppendSingle, AppendMulti, DescribeLemsInline, random_call_counter, for_what + " Input type "+std::to_string(id_id), tab, id_id, comp_impl.input, ccde ) ) return false;
+				if( !ImplementInputSource( AppendSingle, AppendMulti, DescribeLemsInline, random_call_counter, for_what + " Input type "+std::to_string(id_id), tab, id_id, NULL, comp_impl.input, ccde ) ) return false;
 			}
 			
 			// all ion contributions have been considered; now integrate the ion dynamics
@@ -6819,12 +6840,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				MaybeDetermineComponentVoltage(cell, aig);
 				
 				// expose statevars for ALL of the scope, this also makes sense
-				if( cell.component.ok() ){
-					const auto &compinst = cell.component;
-					const auto &comptype = model.component_types.get(compinst.id_seq);
+				if( comptype_used ){
 					auto &subsig = aig.component;
 					// we can't expose the derived namespace because it may depend on Isyn ... but we can expose the statevars at least.
-					ccde += DescribeLems::ExposeStatevars (comptype, subsig, &AppendSingle, tab);
+					ccde += DescribeLems::ExposeStatevars (*comptype_used, subsig, &AppendSingle, tab);
+					ccde += DescribeLems::ExposeSelectsum (*comptype_used, subsig, &AppendSingle, tab);
 				} // else hardcoded exposures LATER
 				
 				ccde += "	float external_current = 0;";
@@ -6832,17 +6852,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				if( aig.Index_Statevar_Voltage >= 0 ){
 					sprintf(tmps, "	const float Vcomp = local_state[%zd]; \n", (size_t)aig.Index_Statevar_Voltage); ccde += tmps;
 				}
-				
 				// add synapses
 				ccde += "	// Current from synapses\n";
 				ccde += "	float I_synapses_total = 0;\n";
 				ccde += "	float G_synapses_total = 0;\n";
 				for( const auto &keyval : synaptic_component_types_per_cell_per_compartment[cell_seq] ){
 					for( const auto &id_id : keyval.second.toArray() ){
-						if( !ImplementSynapseType( AppendSingle, AppendMulti, DescribeLemsInline, cell_wig.random_call_counter, for_what + " Synapse type "+std::to_string(id_id), tab, id_id, aig.synapse, ccde ) ) return false;
+						if( !ImplementSynapseType( AppendSingle, AppendMulti, DescribeLemsInline, cell_wig.random_call_counter, for_what + " Synapse type "+std::to_string(id_id), tab, id_id, comptype_used, aig.synapse, ccde ) ) return false;
 					}
 				}
-				
 				// add inputs
 				ccde += "	// Current from inputs\n";
 				ccde += "	float I_input_total = 0;\n";
@@ -6851,19 +6869,17 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				// generate tables and code for each input type
 				for( const auto &keyval : input_types_per_cell_per_compartment[cell_seq] ){
 					for( const auto &id_id : keyval.second.toArray() ){			
-						if( !ImplementInputSource( AppendSingle, AppendMulti, DescribeLemsInline, cell_wig.random_call_counter, for_what + " Input type "+std::to_string(id_id), tab, id_id, aig.input, ccde ) ) return false;
+						if( !ImplementInputSource( AppendSingle, AppendMulti, DescribeLemsInline, cell_wig.random_call_counter, for_what + " Input type "+std::to_string(id_id), tab, id_id, comptype_used, aig.input, ccde ) ) return false;
 					}
 				}
-				
 				ccde += "	external_current = I_synapses_total + I_input_total;\n";
 				// unfortunately G_input_total can't be used to improve the integrator since arbitrary I dynamics are at play. (Unless the LEMS component exposes the interation of I into V rule to be accessible somehow...)
 				ccde += "	}"; // close attachment exposure scope
 				// internal dynamics
 				
 				// no other native, only LEMSified implementations for now
-				if( cell.component.ok() ){
-					const auto &compinst = cell.component;
-					const auto &comptype = model.component_types.get(compinst.id_seq);
+				if( comptype_used ){
+					const auto &comptype = *comptype_used;
 					auto &component = aig.component;
 					
 					ccde += tab+"// LEMS assigned\n";
@@ -6889,9 +6905,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					printf("Unknown native artificial cell type\n");
 					return false;
 				}
-				
 				// NB Index_Statevar_Voltage should have been set by this point, if available
-			
 			}
 			// send (exposure)
 			if( spiking_outputs_per_cell_per_compartment.at( cell_seq ).size() > 0 ){
@@ -9159,9 +9173,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		for(size_t conn_seq = 0; conn_seq < proj.connections.contents.size(); conn_seq++){
 			const auto &conn = proj.connections.contents[conn_seq];
-			
 			// printf("Connection %zd of %zd \n", conn_seq, proj.connections.contents.size() ); fflush(stdout);
-			
 			const PointOnCellLocator pre_loc  = { proj.presynapticPopulation , conn.preCell , conn.preSegment , conn.preFractionAlong  }; // XXX refactor into loca + GetPre or sth
 			const PointOnCellLocator post_loc = { proj.postsynapticPopulation, conn.postCell, conn.postSegment, conn.postFractionAlong };
 			
@@ -9184,7 +9196,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 			work_unit_post = workunit_per_cell_per_population[proj.postsynapticPopulation][conn.postCell];
 			#endif
-			
 			// printf("connnn %lx %ld\n", work_unit_pre, work_unit_post); fflush(stdout);
 			
 			// now populate the synaptic components in the raw tables
@@ -11747,8 +11758,7 @@ int main(int argc, char **argv){
 				step
 			);
 			if(config.debug){
-				printf("item %lld end\n", item);
-				fflush(stdout);
+				printf("item %lld end\n", item);fflush(stdout);
 			}
 		}
 		

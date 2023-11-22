@@ -2428,16 +2428,19 @@ const char * RequiredNmlId(const ImportLogger &log, const pugi::xml_node &from_n
 	return ret_id;
 }
 // a variant for the common CollectionWithNames
-template<typename T>
-const char * RequiredNmlId(const ImportLogger &log, const pugi::xml_node &from_node, const CollectionWithNames<T> &set, const char *parent_name = NULL){
+const char * RequiredNmlId(const ImportLogger &log, const pugi::xml_node &from_node, const NameIndexer &set, const char *parent_name = NULL){
 	const char *name = RequiredNmlId(log, from_node);
 	if(!name) return NULL;
-	if(set.has(name)){
-		if(name) log.error(from_node, "%s %s already defined in %s", from_node.name(), name, parent_name);
+	if(set.count(name) > 0){
+		if(parent_name) log.error(from_node, "%s %s already defined in %s", from_node.name(), name, parent_name);
 		else log.error(from_node, "%s %s already defined", from_node.name(), name);
 		return NULL;
 	}
 	return name;
+}
+template<typename T>
+const char * RequiredNmlId(const ImportLogger &log, const pugi::xml_node &from_node, const CollectionWithNames<T> &set, const char *parent_name = NULL){
+	return RequiredNmlId(log, from_node, set.names, parent_name);
 }
 // just in case it may differ more than the name, and to discern between NeuroML and pure LEMS
 const char * RequiredLemsName(const ImportLogger &log, const pugi::xml_node &from_node){
@@ -3394,6 +3397,7 @@ bool ParseBiophysicalProperties(
 							log.error(eInhoVal, "could not parse %s expression", "value");
 							return false;
 						}
+						// XXX validate dimensionality as well !!
 						// Check that the only symbol is the varparm in use
 						for( const auto &symname : inho.value.symbol_refs ){
 							if( symname != inhoparm.variable ){
@@ -4304,7 +4308,7 @@ bool ParseIonChannel(const ImportLogger &log, const pugi::xml_node &eChannel, co
 			
 			
 			
-			auto sGateId = RequiredNmlId(log, eGate);
+			auto sGateId = RequiredNmlId(log, eGate, channel.gates);
 			if(!sGateId) return false;
 			
 			
@@ -4444,12 +4448,8 @@ bool ParseIonChannel(const ImportLogger &log, const pugi::xml_node &eChannel, co
 				for( auto eGateEl : eGate.children()){
 					
 					if( strcmp( eGateEl.name(), "closedState") == 0 || strcmp( eGateEl.name(), "openState") == 0){
-						auto name = RequiredNmlId(log, eGateEl);
+						auto name = RequiredNmlId(log, eGateEl, ks.state_names);
 						if(!name) return false;
-						if(ks.state_names.count(name) > 0){
-							log.error(eGateEl, "state %s already defined", name);
-							return false;
-						}
 						
 						Int new_id = ks.state_names.size();
 						ks.state_names.insert(std::make_pair(name, new_id));
@@ -4920,7 +4920,36 @@ struct ImportState{
 	Int &target_simulation;
 	
 	// helpers for interface matching
-	
+	bool CheckAttachmentWithCellType(
+		const ImportLogger &log, const pugi::xml_node &eConn,
+		const ComponentType &comptype_syn , const char *syncomp_name, 
+		const ComponentType &comptype_cell, const char *bound_cell_name,
+		int &attachments_accepted
+	) const {
+		attachments_accepted = 0;
+		const auto &dervars = comptype_cell.derived_variables;
+		for(int i = 0; i < (int)dervars.size(); i++){
+			const char *dervar_name = dervars.getName(i);
+			const auto &dervar = dervars.get(i);
+			if(dervar.type != ComponentType::DerivedVariable::Type::SELECT) continue;
+			const char *exponame = dervar.select_synapse_exposure.c_str();
+			Dimension syn_dim;
+			if(!comptype_syn.GetExposureAndDimension(comptype_syn.exposures.get_id(exponame), syn_dim)){
+				if(comptype_syn.name_space.has(exponame)){
+					log.error( eConn, "cell type %s dervar %s requires attribute %s from attachment %s, which contains it but does not expose it; please provide an exposure with name %s or change the name of that attribute, to prevent ambiguity", bound_cell_name, dervar_name, exponame, syncomp_name, exponame );
+					return false;
+				} // are there more places where the exponame could hide?
+				continue; // LATER decide whether to whine if exposure is absent on syncomp
+			}
+			if(syn_dim != dervar.dimension){
+				log.error( eConn, "attachment %s exposes %s as %s but cell type %s dervar %s receives it as %s", syncomp_name, exponame, dimensions.Stringify(syn_dim).c_str(), bound_cell_name, dervar_name, dimensions.Stringify(dervar.dimension).c_str() );
+			return false;
+			}
+			// let it pass!
+			attachments_accepted++;
+		}//HERE
+		return true;
+	}
 	// TODO cache type compatibility checks with a hash table
 	bool CheckSynapticComponentWithCellTypes(
 		const ImportLogger &log, const pugi::xml_node &eConn,
@@ -4968,6 +4997,7 @@ struct ImportState{
 		HelpStringifyDim strdim = {dimensions};
 		
 		// bound cell compatible wrt current
+		int fluxes_detected_standard = 0, fluxes_detected_lems = 0, writes_detected_lems = 0;
 		if( syncomp.GetCurrentOutputAndDimension( component_types, syn_current_dimension ) ){
 			if( !bound_cell.GetCurrentInputAndDimension( component_types, bound_cell_current_dimension ) ){
 				log.error( eConn, "synapse %s exposes current but cell %s does not receive current", syncomp_name, bound_cell_name);
@@ -4977,7 +5007,17 @@ struct ImportState{
 				log.error( eConn, "synapse %s exposes current as %s but cell %s receives current as %s", syncomp_name, dimensions.Stringify(syn_current_dimension).c_str(), bound_cell_name, dimensions.Stringify(bound_cell_current_dimension).c_str() );
 				return false;
 			}
+			fluxes_detected_standard++;
 		}
+		// bound cell compatible wrt generalized current
+		if(bound_cell.type == CellType::Type::ARTIFICIAL && bound_cell.artificial.component.ok()
+			&& syncomp.component.ok()
+		){
+			const auto &comptype_cell = component_types.get( bound_cell.artificial.component.id_seq );
+			const auto &comptype_syn  = component_types.get( syncomp.component.id_seq );
+			if(!CheckAttachmentWithCellType(log, eConn, comptype_syn, syncomp_name, comptype_cell, bound_cell_name, fluxes_detected_lems)) return false;
+		}
+		
 		// bound cell compatible wrt voltage
 		if( syncomp.GetVoltageInputAndDimension( component_types, syn_voltage_dimension ) ){
 			if( !bound_cell.GetVoltageExposureAndDimension( component_types, bound_cell_voltage_dimension, bound_cell_voltage_dimension_type ) ){
@@ -4996,7 +5036,7 @@ struct ImportState{
 			for(int i = 0; i < (int)wrireqs.size(); i++){
 				const char *wrireq_name = wrireqs.getName(i);
 				const auto &wrireq = wrireqs.get(i);
-				if(!(bound_cell.type == CellType::Type::ARTIFICIAL && bound_cell.artificial.component.id_seq >= 0)){
+				if(!(bound_cell.type == CellType::Type::ARTIFICIAL && bound_cell.artificial.component.ok())){
 					log.error( eConn, "there are WritableRequirements in synapse type %s, yet cell %s is not represented by a LEMS component", syncomp_name, bound_cell_name);
 					return false;
 				}
@@ -5009,12 +5049,15 @@ struct ImportState{
 				const ComponentType::StateVariable &var = bound_comptype.state_variables.get(wrireq_name);
 				const auto var_dimension = var.dimension, wrireq_dimension = wrireq.dimension;
 				if(!(wrireq_dimension == var_dimension)){
-					log.error( eConn, "WritableRequirement %s in synapse type %s has dimension %s, whereas on cell type %s's component type %s it has diemnsion %s", wrireq_name, syncomp_name, strdim(wrireq_dimension).c_str(), bound_cell_name, bound_comptype_name, strdim(var_dimension).c_str());
+					log.error( eConn, "WritableRequirement %s in synapse type %s has dimension %s, whereas on cell type %s's component type %s it has dimension %s", wrireq_name, syncomp_name, strdim(wrireq_dimension).c_str(), bound_cell_name, bound_comptype_name, strdim(var_dimension).c_str());
 					return false;
 				}
+				writes_detected_lems++;
 			}
 		}
-		
+		if(fluxes_detected_standard + fluxes_detected_lems + writes_detected_lems == 0){
+			log.warning( eConn, "%s does not seem to interact with %s", syncomp_name, bound_cell_name ); // it's a dilemma: warn on strange things like 'smart sensors' or let them silently, probably not interact?
+		}
 		
 		// peer cell compatible wrt vpeer
 		if( syncomp.GetVpeerInputAndDimension( component_types, syn_vpeer_dimension ) ){
@@ -5070,6 +5113,7 @@ struct ImportState{
 		ComponentType::Exposure::Type cello_voltage_dimension_exposure_type;
 		
 		// cell compatible wrt current
+		int fluxes_detected_standard = 0, fluxes_detected_lems = 0;
 		if( input.GetCurrentOutputAndDimension( component_types, synaptic_components, input_current_dimension ) ){
 			if( !cello.GetCurrentInputAndDimension( component_types, cello_current_dimension ) ){
 				log.error( eInputInstance, "input source %s exposes current but cell %s does not receive current", input_name, cello_name);
@@ -5079,7 +5123,21 @@ struct ImportState{
 				log.error( eInputInstance, "input source %s exposes current as %s but cell %s receives current as %s", input_name, dimensions.Stringify(input_current_dimension).c_str(), cello_name, dimensions.Stringify(cello_current_dimension).c_str() );
 				return false;
 			}
+			fluxes_detected_standard++;
 		}
+		// cell compatible wrt generalized current
+		if(cello.type == CellType::Type::ARTIFICIAL && cello.artificial.component.ok()
+			&& input.component.ok()
+		){
+			const auto &comptype_cell = component_types.get( cello.artificial.component.id_seq );
+			const auto &comptype_inp  = component_types.get( input.component.id_seq );
+			if(!CheckAttachmentWithCellType(log, eInputInstance, comptype_inp, input_name, comptype_cell, cello_name, fluxes_detected_lems)) return false;
+		}
+		if(fluxes_detected_standard + fluxes_detected_lems == 0){
+			log.warning( eInputInstance, "%s does not seem to interact with %s", input_name, cello_name); // it's a dilemma: warn on strange things like 'smart sensors' or let them silently, probably not interact?
+		}
+		// TODO writablerequirements for inputs as well?
+		
 		// cell compatible wrt voltage
 		if( input.GetVoltageInputAndDimension( component_types, synaptic_components, input_voltage_dimension ) ){
 			if( !cello.GetVoltageExposureAndDimension( component_types, cello_voltage_dimension, cello_voltage_dimension_exposure_type ) ){
@@ -5185,7 +5243,7 @@ struct ImportState{
 		
 		Morphology new_morph;
 		
-		auto name = RequiredNmlId(log, eMorph);
+		auto name = RequiredNmlId(log, eMorph, morphologies);
 		if(!name) return false;
 		
 		if( !ParseMorphology(log, eMorph, new_morph)) return false;
@@ -5199,7 +5257,7 @@ struct ImportState{
 		
 		IonChannel new_channel;
 		
-		auto name = RequiredNmlId(log, eChannel);
+		auto name = RequiredNmlId(log, eChannel, ion_channels);
 		if(!name) return false;
 		//printf("Parsing ion channel %s\n",name);
 		if( !::ParseIonChannel(log, eChannel, component_types, dimensions, ion_species, new_channel)) return false;
@@ -5211,7 +5269,7 @@ struct ImportState{
 	
 	bool ParseStandaloneBiophysics(const ImportLogger &log, const pugi::xml_node &eBioph){
 		
-		auto name = RequiredNmlId(log, eBioph);
+		auto name = RequiredNmlId(log, eBioph, standalone_biophysics);
 		if(!name) return false;
 		
 		// add new "standalone" biophysics, yay!
@@ -5224,7 +5282,7 @@ struct ImportState{
 		CellType cell_type;
 		cell_type.type = CellType::PHYSICAL;
 		
-		auto name = RequiredNmlId(log, eCell);
+		auto name = RequiredNmlId(log, eCell, cell_types);
 		if(!name) return false;
 		// printf("Parsing physical cell %s...\n", name);
 		//parse cell properties
@@ -5308,7 +5366,7 @@ struct ImportState{
 		cell_type.type = CellType::ARTIFICIAL;
 		ArtificialCell &cell = cell_type.artificial;
 		
-		auto name = RequiredNmlId(log, eCell);
+		auto name = RequiredNmlId(log, eCell, cell_types);
 		if(!name) return false;
 		
 		const char *sType = TagNameOrType(eCell);
@@ -5715,7 +5773,7 @@ struct ImportState{
 		
 		ConcentrationModel new_pool;
 		
-		auto name = RequiredNmlId(log, ePool);
+		auto name = RequiredNmlId(log, ePool, conc_models);
 		if(!name) return false;
 		
 		const char *ion_name = ePool.attribute("ion").value();
@@ -5767,7 +5825,7 @@ struct ImportState{
 		
 		Network net;
 		
-		auto name = RequiredNmlId(log, eNet);
+		auto name = RequiredNmlId(log, eNet, networks);
 		if(!name) return false;
 		//TODO redefinition sanity check!
 		
@@ -5830,7 +5888,7 @@ struct ImportState{
 				// an uniform population, consisting of clones of a particular cell
 				Network::Population pop;
 				
-				auto pop_name = RequiredNmlId(log, eUniPop);
+				auto pop_name = RequiredNmlId(log, eUniPop, net.populations);
 				if(!pop_name) return false;
 				
 				auto celltype_name = RequiredAttribute(log, eUniPop, "component");
@@ -5972,7 +6030,7 @@ struct ImportState{
 				
 				Network::Projection proj;
 				
-				auto name = RequiredNmlId(log, eProj);
+				auto name = RequiredNmlId(log, eProj, net.projections);
 				if(!name) return false;
 				
 				bool is_spiking = (strcmp(eNetEl.name(), "projection") == 0); //projection is supposed to be for spiking connections
@@ -5995,6 +6053,7 @@ struct ImportState{
 						return false;
 					}
 				}
+				// XXX allow single "synapse" or whine, for non classic projections as well !!
 				
 				// get morphologies, they will be needed to validate cell segment - cell segment connections
 				// and get some nullable properties, or rather std::optional?
@@ -6100,6 +6159,7 @@ struct ImportState{
 									log.error(eConn, "connection synapse type %s not found", synName);
 									return false;
 								}
+								// TODO realize any comptype as synapse!!
 								
 								// don't forget to send spikes to sole post-synaptic mechanism when voltage exceeds spikeThresh
 								
@@ -6416,7 +6476,7 @@ struct ImportState{
 		
 		SynapticComponent syn;
 		
-		auto name = RequiredNmlId(log, eSyn);
+		auto name = RequiredNmlId(log, eSyn, synaptic_components);
 		if(!name) return false;
 		
 		const char *sType = TagNameOrType(eSyn);
@@ -7889,7 +7949,7 @@ struct ImportState{
 		
 		Simulation sim;
 		
-		auto name = RequiredNmlId(log, eSim);
+		auto name = RequiredNmlId(log, eSim, simulations);
 		if(!name) return false;
 		
 		
@@ -8049,7 +8109,7 @@ struct ImportState{
 				for(auto eOutEl: eOutFile.children()){
 					if(strcmp(eOutEl.name(), "OutputColumn") == 0){
 						
-						auto outcol_name = RequiredNmlId(log, eOutEl, daw.output_columns);
+						auto outcol_name = RequiredNmlId(log, eOutEl, daw.output_columns, eOutFile.name());
 						if(!outcol_name) return false;
 						
 						Simulation::DataWriter::OutputColumn out = { {}, dimensions.GetNative(Dimension::Unity()) };
@@ -8166,6 +8226,10 @@ struct ImportState{
 							log.error(eOutEl, "id must be an integer");
 							return false;
 						}
+						if(evw.outputs.hasId(id)){
+							log.error(eOutEl, "%s %ld already defined", eOutEl.name(), (long)id);
+							return false;
+						}// TODO refactor into RequiredNumericalId
 						
 						Simulation::EventWriter::EventSelection out;
 						auto out_select = RequiredAttribute(log, eOutEl, "select");
@@ -8868,7 +8932,6 @@ struct ImportState{
 		auto TryAddExposure = [](auto &log, const auto &eThing, auto &exposures, auto type, auto seq){
 			auto exposure = eThing.attribute("exposure").value();
 			if(*exposure){
-				// printf("***************** %s **********************\n\n\n", exposure);
 				if(exposures.has(exposure)){
 					log.error(eThing, "exposure %s already defined", exposure);
 					return false;
@@ -8907,7 +8970,7 @@ struct ImportState{
 						return false;
 					}
 					//TermTable::printTree(new_dervar.value.tab, new_dervar.value.tab.expression_root, 0);
-					// TODO dimension checking !
+					// XXX validate dimensionality as well !!
 					return true;
 				};
 				
@@ -8915,8 +8978,6 @@ struct ImportState{
 				
 				if( strcmp(sType, "DerivedVariable") == 0
 					|| strcmp(sType, "DerivedParameter") == 0 ){
-					
-					new_dervar.type = ComponentType::DerivedVariable::Type::VALUE;
 					
 					auto value = eDerived.attribute("value").value();
 					auto select = eDerived.attribute("select").value();
@@ -8926,11 +8987,33 @@ struct ImportState{
 						return false;
 					}
 					else if( *value ){
+						new_dervar.type = ComponentType::DerivedVariable::Type::VALUE;
 						if( !ParseDerivedValue( log, eDerived, "value", new_dervar.value ) ) return false;
 					}
 					else if( *select ){
-						log.error(eDerived, "select-based derived value not supported yet");
-						return false;
+						// HERE also check if select and exposures of syn's match!
+						new_dervar.type = ComponentType::DerivedVariable::Type::SELECT;
+						const char *must_start_with = "synapses[*]/";
+						if(!(strstr(select,must_start_with) == select)){
+							log.error(eDerived, "select attribute must start with %s", must_start_with);
+							return false;
+						}
+						new_dervar.select_synapse_exposure = select + strlen(must_start_with);
+						if(new_dervar.select_synapse_exposure.empty()){
+							log.error(eDerived, "select attribute must specify more than just %s", must_start_with);
+							return false;
+						}
+						if(strcmp(new_dervar.select_synapse_exposure.c_str(), "i") == 0){
+							log.error(eDerived, "select attribute should not select simple current for now, just comment this tag out");
+							// NB: allowing capital I to pass because only lemsified thus compatible components support it 
+							return false; // XXX should hadnle more consistently, either ignore or do something...
+						}
+						
+						if(!(strcmp(eDerived.attribute("reduce").value(), "add") == 0)){
+							log.error(eDerived, "select-based derived value must have reduce=\"add\"");
+							return false;
+						}
+						// done
 					}
 					else{
 						log.error(eDerived, "value must have either value or select attribute");
@@ -9079,6 +9162,9 @@ struct ImportState{
 					eCase = eCase.next_sibling("Case");
 				}
 			}
+			else if( dervar.type == ComponentType::DerivedVariable::Type::SELECT ){
+				// has no depedencies inside the cell, allows toposort right away
+			}
 			else{
 				log.error(derived_nodes.get(dervar_seq), "internal error: unknown resolve dervar type");
 				return false;
@@ -9160,7 +9246,7 @@ struct ImportState{
 				return false;
 			}
 			// TODO non-boolean checking !
-			// TODO dimension checking !
+			// XXX validate dimensionality as well !!
 			
 			// resolve right away, since namespace is known
 			if( !ResolveSymbolTable(log, eAssign, new_type.name_space, new_assignment.value) ) return false;
@@ -9226,7 +9312,7 @@ struct ImportState{
 				return false;
 			}
 			// TODO non-boolean checking !
-			// TODO dimension checking !
+			// XXX validate dimensionality as well !!
 			
 			// resolve right away, since namespace is known
 			if( !ResolveSymbolTable(log, eDerivative, new_type.name_space, state_variable.derivative) ) return false;
@@ -9377,7 +9463,7 @@ struct ImportState{
 			
 			// parse a general-use LEMS component prototype
 			ComponentInstance new_instance;
-			auto sProtoName = RequiredNmlId(log, eInstance);
+			auto sProtoName = RequiredNmlId(log, eInstance, component_instances);
 			if(!sProtoName) return false;
 			if( !ParseComponentInstance(log, eInstance, component_types, dimensions, type, new_instance) ) return false;
 		

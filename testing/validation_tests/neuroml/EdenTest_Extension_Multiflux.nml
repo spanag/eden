@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Allow summation of alternative fluxes into artificial cells, from attachments that offer them. Useful for e.g. ratebased models -->
+<!-- TODO make the equivalent on physical cells as well -->
+<neuroml id=" NML_EdenTestNetwork1">
+<ComponentType name="MultifluxCell" extends="baseCellMembPotCap"
+	description="A cell that can handle different fluxes separately.">
+	<Parameter name="leakConductance" dimension="conductance"/>
+	<Parameter name="leakReversal" dimension="voltage"/>
+	<!-- <Attachments name="synapses" type="basePointCurrent"/> -->
+	<Dynamics>
+		<StateVariable name="v" exposure="v"  dimension="voltage"/>
+		<StateVariable name="vb" dimension="voltage"/>
+
+		<!-- <DerivedVariable name="iSyn" dimension="current" exposure="iSyn" select="synapses[*]/i" reduce="add" /> -->
+		<DerivedVariable name="ib" dimension="current" select="synapses[*]/iB" reduce="add" />
+
+		<TimeDerivative variable="v" value="(iSyn + leakConductance * (leakReversal - v)) / C"/>
+		<TimeDerivative variable="vb" value="(ib + leakConductance * (leakReversal - vb)) / C"/>
+		<OnStart>
+			<StateAssignment variable="v"  value="leakReversal"/>
+			<StateAssignment variable="vb" value="leakReversal"/>
+		</OnStart>
+	</Dynamics>
+</ComponentType>
+<ComponentType name="sineGeneratorB" extends="basePointCurrent"
+	description="Generates a sinusoidally varying current after a time _delay, for a fixed _duration. The _period and maximum _amplitude of the current can be set as well as the _phase at which to start.">
+	<Property name="weight" dimension="none" defaultValue="1"/> 
+	<Parameter name="phase" dimension="none"/>
+	<Parameter name="delay" dimension="time"/>
+	<Parameter name="duration" dimension="time"/>
+	<Parameter name="amplitude" dimension="current"/>
+	<Parameter name="period" dimension="time"/>
+	<Constant name="AMP" dimension="current" value="1 A"/>
+	<Dynamics>
+		<StateVariable name="i" exposure="iB" dimension="current"/>
+		<DerivedVariable name="i_dummy" exposure="i" dimension="current" value="0 * AMP" />
+		<OnCondition test="t .lt. delay">
+			<StateAssignment variable="i" value="0"/>
+		</OnCondition>
+		<OnCondition test="t .geq. delay .and. t .lt. duration+delay">
+			<StateAssignment variable="i" value="weight * amplitude * sin(phase + (2 * 3.14159265 * (t-delay)/period) )"/>
+		</OnCondition>
+		<OnCondition test="t .geq. duration+delay">
+			<StateAssignment variable="i" value="0"/>
+		</OnCondition>
+	</Dynamics>
+</ComponentType>
+<ComponentType name="expCurrSynapseB" extends="basePynnSynapse" 
+	description="Current based synapse with instantaneous rise and single exponential decay (with time constant tau_syn)">
+	<Property name="weight" dimension="none"  defaultValue="1"/>
+	<Dynamics>
+		<StateVariable name="I" dimension="none"/>
+		<DerivedVariable name="i" exposure="i" dimension="current" value="0 * NAMP" />
+		<DerivedVariable name="ib" exposure="iB" dimension="current" value="I * NAMP" />
+		<TimeDerivative variable="I" value="-I / (tau_syn*MSEC)" />
+		<OnEvent port="in">
+			<StateAssignment variable="I" value="I + weight" />
+		</OnEvent>
+	</Dynamics>
+</ComponentType>
+
+<MultifluxCell id="cellMulti" leakReversal="-50mV" C="0.2nF" leakConductance="0.01uS"/>
+<iafCell id="cell" leakReversal="-50mV" C="0.2nF" leakConductance="0.01uS" thresh="+55V" reset="-70mV"/>
+
+<spikeArray id="spik1"><spike id="0" time="01.001 ms"/></spikeArray>
+<spikeArray id="spik2"><spike id="0" time="02.101 ms"/></spikeArray>
+<spikeArray id="spik3"><spike id="0" time="03.001 ms"/></spikeArray>
+
+<sineGenerator   id="inp0" phase="0" delay="3ms" duration="3ms" amplitude="1.4nA" period="1ms"/>
+<sineGenerator   id="inp1" phase="0" delay="4ms" duration="3ms" amplitude="1.4nA" period="1ms"/>
+<sineGeneratorB  id="inpX" phase="0" delay="4ms" duration="3ms" amplitude="1.4nA" period="1ms"/>
+<expCurrSynapse  id="syn0" tau_syn="0.9"/>
+<expCurrSynapseB id="synX" tau_syn="0.9"/>
+
+<network id="EdenTestNetwork">
+    <population id="popS1" component="spik1" size="1"/>
+    <population id="popS2" component="spik2" size="1"/>
+    <population id="pop0" component="cell" size="2"/>
+    <population id="popX" component="cellMulti" size="1"/>
+    
+    <projection id="proj00" presynapticPopulation="popS1" postsynapticPopulation="pop0" synapse="syn0"><connection id="0" preCellId="0" postCellId="0"/></projection>
+	<projection id="proj01" presynapticPopulation="popS2" postsynapticPopulation="pop0" synapse="syn0"><connection id="0" preCellId="0" postCellId="1"/></projection>
+    <projection id="projX0" presynapticPopulation="popS1" postsynapticPopulation="popX" synapse="syn0"><connection id="0" preCellId="0" postCellId="0"/></projection>
+    <projection id="projX1" presynapticPopulation="popS2" postsynapticPopulation="popX" synapse="synX"><connection id="0" preCellId="0" postCellId="0"/></projection>
+	
+	<inputList id="inli00" component="inp0"  population="pop0"><inputW id="0" target="0" destination="synapses" weight="1"/></inputList>
+	<inputList id="inli01" component="inp1"  population="pop0"><inputW id="0" target="1" destination="synapses" weight="1"/></inputList>
+	<inputList id="inliX0" component="inp0"  population="popX"><inputW id="0" target="0" destination="synapses" weight="1"/></inputList>
+	<inputList id="inliX1" component="inpX"  population="popX"><inputW id="0" target="0" destination="synapses" weight="1"/></inputList>
+</network>
+
+<Simulation id="sim1" length="10.03ms" step="0.010ms" target="EdenTestNetwork">
+    <OutputFile id="first" fileName="results.gen.txt">
+        <OutputColumn id="v00" quantity="pop0[0]/v" />
+        <OutputColumn id="v01" quantity="pop0[1]/v" />
+        <OutputColumn id="vX0" quantity="popX[0]/v" />
+        <OutputColumn id="vX1" quantity="popX[0]/vb" />
+    </OutputFile>
+</Simulation>
+<!-- Specify which component to run -->
+<Target component="sim1"/>
+</neuroml>

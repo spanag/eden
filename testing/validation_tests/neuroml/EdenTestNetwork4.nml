@@ -170,7 +170,7 @@
             <connection id="0" preCellId="../pop0/2/MultiCompCell" postCellId="../pop0/1/MultiCompCell" preSegmentId="0" preFractionAlong="0.5" postSegmentId="1" postFractionAlong="0.5"/>
             <!-- <connection id="1" preCellId="../pop0/5/MultiCompCell" postCellId="../pop0/4/MultiCompCell" preSegmentId="0" preFractionAlong="0.5" postSegmentId="1" postFractionAlong="0.5"/> -->
         </projection>
-        <projection id="projAexpo" presynapticPopulation="pop0" postsynapticPopulation="pop0" synapse="exp54">
+        <projection id="projMexpo" presynapticPopulation="pop0" postsynapticPopulation="pop0" synapse="exp54">
             <connection id="1" preCellId="../pop0/5/MultiCompCell" postCellId="../pop0/4/MultiCompCell" preSegmentId="0" preFractionAlong="0.5" postSegmentId="1" postFractionAlong="0.5"/>
         </projection>
 		

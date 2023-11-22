@@ -875,6 +875,7 @@ struct ComponentType{
 		std::vector<Case> cases; // if many conditions
 		int default_case; // if many conditions
 		// NB if no case conditions apply, then is 0 : https://github.com/LEMS/jLEMS/blob/master/src/main/java/org/lemsml/jlems/core/eval/ConditionalDBase.java#L29
+		std::string select_synapse_exposure; // if select, singular supported case for now
 		DerivedVariable() : BaseNamedProperty(){
 			type = NONE;
 			default_case = -1;
