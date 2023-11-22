@@ -49,6 +49,7 @@ struct Term{
 		FLOOR ,
 		RANDOM,
 		HFUNC ,
+		INT   , // extensions!
 			
 	}type;
 	
@@ -125,6 +126,7 @@ struct Term{
 			|| type == FLOOR 
 			|| type == RANDOM
 			|| type == HFUNC 
+			|| type == INT   
 		;
 	}
 	

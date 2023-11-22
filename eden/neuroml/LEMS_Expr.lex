@@ -82,6 +82,7 @@
 "ln"     { return LN;     }
 "ceil"   { return CEIL;   }
 "floor"  { return FLOOR;  }
+"int"    { return INT;    }
 
 "random" { return RANDOM; }
 

@@ -158,6 +158,10 @@ void TermTable::printTree(const TermTable &tab, int node, int tabDepth){
 		printf("H \n");
 		printTree(tab, term.right, tabDepth + 1);
 	break;}
+	case Term::INT: {
+		printf("int \n");
+		printTree(tab, term.right, tabDepth + 1);
+	break;}
 	
 	default: {
 		printf("unknown term!!!\n");

@@ -214,7 +214,7 @@ ${OBJ_DIR}/LEMS_Expr${DOT_A}: ${OBJ_DIR}/LEMS_Expr${DOT_O} ${OBJ_DIR}/LEMS_Expr.
 ${OBJ_DIR}/LEMS_Expr${DOT_O}: ${SRC_EDEN}/neuroml/LEMS_Expr.cpp  ${SRC_EDEN}/neuroml/LEMS_Expr.h ${OBJ_DIR}/LEMS_Expr.yy${DOT_O}
 	$(CXX) -c $< $(CXXFLAGS) -I ${SRC_EDEN}/neuroml/ -I ${OBJ_DIR} -o $@
 ${OBJ_DIR}/LEMS_Expr.tab${DOT_O}: ${SRC_EDEN}/neuroml/LEMS_Expr.y ${SRC_EDEN}/neuroml/LEMS_Expr.h
-	bison --defines=${OBJ_DIR}/LEMS_Expr.tab.h --output=${OBJ_DIR}/LEMS_Expr.tab.cpp  $<
+	bison -Wall,no-precedence -Werror --defines=${OBJ_DIR}/LEMS_Expr.tab.h --output=${OBJ_DIR}/LEMS_Expr.tab.cpp  $<
 	$(CXX) -c ${OBJ_DIR}/LEMS_Expr.tab.cpp $(CXXFLAGS) -I ${SRC_EDEN}/neuroml/ -o $@
 ${OBJ_DIR}/LEMS_Expr.yy${DOT_O}: ${SRC_EDEN}/neuroml/LEMS_Expr.lex ${OBJ_DIR}/LEMS_Expr.tab${DOT_O}
 	flex -8 --outfile=${OBJ_DIR}/LEMS_Expr.yy.cpp --header-file=${OBJ_DIR}/LEMS_Expr.yy.h $<

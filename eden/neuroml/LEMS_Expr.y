@@ -67,7 +67,7 @@ void yyerror(YYLTYPE *yylloc, yyscan_t scann, TermTable *tab, const char *origin
 %token <symName> SYMBOL "symbol"
 
 %token LEQ GEQ LT GT EQ NEQ AND OR NOT
-%token ABS SQRT SIN COS TAN SINH COSH TANH EXP LOG10 LN CEIL FLOOR RANDOM HFUNC
+%token ABS SQRT SIN COS TAN SINH COSH TANH EXP LOG10 LN CEIL FLOOR RANDOM HFUNC INT
 
 %token NUM INVALID
 
@@ -93,14 +93,12 @@ void yyerror(YYLTYPE *yylloc, yyscan_t scann, TermTable *tab, const char *origin
 %left '*' '/'
 %right '^'
 
-
-
-%nonassoc ABS SQRT SIN COS TAN SINH COSH TANH EXP LOG10 LN CEIL FLOOR RANDOM HFUNC
+%nonassoc ABS SQRT SIN COS TAN SINH COSH TANH EXP LOG10 LN CEIL FLOOR RANDOM HFUNC INT
 %right NOT
-%right UMINUS "unary -"
+%right UMINUS
 
 %%
- // see also https://github.com/LEMS/expr-parser/blob/master/src/main/antlr4/parser/LEMSExpression.g4
+// see also https://github.com/LEMS/expr-parser/blob/master/src/main/antlr4/parser/LEMSExpression.g4
 anyexpr
 	: numexpr END { tab->expression_root = $1; }
 	| binexpr END { tab->expression_root = $1; } 
@@ -153,6 +151,8 @@ num_function
 	| FLOOR  '(' numexpr ')' { $$ = tab->add(Term( Term::FLOOR , $3 )); }
 	| RANDOM '(' numexpr ')' { $$ = tab->add(Term( Term::RANDOM, $3 )); }
 	| HFUNC  '(' numexpr ')' { $$ = tab->add(Term( Term::HFUNC , $3 )); }
+	| INT    '(' numexpr ')' { $$ = tab->add(Term( Term::INT   , $3 )); }
+	| INT    '(' binexpr ')' { $$ = tab->add(Term( Term::INT   , $3 )); } 
 	;
 
 symexpr

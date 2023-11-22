@@ -2283,6 +2283,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					else if(term.type == Term::CEIL  ){ val_out = std::ceil ( val_r ); }
 					else if(term.type == Term::FLOOR ){ val_out = std::floor( val_r ); }
 					else if(term.type == Term::HFUNC ){ val_out = ( val_r < 0 ) ? 0 : 1; }
+					else if(term.type == Term::INT ){ val_out = (long long)( val_r ); }
 					else{
 						assert(false);
 					}
@@ -2394,6 +2395,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							{ Term::FLOOR ,"floorf" },
 							{ Term::RANDOM,"randof" },
 							{ Term::HFUNC , "stepf" },
+							{ Term::INT   ,"truncf" },
 						};
 						
 						auto it = term_strings.find(term.type);

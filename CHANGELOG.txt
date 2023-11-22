@@ -9,6 +9,7 @@ Latest
 - Add experimental file format for direct, per-instance customization of model parameters
 - Add experimental extension to LEMS: 'VariableRequirement' for CoreNEURON-style POINTERs, which is accessible through the experimental "EdenCustomSetup" file format
 - Add experimental extension to LEMS: 'WritableRequirement' so that synapses can <Assign> the state variables of their bound cells, as seen on Brian-style equations
+- Add experimental extension to LEMS: 'int' function that truncates to integer, and also allows Brian-style conversion of logical values to 0 or 1
 - Eliminate LEMS constants from the model's memory footprint
 - Add support to keep model files loaded after finishing loading the model. Now EDEN and extensions can access the names of objects, for diagnostics and more!
 - Add support for new Apple Silicon Mac's
