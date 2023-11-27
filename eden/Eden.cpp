@@ -344,6 +344,8 @@ struct MpiContext{
 	int world_size;
 	int rank;
 };
+
+constexpr int EXTERNAL_IO_NODE = 0; // the rank to do IO, until LATER
 const int MYMPI_TAG_BUF_SEND = 99;
 MpiContext my_mpi;
 
@@ -617,9 +619,11 @@ struct EngineConfig{
 		// use a more spiker-implementation-related reference LATER
 		std::vector< std::vector<RawTablesLocator> > spike_destinations;
 	};
-	std::map< int, SendList_Impl > sendlist_impls;
-	std::map< int, RecvList_Impl > recvlist_impls;
-	
+	struct ExchangePhase{
+		std::map< int, SendList_Impl > sendlist_impls;
+		std::map< int, RecvList_Impl > recvlist_impls;
+	};
+	std::array<ExchangePhase, 2> mpi_exchange_phases;
 };
 
 
@@ -7286,7 +7290,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	};
 	
 	#ifdef USE_MPI
-	constexpr int EXTERNAL_IO_NODE = 0; // unitl LATER
 	// get lists of what to be sent, in model-specific symbolic references -
 	// not references to realized work items, because each node may handle this differently
 	
@@ -7364,8 +7367,16 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	};
 	
 	// not the send/recv buffers themselves, but lists of references
-	std::map< int, SendList > send_lists; // per adjacent node
-	std::map< int, RecvList > recv_lists; // per adjacent node
+	// NB: Because data to send must be available before receiving data
+	// (otherwise there could be a deadlock unless there was a separate channel for every individual value + async io, but the former is not the general case)
+	// - data readers may not be output directly
+	// - data from readers must be exchanged in a SECOND comm phase per timestep(epoch?),
+	//   since it can't be read before the first (non reader) exchange phase that is needed in order to provide outputs first.
+	// - thus two epochs are taken care of. They only get to touch in the list exchange, so that both can be exchanged as one merged list.
+	//   other than that, duplicating most things (send impls and associated reampping) is easier than duplicating the attributes themselves throughout. 
+	std::array< std::map< int, SendList > ,2> send_lists; // per adjacent node
+	std::array< std::map< int, RecvList > ,2> recv_lists; // per adjacent node
+	// switch based on path ...
 	
 	// put a provisional table entry, and keep track of these dependencies
 	// such table entries _will_ be remapped to point to the corresponding positions on send/recv buffers
@@ -7376,7 +7387,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		long long entry = table.size();
 		
 		TabEntryRef_Packed packed_id = GetEncodedTableEntryId( glob_tab_Vpeer, entry );		
-		recv_lists[remote_node].vpeer_refs[loc].push_back(packed_id);
+		recv_lists[0][remote_node].vpeer_refs[loc].push_back(packed_id);
 		// RawTablesLocator tabloc = {(ptrdiff_t) glob_tab_Vpeer, (int)entry, RawTablesLocator::TABLE, RawTablesLocator::CONST, RawTablesLocator::I64};
 		// recv_lists[remote_node].vpeer_refs[loc].push_back(tabloc);
 		
@@ -7393,7 +7404,8 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			printf("recvlist add spike to string failed\n");
 			return false;
 		}
-		recv_lists[remote_node].spike_refs[sPath].push_back(tabloc);	
+		int i = (path.type == Simulation::LemsEventPath::EVENTREADER) ? 1 : 0;
+		recv_lists[i][remote_node].spike_refs[sPath].push_back(tabloc);
 		
 		return true;
 	};
@@ -7403,8 +7415,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			printf("recvlist add daw to string failed\n");
 			return false;
 		}
-		recv_lists[remote_node].value_refs.insert(sPath);
-		recv_lists[remote_node].log_refs[sPath].push_back(dawref);	
+		int i = (path.type == Simulation::LemsQuantityPath::DATAREADER) ? 1 : 0;
+		// NB: recording a datareader is pretty bad though it it happens, anyway...
+		recv_lists[i][remote_node].value_refs.insert(sPath);
+		recv_lists[i][remote_node].log_refs[sPath].push_back(dawref);
 		return true;
 	};
 	
@@ -7414,8 +7428,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			printf("recvlist add varreq to string failed\n");
 			return false;
 		}
-		recv_lists[remote_node].value_refs.insert(sPath);
-		recv_lists[remote_node].var_refs[sPath].push_back(tabloc);	
+		int i = (path.type == Simulation::LemsQuantityPath::DATAREADER) ? 1 : 0;
+		recv_lists[i][remote_node].value_refs.insert(sPath);
+		recv_lists[i][remote_node].var_refs[sPath].push_back(tabloc);
 		return true;
 	};
 	
@@ -9646,11 +9661,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	printf("Determining recvlists...\n"); fflush(stdout);
 	// Now, each node informs the others on what information streams it needs, in a symbolic(NeuroML-based) format
 	if( config.debug_netcode ){
-	Say("Recv");
+	auto SayRecvLists = [](const auto &recv_lists){
 	for( const auto &keyval : recv_lists ){
 		Say("from node %d:", keyval.first);
-		
 		const auto &recv_list = keyval.second;
+		
 		for( const auto &keyval : recv_list.vpeer_refs ){
 			const PointOnCellLocator &loc = keyval.first;
 			std::string say_refs = "\tVpeer " + loc.toPresentableString() + " to remap refs: ";
@@ -9673,10 +9688,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		for( const auto &sPath : recv_list.value_refs ){
 			std::string say_refs = "\tVar " + sPath + " to continuous: ";
+			if(recv_list.var_refs.count(sPath) > 0)
 			for( RawTablesLocator tabloc : recv_list.var_refs.at(sPath) ){
 				say_refs += tabloc.Stringify() + " ";
 			}
 			say_refs += "and logs:";
+			if(recv_list.log_refs.count(sPath) > 0)
 			for( DawRef logref : recv_list.log_refs.at(sPath) ){
 				say_refs += logref.toPresentableString() + " ";
 			}
@@ -9684,6 +9701,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			Say("%s", say_refs.c_str());
 		}
 	}
+	};
+	Say("Recv");
+	SayRecvLists(recv_lists[0]);
+	if(!recv_lists[1].empty()) Say("Recv more");
+	SayRecvLists(recv_lists[1]);
 	}
 	
 	printf("Exchanging recvlists...\n"); fflush(stdout);
@@ -9694,15 +9716,25 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	std::map< int, std::vector<char> > sendlists_encoded;
 	
 	// encode the recvlists for transmission
-	for( const auto &keyval : recv_lists ){
-		int other_rank = keyval.first;
-		const RecvList &recvlist = keyval.second;
-		std::string enc;
-		// first, the header oine
-		enc += accurate_string( recvlist.vpeer_refs.size() ) + " "
-			+  accurate_string( recvlist.value_refs.size() ) + " "
-			+  accurate_string( recvlist.spike_refs.size() ) + "\n" ;
+	std::vector<int> adjacent_nodes;
+	for(auto &lists : recv_lists)
+		for(auto &keyval : lists ) adjacent_nodes.push_back(keyval.first);
+	
+	for( const auto &other_rank : adjacent_nodes ){
+		std::string tit, enc; // paste the title on top in the end...
 		
+		for(auto &lists : recv_lists){
+		if(!lists.count(other_rank)){
+			// add an empty title fragment
+			tit += "0 0 0 ";
+			continue;
+		}
+		const RecvList &recvlist = lists.at(other_rank);
+		// first, the fraction of the header line
+		tit += accurate_string( recvlist.vpeer_refs.size() ) + " "
+			+  accurate_string( recvlist.value_refs.size() ) + " "
+			+  accurate_string( recvlist.spike_refs.size() ) + " " ; // LATER use a delimiter
+			
 		for( const auto &keyval : recvlist.vpeer_refs ){
 			const auto &loc = keyval.first;
 			loc.toEncodedString( enc );
@@ -9718,7 +9750,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			enc += "\n";
 		}
 		
+		}
 		auto &recvlist_encoded = recvlists_encoded[other_rank];
+		AppendToVector( recvlist_encoded, tit+"\n" );
 		AppendToVector( recvlist_encoded, enc );
 		recvlist_encoded.push_back('\0');
 	}
@@ -10111,7 +10145,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		auto other_rank = keyval.first;
 		auto &enc = keyval.second; // newlines will be replaced with nulls to ease parsing
 		
-		auto &sendlist = send_lists[other_rank];
 		assert( enc.size() );
 		// convert enc to null-terminated lines, for convenience
 		std::vector<const char *> lines;
@@ -10131,46 +10164,54 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		}
 		}
 		
-		Int vpeers, refs, spikes;
-		sscanf(lines[0], "%ld %ld %ld", &vpeers, &refs, &spikes );
+		auto MakeSendList = [&model, &net, &lines](auto &send_lists, int other_rank, Int line_offset, Int vpeers, Int refs, Int spikes){
+			Int vpeer_idx = line_offset;
+			Int value_idx = vpeer_idx + vpeers;
+			Int spike_idx = value_idx + refs;
+			
+			auto &sendlist = send_lists[other_rank];
+			sendlist.vpeer_sources.resize(vpeers);
+			for(int i = 0; i < vpeers; i++){
+				auto ret = sendlist.vpeer_sources[i].fromEncodedString( lines[ vpeer_idx + i ] );
+				if(!ret) Say( "fail %s", lines[ vpeer_idx + i ] );
+				assert(ret);
+			}
+			sendlist.value_refs.resize(refs);
+			for(int i = 0; i < refs; i++){
+				const char *line = lines[ value_idx + i ];
+				auto &path = sendlist.value_refs[i];
+				// Say( "line %s", line);
+				SayWithPrefix log([&other_rank, &i, &line](){ return "send list "+accurate_string(other_rank)+", ref "+accurate_string(i)+" "+line+": "; });
+				if(!model.ParseLemsQuantityPath(log, line, net, path)) return false;
+			}
+			sendlist.spike_sources.resize(spikes);
+			for(int i = 0; i < spikes; i++){
+				const char *line = lines[ spike_idx + i ];
+				auto &source_path = sendlist.spike_sources[i];
+				// Say( "line %s", line);
+				SayWithPrefix log([&other_rank, &i, &line](){ return "send list "+accurate_string(other_rank)+", spike "+accurate_string(i)+" "+line+": "; });
+				if(!model.ParseLemsEventPath(log, line, NULL, net, source_path)) return false;
+				// auto ret = sendlist.spike_sources[i].fromEncodedString( lines[ spike_idx + i ] );
+				// if(!ret) Say( "fail %s", lines[ spike_idx + i ] );
+				// assert(ret);
+			}
+			return true;
+		};
+		Int vpeers_0, refs_0, spikes_0, vpeers_1, refs_1, spikes_1;
+		sscanf(lines[0], "%ld %ld %ld %ld %ld %ld", &vpeers_0, &refs_0, &spikes_0, &vpeers_1, &refs_1, &spikes_1);
 		if( config.debug_netcode ){
-			Say("%ld %ld %ld <- %s", vpeers, refs, spikes, lines[0]);
+			Say("%ld %ld %ld %ld %ld %ld <- %s", vpeers_0, refs_0, spikes_0, vpeers_1, refs_1, spikes_1, lines[0]);
 		}
-		Int vpeer_idx = 1;
-		Int value_idx = vpeer_idx + vpeers;
-		Int spike_idx = value_idx + refs;
-		
-		
-		sendlist.vpeer_sources.resize(vpeers);
-		for(int i = 0; i < vpeers; i++){
-			auto ret = sendlist.vpeer_sources[i].fromEncodedString( lines[ vpeer_idx + i ] );
-			if(!ret) Say( "fail %s", lines[ vpeer_idx + i ] );
-			assert(ret);
-		}
-		sendlist.value_refs.resize(refs);
-		for(int i = 0; i < refs; i++){
-			const char *line = lines[ value_idx + i ];
-			auto &path = sendlist.value_refs[i];
-			// Say( "line %s", line);
-			SayWithPrefix log([&other_rank, &i, &line](){ return "send list "+accurate_string(other_rank)+", ref "+accurate_string(i)+" "+line+": "; });
-			if(!model.ParseLemsQuantityPath(log, line, net, path)) return false;
-		}
-		sendlist.spike_sources.resize(spikes);
-		for(int i = 0; i < spikes; i++){
-			const char *line = lines[ spike_idx + i ];
-			auto &source_path = sendlist.spike_sources[i];
-			// Say( "line %s", line);
-			SayWithPrefix log([&other_rank, &i, &line](){ return "send list "+accurate_string(other_rank)+", spike "+accurate_string(i)+" "+line+": "; });
-			if(!model.ParseLemsEventPath(log, line, NULL, net, source_path)) return false;
-			// auto ret = sendlist.spike_sources[i].fromEncodedString( lines[ spike_idx + i ] );
-			// if(!ret) Say( "fail %s", lines[ spike_idx + i ] );
-			// assert(ret);
-		}
+		Int off_0 = 1;
+		Int off_1 = off_0 + (vpeers_0 + refs_0 + spikes_0);
+		if( (vpeers_0 + refs_0 + spikes_0) > 0 ) if(!MakeSendList(send_lists[0], other_rank, off_0, vpeers_0, refs_0, spikes_0)) return false;
+		if( (vpeers_1 + refs_1 + spikes_1) > 0 ) if(!MakeSendList(send_lists[1], other_rank, off_1, vpeers_1, refs_1, spikes_1)) return false;
+		// the list is spliced, yay! LATER use a delimiter for tit
 	}
 	
 	// dbg output encoded symbolic
 	if( config.debug_netcode ){
-	Say("Send");
+	auto SaySendLists = [&model, &net](const auto &send_lists){
 	for( const auto &keyval : send_lists ){
 		Say("to node %d:", keyval.first);
 		
@@ -10190,16 +10231,22 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			Say("%s", ("\tRef " + sPath).c_str());
 		}
 	}
+	return true;
+	};
+	Say("Send");
+	if(!SaySendLists(send_lists[0])) return false;
+	if(!send_lists[1].empty()) Say("Send");
+	if(!SaySendLists(send_lists[1])) return false;
 	}
-	
 	// now construct the send and recv mirrors, and remap
 	
 	// construct and remap for send_lists
-	for( const auto &keyval : send_lists ){
+	for( size_t i = 0; i < send_lists.size(); i++ ){
+	for( const auto &keyval : send_lists[i] ){
 		auto other_rank = keyval.first;
 		const auto &send_list = keyval.second;
 		
-		auto &send_list_impl = engine_config.sendlist_impls[other_rank];
+		auto &send_list_impl = engine_config.mpi_exchange_phases[i].sendlist_impls[other_rank];
 		
 		send_list_impl.vpeer_positions_in_globstate.resize( send_list.vpeer_sources.size() );
 		for( size_t i = 0; i < send_list.vpeer_sources.size() ; i++ ){
@@ -10240,14 +10287,16 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			// tabs.global_tables_const_i64_arrays[global_idx_T_spiker].push_back( packed_id );
 		}
 	}
+	}
 	// The final send buffer for these will be allocated at run time
 	
 	// construct and remap for recv_lists
-	for( const auto &keyval : recv_lists ){
+	for( size_t i = 0; i < recv_lists.size(); i++ ){
+	for( const auto &keyval : recv_lists[i] ){
 		auto other_rank = keyval.first;
 		const auto &recv_list = keyval.second;
 		
-		auto &recv_list_impl = engine_config.recvlist_impls[other_rank];
+		auto &recv_list_impl = engine_config.mpi_exchange_phases[i].recvlist_impls[other_rank];
 		
 		// allocate mirror buffers for values continuously being sent
 		recv_list_impl.value_mirror_size = recv_list.vpeer_refs.size() + recv_list.value_refs.size();
@@ -10310,7 +10359,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			spike_mirror_entry++;
 		}
 	}
-	
+	}
 	// MPI_Finalize();
 	// exit(1);
 	#endif
@@ -11185,58 +11234,29 @@ int main(int argc, char **argv){
 		printf("\n");
 		
 	}
-	// MPI_Finalize();
-	// exit(1);
 	
-	#ifdef USE_MPI
-	
-	printf("Allocating comm buffers...\n");
-	typedef std::vector<float> SendRecvBuf;
-	std::vector<int> send_off_to_node;
-	std::vector< SendRecvBuf > send_bufs;
-	std::vector<int> recv_off_to_node;
-	std::vector< SendRecvBuf > recv_bufs;
-	
-	for( const auto &keyval : engine_config.sendlist_impls ){
-		send_off_to_node.push_back( keyval.first );
-		send_bufs.emplace_back();
-		// allocate as they come, why not
-	}
-	
-	for( const auto &keyval : engine_config.recvlist_impls ){
-		recv_off_to_node.push_back( keyval.first );
-		recv_bufs.emplace_back();
-		// allocate as they come, why not
-	}
-	std::vector<MPI_Request> send_requests( send_off_to_node.size(), MPI_REQUEST_NULL );
-	std::vector<MPI_Request> recv_requests( recv_off_to_node.size(), MPI_REQUEST_NULL );
-	
-	// recv's have to be probed before recv'ing
-	std::vector<bool> received_probes( recv_off_to_node.size(), false);	
-	std::vector<bool> received_sends( recv_off_to_node.size(), false);
-	
-	#endif
-	
-	printf("Starting simulation loop...\n");
-	
-	// NB this is a simple tweak to avoid spawning more threads than work items.
-	// TODO allow for diagnostic override, and amore flexibility since multithreading can slao be used for logging etc.
-	// (how much time does it take to change the number of threads?)
-	// NB: omp_get_max_threads actually refers to the very real nthreads-var that is also picked through the OMP_NUM_THREADS envvar.
-	// That avriable is actually set through omp_set_num_threads
-	if( engine_config.work_items < omp_get_max_threads() ){
-		omp_set_num_threads( (int)engine_config.work_items );
-	}
-	
-	// perform the crunching
-	timeval run_start, run_end;
-	gettimeofday(&run_start, NULL);
-	double time = engine_config.t_initial;
-	// need multiple initialization steps, to make sure the dependency chains of all state variables are resolved
-	for( long long step = -3; time <= engine_config.t_final; step++ ){
+	// prepare getters
+	struct SpikeSetter{
+		Table_I64 *global_tables_stateNow_i64, *global_tables_stateNext_i64;
+		void operator()( const RawTablesLocator &tabloc) const {
+			if(!(  tabloc.forma_type == RawTablesLocator::I64
+				&& tabloc.varia_type == RawTablesLocator::STATE
+				&& tabloc.layou_type == RawTablesLocator::TABLE
+			)){
+				printf("internal error: spike slot value not is not table state i64, instead: %s\n", tabloc.Stringify().c_str());
+				exit(2);
+			}
+			// use GetSingleI64 if needed, but note that funkier options like stateNext may be needed later !
+			global_tables_stateNow_i64[tabloc.table][tabloc.entry] = 1;
+		}
+	};
+	struct FloatGetter{
+		float *global_state_now;
+		Table_F32 *global_tables_stateNow_f32;
+		std::vector <Table_F32> &global_tables_const_f32_arrays;
+		const RawTables &tabs;
 		
-		// same as tabs but for the raw raw tables this time at right before step !
-		auto GetSingleF32 = [&global_state_now, &global_tables_stateNow_f32, &global_tables_const_f32_arrays, &tabs](const RawTablesLocator &tabloc) -> float & {
+		const float &operator()(const RawTablesLocator &tabloc) const {
 			assert(tabloc.forma_type == RawTablesLocator::FormatType::F32);
 			if(tabloc.layou_type == RawTablesLocator::LayoutType::FLAT){
 				if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
@@ -11250,66 +11270,28 @@ int main(int argc, char **argv){
 				else{ // if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
 					return global_tables_const_f32_arrays[tabloc.table][tabloc.entry]; }
 			}
-		};
-		auto GetSingleI64 = [&global_tables_stateNow_i64, &global_tables_const_i64_arrays, &tabs](const RawTablesLocator &tabloc) -> long long & {
-			assert(tabloc.forma_type == RawTablesLocator::FormatType::I64);
-			static long long badval = 0xb177e2ba11333333LL;
-			if(tabloc.layou_type == RawTablesLocator::LayoutType::FLAT){
-				if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
-					assert(false); return badval; }
-				else{ // if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
-					return tabs.global_constints[tabloc.entry]; }
-			}
-			else{ // if(tabloc.layou_type == RawTablesLocator::LayoutType::TABLE){
-				if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
-					return global_tables_stateNow_i64[tabloc.table][tabloc.entry]; }
-				else{ // if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
-					return global_tables_const_i64_arrays[tabloc.table][tabloc.entry]; }
-			}
-		};
-		auto SetSpikeFlagNow = [
-			&global_tables_stateNow_i64, &global_tables_stateNext_i64
-		]( const RawTablesLocator &tabloc){
-			if(!(  tabloc.forma_type == RawTablesLocator::I64
-				&& tabloc.varia_type == RawTablesLocator::STATE
-				&& tabloc.layou_type == RawTablesLocator::TABLE
-			)){
-				printf("internal error: spike slot value not is not table state i64, instead: %s\n", tabloc.Stringify().c_str());
-				exit(2);
-			}
-			// use GetSingleI64 if needed, but note that funkier options like stateNext may be needed later !
-			global_tables_stateNow_i64[tabloc.table][tabloc.entry] = 1;
-		};
+		}
+	};
+	
+	#ifdef USE_MPI
+	// MPI_Finalize();
+	// exit(1);
+	printf("Allocating comm buffers...\n");
+	struct MpiExchangeContext{
+		const SimulatorConfig &config;
+		const EngineConfig::ExchangePhase &xc;
 		
-		bool initializing = step <= 0;
-		const float dt = engine_config.dt;
+		typedef std::vector<float> SendRecvBuf;
+		std::vector<int> send_off_to_node;
+		std::vector< SendRecvBuf > send_bufs;
 		
-		// Exchange the necessary information before crunching
+		std::vector<int> recv_off_to_node;
+		std::vector< SendRecvBuf > recv_bufs;
 		
-		// XXX Output'ing before input'ing means external inputs (from a source external to the sim) need to be broadcast to all recipients, directly!! Or face a timestep shift!
-		// circular flows are then like reconciling two parallel communication planes ... which of course can't be reordered relative to each other.
-		// but then how do circular flows work?? 
-		// by breaking transmissions i guess: reading a value and writing that value down simply can't be done within a single timestep when more than one node is involved.
-		// does this mean that readers have to load stuff for the *next* timestep? which can't be finished without allowing the writes for these same timesteps to be in parallel.
-		// if node 0 is to be the mediator as it stands now, then the only way that other nodes can be informed on time is that they receive AFTER node 0 reads streams and the only way for node 0 to send valid data to streams is to write streams AFTER it receives from other nodes. This can be resolved by syncing with mpi (as much as possible) then syncing with streams then RE syncing with mpi to broadcast the valid file mirrors (as far as the stream dependencies are concerned). The current configuration (first send+recv mpi then send+recv streams) will cause a timestep (NaN for first!!!) delay to the picture of remote nodes on input streams.
-
-		// conclusions:
-		// - ban recording of sources, or at least condemn them and accept 1*dt delay on everything (perhaps add nan default value, also for init)
-		// - and then we can't sustainably do fetch all info from mpi to node 0 -> send streams from node 0 -> recv from node 0 -> send info from node 0 because granularity is all stuff per node, not per element -> inverted sequence if only node 0, but otherwise circular dependency!! by accepting that node 0 may need to inform remote, send all mpi -> recv from mpi -> send streams -> recv from streams -> send again! all mpi for read streams, recv likewise for the really latest info, in the general case where many may .
-		// how did we get so wrong? by restricting io to particular nodes, which necessitates a gather BEFORE writing streams and a broadcast AFTER writing streams.
-		// Music and other schemes intruding MPI_Allgather are simpler, but they intrude into MPI i guess? also can't handle p2p (not that it's that nice as it stands now, p2p introduces another phase...).
-		// It would still be overcome if all related nodes asked the external process directly, but then the external process would need to be aware of and support that...
-		// - the current single mpi phase -> single stream phase gives LAGGED info about INPUT streams to all non/IO MPI nodes.
-		// - Thus an additional MPI phase needs to be added, to defer exchanging only the fresh INPUT values from getters to subscribers. (remember, now recording input is allowed to be LAGGED) -> it would be eliminated if somehow no node needed stream input indirectly ie. got it directly instead.
-		// or the exchange phase for input streams can also be done simultaneously and *out of sequence* with the regular exchange phase, which iirc MPI ensures can *not be done be messages are sent in order between each pair of nodes*
-
-		// And the clean way to record stuff in a LAGGED way is to record first, receive after, ... TOOD how does this work with events then?? how are they not on the wrong buffer??
-		// by writing BOTH the before and after buffers, just like how timeseries currently hack sparse events! and LATER add overwriters to do just that throughout the buffers...
-
-		// FIXME also consider last unit before... or some other margin ...for 32bit float tolerance 
+		std::vector<bool> received_probes, received_sends;
+		std::vector<MPI_Request> send_requests, recv_requests;
 		
-		#ifdef USE_MPI
-		auto NetMessage_ToString = []( size_t buf_value_len, const auto &buf ){
+		static std::string NetMessage_ToString( size_t buf_value_len, const SendRecvBuf &buf ){
 			std::string str;
 			for( size_t i = 0; i < buf_value_len; i++ ){
 				str += presentable_string( buf[i] ) + " ";
@@ -11320,85 +11302,52 @@ int main(int argc, char **argv){
 			}
 			return str;
 		};
-		// Send info needed by other nodes
-		// TODO try parallelizing buffer fill, see if it improves latency
-		for( size_t idx = 0; idx < send_off_to_node.size(); idx++ ){
-			auto other_rank = send_off_to_node.at(idx);
-			const auto &sendlist_impl = engine_config.sendlist_impls.at(other_rank);
+		
+		MpiExchangeContext(const SimulatorConfig &_c, const EngineConfig::ExchangePhase &_xc):config(_c), xc(_xc){
 			
-			auto &buf = send_bufs[idx];
-			auto &req = send_requests[idx];
-			
-			// get the continuous_time values
-			size_t vpeer_buf_idx = 0;
-			size_t vpeer_buf_len = sendlist_impl.vpeer_positions_in_globstate.size();
-			
-			size_t ref_buf_idx = vpeer_buf_idx + vpeer_buf_len;
-			size_t ref_buf_len = sendlist_impl.ref_locations.size();
-			
-			size_t buf_value_len = vpeer_buf_len + ref_buf_len;
-			
-			buf.resize(buf_value_len); // std::vector won't reallocate due to size reduction
-			// otherwise implement appending the spikes manually
-			
-			// NB make sure these buffers are synchronized with CPU memory LATER
-			for( size_t i = 0; i < sendlist_impl.vpeer_positions_in_globstate.size(); i++ ){
-				size_t off = sendlist_impl.vpeer_positions_in_globstate[i];
-				
-				buf[ vpeer_buf_idx + i ] = global_state_now[off];
+			for( const auto &keyval : xc.sendlist_impls ){
+				send_off_to_node.push_back( keyval.first );
+				send_bufs.emplace_back();
+				// allocate as they come, why not
 			}
 			
-			for( size_t i = 0; i < sendlist_impl.ref_locations.size(); i++ ){
-				assert( my_mpi.rank != EXTERNAL_IO_NODE && other_rank == EXTERNAL_IO_NODE );
-				// do not apply scaling! keep engine units consistent or at most marshalled!
-				buf[ ref_buf_idx + i ] = GetSingleF32(sendlist_impl.ref_locations[i]); // global_state_now[ off ];  * col.scaleFactor ;
+			for( const auto &keyval : xc.recvlist_impls ){
+				recv_off_to_node.push_back( keyval.first );
+				recv_bufs.emplace_back();
+				// allocate as they come, why not
 			}
+			send_requests.assign( send_off_to_node.size(), MPI_REQUEST_NULL );
+			recv_requests.assign( recv_off_to_node.size(), MPI_REQUEST_NULL );
 			
-			size_t spikebuf_off = sendlist_impl.spike_mirror_buffer;
-			// get the spikes into the buffer (variable size)
-			Table_I64 SpikeTable = global_tables_stateNow_i64[spikebuf_off];
-			long long SpikeTable_size = global_tables_state_i64_sizes[spikebuf_off];
-			
-			for( int i = 0; i < SpikeTable_size; i++ ){
-			
-				// TODO packed bool buffers
-				if( SpikeTable[i] ){
-					// add index	
-					buf.push_back( EncodeI32ToF32(i) );
-					// clear trigger flag for the timestep after the next one
-					SpikeTable[i] = 0;
-				}
-			}
-			if( config.debug_netcode ){
-				Say("Send %d : %s", other_rank, NetMessage_ToString( buf_value_len, buf).c_str());
-			}
-			MPI_Isend( buf.data(), buf.size(), MPI_FLOAT, other_rank, MYMPI_TAG_BUF_SEND, MPI_COMM_WORLD, &req );
+			// recv's have to be probed before recv'ing
+			received_probes.assign( recv_off_to_node.size(), false);
+			received_sends .assign( recv_off_to_node.size(), false);
 		}
 		
-		// Recv info needed by this node
-		auto PostRecv = []( int other_rank, std::vector<float> &buf, MPI_Request &recv_req ){
-			MPI_Irecv( buf.data(), buf.size(), MPI_FLOAT, other_rank, MYMPI_TAG_BUF_SEND, MPI_COMM_WORLD, &recv_req );
-		};
-		auto ReceiveList = [ &engine_config, &global_tables_stateNow_f32, &SetSpikeFlagNow ]( const EngineConfig::RecvList_Impl &recvlist_impl, std::vector<float> &buf ){
-			
-			// copy the continuous-time values
-			size_t value_buf_idx = 0;
-			float *value_buf = global_tables_stateNow_f32[ recvlist_impl.value_mirror_buffer ];
-			// NB make sure these buffers are synchronized with CPU memory LATER
-			for( ptrdiff_t i = 0; i < recvlist_impl.value_mirror_size; i++ ){
-				value_buf[i] = buf[ value_buf_idx + i ];
-			}
-			
-			// and deliver the spikes to trigger buffers
-			for( int i = recvlist_impl.value_mirror_size; i < (int)buf.size(); i++ ){
-				int spike_pos = EncodeF32ToI32( buf[i] );
-				for( auto tabloc : recvlist_impl.spike_destinations[spike_pos] ){
-					SetSpikeFlagNow(tabloc);
+		void GetWaitAllRecv(Table_F32 *global_tables_stateNow_f32, SpikeSetter &SetSpikeFlagNow){
+			auto PostRecv = []( int other_rank, std::vector<float> &buf, MPI_Request &recv_req ){
+				MPI_Irecv( buf.data(), buf.size(), MPI_FLOAT, other_rank, MYMPI_TAG_BUF_SEND, MPI_COMM_WORLD, &recv_req );
+			};
+			auto ReceiveList = [ &global_tables_stateNow_f32, &SetSpikeFlagNow ]( const EngineConfig::RecvList_Impl &recvlist_impl, std::vector<float> &buf ){
+				
+				// copy the continuous-time values
+				size_t value_buf_idx = 0;
+				float *value_buf = global_tables_stateNow_f32[ recvlist_impl.value_mirror_buffer ];
+				// NB make sure these buffers are synchronized with CPU memory LATER
+				for( ptrdiff_t i = 0; i < recvlist_impl.value_mirror_size; i++ ){
+					value_buf[i] = buf[ value_buf_idx + i ];
 				}
-			}
-			
-			// all done with message
-		};
+				
+				// and deliver the spikes to trigger buffers
+				for( int i = recvlist_impl.value_mirror_size; i < (int)buf.size(); i++ ){
+					int spike_pos = EncodeF32ToI32( buf[i] );
+					for( auto tabloc : recvlist_impl.spike_destinations[spike_pos] ){
+						SetSpikeFlagNow(tabloc);
+					}
+				}
+				
+				// all done with message
+			};
 		// TODO min_delay option when no gap junctions exist
 		// Also wait for recvs to finish
 		// Spin it all, to probe for multimple incoming messages
@@ -11409,7 +11358,7 @@ int main(int argc, char **argv){
 			// TODO also try parallelizing this, perhaps?
 			for( size_t idx = 0; idx < recv_off_to_node.size(); idx++ ){
 				auto other_rank = recv_off_to_node.at(idx);
-				const auto &recvlist_impl = engine_config.recvlist_impls.at(other_rank);
+				const auto &recvlist_impl = xc.recvlist_impls.at(other_rank);
 				
 				if( received_sends[idx] ) continue;
 				
@@ -11454,7 +11403,147 @@ int main(int argc, char **argv){
 		// and clear the progress flags
 		received_probes.assign( received_probes.size(), false );
 		received_sends .assign( received_sends .size(), false );
+		}
+		void StartAllSend(float *global_state_now, const FloatGetter &GetSingleF32, Table_I64 *global_tables_stateNow_i64, const std::vector <long long> &global_tables_state_i64_sizes ){
+		for( size_t idx = 0; idx < send_off_to_node.size(); idx++ ){
+			auto other_rank = send_off_to_node.at(idx);
+			const auto &sendlist_impl = xc.sendlist_impls.at(other_rank);
+			
+			auto &buf = send_bufs[idx];
+			auto &req = send_requests[idx];
+			
+			// get the continuous_time values
+			size_t vpeer_buf_idx = 0;
+			size_t vpeer_buf_len = sendlist_impl.vpeer_positions_in_globstate.size();
+			
+			size_t ref_buf_idx = vpeer_buf_idx + vpeer_buf_len;
+			size_t ref_buf_len = sendlist_impl.ref_locations.size();
+			
+			size_t buf_value_len = vpeer_buf_len + ref_buf_len;
+			
+			buf.resize(buf_value_len); // std::vector won't reallocate due to size reduction
+			// otherwise implement appending the spikes manually
+			
+			// NB make sure these buffers are synchronized with CPU memory LATER
+			for( size_t i = 0; i < sendlist_impl.vpeer_positions_in_globstate.size(); i++ ){
+				size_t off = sendlist_impl.vpeer_positions_in_globstate[i];
+				
+				buf[ vpeer_buf_idx + i ] = global_state_now[off];
+			}
+			
+			for( size_t i = 0; i < sendlist_impl.ref_locations.size(); i++ ){
+				// do not apply scaling! keep engine units consistent or at most marshalled!
+				buf[ ref_buf_idx + i ] = GetSingleF32(sendlist_impl.ref_locations[i]); // global_state_now[ off ];  * col.scaleFactor ;
+			}
+			
+			size_t spikebuf_off = sendlist_impl.spike_mirror_buffer;
+			// get the spikes into the buffer (variable size)
+			Table_I64 SpikeTable = global_tables_stateNow_i64[spikebuf_off];
+			long long SpikeTable_size = global_tables_state_i64_sizes[spikebuf_off];
+			
+			for( int i = 0; i < SpikeTable_size; i++ ){
+			
+				// TODO packed bool buffers
+				if( SpikeTable[i] ){
+					// add index
+					buf.push_back( EncodeI32ToF32(i) );
+					// clear trigger flag for the timestep after the next one
+					SpikeTable[i] = 0;
+				}
+			}
+			if( config.debug_netcode ){
+				Say("Send %d : %s", other_rank, NetMessage_ToString( buf_value_len, buf).c_str());
+			}
+			MPI_Isend( buf.data(), buf.size(), MPI_FLOAT, other_rank, MYMPI_TAG_BUF_SEND, MPI_COMM_WORLD, &req );
+		}
+		}
 		
+		void WaitAllSend(){
+			MPI_Waitall( send_requests.size(), send_requests.data(), MPI_STATUSES_IGNORE );
+		}
+		
+	};
+	std::array<MpiExchangeContext, 2> mpi_xchg_contexts = {
+		MpiExchangeContext(config, engine_config.mpi_exchange_phases[0]), MpiExchangeContext(config, engine_config.mpi_exchange_phases[1])
+	};
+	
+	#endif
+	
+	printf("Starting simulation loop...\n");
+	
+	// NB this is a simple tweak to avoid spawning more threads than work items.
+	// TODO allow for diagnostic override, and amore flexibility since multithreading can slao be used for logging etc.
+	// (how much time does it take to change the number of threads?)
+	// NB: omp_get_max_threads actually refers to the very real nthreads-var that is also picked through the OMP_NUM_THREADS envvar.
+	// That avriable is actually set through omp_set_num_threads
+	if( engine_config.work_items < omp_get_max_threads() ){
+		omp_set_num_threads( (int)engine_config.work_items );
+	}
+	
+	// perform the crunching
+	timeval run_start, run_end;
+	gettimeofday(&run_start, NULL);
+	double time = engine_config.t_initial;
+	// need multiple initialization steps, to make sure the dependency chains of all state variables are resolved
+	for( long long step = -3; time <= engine_config.t_final; step++ ){
+		
+		// same as tabs but for the raw raw tables this time at right before step !
+		FloatGetter GetSingleF32 = {global_state_now, global_tables_stateNow_f32, global_tables_const_f32_arrays, tabs};
+		auto GetSingleI64 = [&global_tables_stateNow_i64, &global_tables_const_i64_arrays, &tabs](const RawTablesLocator &tabloc) -> long long & {
+			assert(tabloc.forma_type == RawTablesLocator::FormatType::I64);
+			static long long badval = 0xb177e2ba11333333LL;
+			if(tabloc.layou_type == RawTablesLocator::LayoutType::FLAT){
+				if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+					assert(false); return badval; }
+				else{ // if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+					return tabs.global_constints[tabloc.entry]; }
+			}
+			else{ // if(tabloc.layou_type == RawTablesLocator::LayoutType::TABLE){
+				if(tabloc.varia_type == RawTablesLocator::VariableType::STATE){
+					return global_tables_stateNow_i64[tabloc.table][tabloc.entry]; }
+				else{ // if(tabloc.varia_type == RawTablesLocator::VariableType::CONST){
+					return global_tables_const_i64_arrays[tabloc.table][tabloc.entry]; }
+			}
+		};
+		SpikeSetter SetSpikeFlagNow = {global_tables_stateNow_i64, global_tables_stateNext_i64};
+		
+		bool initializing = step <= 0;
+		const float dt = engine_config.dt;
+		
+		// Exchange the necessary information before crunching
+		
+		// XXX Output'ing before input'ing means external inputs (from a source external to the sim) need to be broadcast to all recipients, directly!! Or face a timestep shift!
+		// circular flows are then like reconciling two parallel communication planes ... which of course can't be reordered relative to each other.
+		// but then how do circular flows work?? 
+		// by breaking transmissions i guess: reading a value and writing that value down simply can't be done within a single timestep when more than one node is involved.
+		// does this mean that readers have to load stuff for the *next* timestep? which can't be finished without allowing the writes for these same timesteps to be in parallel.
+		// if node 0 is to be the mediator as it stands now, then the only way that other nodes can be informed on time is that they receive AFTER node 0 reads streams and the only way for node 0 to send valid data to streams is to write streams AFTER it receives from other nodes. This can be resolved by syncing with mpi (as much as possible) then syncing with streams then RE syncing with mpi to broadcast the valid file mirrors (as far as the stream dependencies are concerned). The current configuration (first send+recv mpi then send+recv streams) will cause a timestep (NaN for first!!!) delay to the picture of remote nodes on input streams.
+
+		// conclusions:
+		// - ban recording of sources, or at least condemn them and accept 1*dt delay on everything (perhaps add nan default value, also for init)
+		// - and then we can't sustainably do fetch all info from mpi to node 0 -> send streams from node 0 -> recv from node 0 -> send info from node 0 because granularity is all stuff per node, not per element -> inverted sequence if only node 0, but otherwise circular dependency!! by accepting that node 0 may need to inform remote, send all mpi -> recv from mpi -> send streams -> recv from streams -> send again! all mpi for read streams, recv likewise for the really latest info, in the general case where many may .
+		// how did we get so wrong? by restricting io to particular nodes, which necessitates a gather BEFORE writing streams and a broadcast AFTER writing streams.
+		// Music and other schemes intruding MPI_Allgather are simpler, but they intrude into MPI i guess? also can't handle p2p (not that it's that nice as it stands now, p2p introduces another phase...).
+		// It would still be overcome if all related nodes asked the external process directly, but then the external process would need to be aware of and support that...
+		// - the current single mpi phase -> single stream phase gives LAGGED info about INPUT streams to all non/IO MPI nodes.
+		// - Thus an additional MPI phase needs to be added, to defer exchanging only the fresh INPUT values from getters to subscribers. (remember, now recording input is allowed to be LAGGED) -> it would be eliminated if somehow no node needed stream input indirectly ie. got it directly instead.
+		// or the exchange phase for input streams can also be done simultaneously and *out of sequence* with the regular exchange phase, which iirc MPI ensures can *not be done be messages are sent in order between each pair of nodes*
+
+		// And the clean way to record stuff in a LAGGED way is to record first, receive after, ... TOOD how does this work with events then?? how are they not on the wrong buffer??
+		// by writing BOTH the before and after buffers, just like how timeseries currently hack sparse events! and LATER add overwriters to do just that throughout the buffers...
+
+		// FIXME also consider last unit before... or some other margin ...for 32bit float tolerance 
+		
+		#ifdef USE_MPI
+		
+		// Send info needed by other nodes
+		// TODO try parallelizing buffer fill, see if it improves latency
+		mpi_xchg_contexts[0].StartAllSend(global_state_now, GetSingleF32, global_tables_stateNow_i64, global_tables_state_i64_sizes);
+		
+		// Recv info needed by this node
+		mpi_xchg_contexts[0].GetWaitAllRecv(global_tables_stateNow_f32, SetSpikeFlagNow);
+		
+		int wait_for_sends_of_stage = 0;
 		#endif
 		
 		// output what needs to be output
@@ -11743,6 +11832,16 @@ int main(int argc, char **argv){
 			if(config.debug_netcode){printf("done input %d\n", (int)step); fflush(stdout);}
 		}
 		
+		// A second MPI phase, to update data readers !
+		#ifdef USE_MPI
+		if(!mpi_xchg_contexts[1].xc.sendlist_impls.empty()){
+			mpi_xchg_contexts[wait_for_sends_of_stage].WaitAllSend();
+			mpi_xchg_contexts[1].StartAllSend(global_state_now, GetSingleF32, global_tables_stateNow_i64, global_tables_state_i64_sizes);
+			wait_for_sends_of_stage = 1;
+		}
+		mpi_xchg_contexts[1].GetWaitAllRecv(global_tables_stateNow_f32, SetSpikeFlagNow);
+		#endif
+		
 		//prepare for parallel iteration
 		
 		// Execute all work items
@@ -11824,7 +11923,7 @@ int main(int argc, char **argv){
 		
 		#ifdef USE_MPI
 		// wait for sends, to finish the iteration
-		MPI_Waitall( send_requests.size(), send_requests.data(), MPI_STATUSES_IGNORE );
+		mpi_xchg_contexts[wait_for_sends_of_stage].WaitAllSend();
 		#endif
 		
 		//prepare for next parallel iteration

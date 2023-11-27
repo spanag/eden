@@ -259,6 +259,13 @@ tests = [
 	'test_kwargs': { 'full_cmdline': ['mpirun','-n','4','eden-mpi', 'nml', test_nml_dir + 'LEMS_EdenTest_DomainDecomposition.xml' ], 'threads':2, 'verbose': True },
 	'validation_criteria': 'exact'
 },
+{
+	'type': 'eden_vs_eden',
+	'sim_file': test_nml_dir + 'EdenTest_DomainDecomposition_PlusCustomIO.nml',
+	# 'truth_kwargs': {},
+	'test_kwargs': { 'full_cmdline': ['mpirun','-n','4','eden-mpi', 'nml', test_nml_dir + 'EdenTest_DomainDecomposition_PlusCustomIO.nml' ], 'threads':2, 'verbose': True },
+	'validation_criteria': 'exact'
+},
 
 ]
 
