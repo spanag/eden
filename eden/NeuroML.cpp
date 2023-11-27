@@ -639,7 +639,7 @@ bool ArtificialCell::GetCurrentInputAndDimension( const CollectionWithNames<Comp
 	}
 	else{
 		if(
-			type == IAF || type == IAF_REF || type == IZH_2007 || type == ADEX
+			type == IAF || type == IAF_REF || type == IZH_2007 || type == ADEX || type == HR_1984
 			|| type == PYNN_IF_CURR_ALPHA || type == PYNN_IF_CURR_EXP
 			|| type == PYNN_IF_COND_ALPHA || type == PYNN_IF_COND_EXP
 			|| type == PYNN_EIF_COND_EXP_ISFA_ISTA || type == PYNN_EIF_COND_ALPHA_ISFA_ISTA
@@ -672,7 +672,7 @@ bool ArtificialCell::GetVoltageExposureAndDimension( const CollectionWithNames<C
 	}
 	else{
 		if(
-			type == IAF || type == IAF_REF || type == IZH_2007 || type == ADEX || type == IZH
+			type == IAF || type == IAF_REF || type == IZH_2007 || type == ADEX || type == IZH || type == HR_1984
 			|| type == IAF_TAU || type == IAF_TAU_REF || type == PINSKY_RINZEL_CA3
 			|| type == PYNN_IF_CURR_ALPHA || type == PYNN_IF_CURR_EXP
 			|| type == PYNN_IF_COND_ALPHA || type == PYNN_IF_COND_EXP
@@ -706,7 +706,7 @@ bool ArtificialCell::HasSpikeIn( const CollectionWithNames<ComponentType> &compo
 	else{
 		if(
 			type == IAF || type == IAF_REF || type == IAF_TAU || type == IAF_TAU_REF
-			|| type == IZH || type == IZH_2007 || type == ADEX
+			|| type == IZH || type == IZH_2007 || type == HR_1984 || type == ADEX
 			|| type == PYNN_IF_CURR_ALPHA || type == PYNN_IF_CURR_EXP
 			|| type == PYNN_IF_COND_ALPHA || type == PYNN_IF_COND_EXP
 			|| type == PYNN_EIF_COND_EXP_ISFA_ISTA || type == PYNN_EIF_COND_ALPHA_ISFA_ISTA
@@ -726,7 +726,7 @@ bool ArtificialCell::HasSpikeOut( const CollectionWithNames<ComponentType> &comp
 	else{
 		if(
 			type == IAF || type == IAF_REF || type == IAF_TAU || type == IAF_TAU_REF
-			|| type == IZH || type == IZH_2007 || type == ADEX
+			|| type == IZH || type == IZH_2007 || type == HR_1984 || type == ADEX
 			|| type == PYNN_IF_CURR_ALPHA || type == PYNN_IF_CURR_EXP
 			|| type == PYNN_IF_COND_ALPHA || type == PYNN_IF_COND_EXP
 			|| type == PYNN_EIF_COND_EXP_ISFA_ISTA || type == PYNN_EIF_COND_ALPHA_ISFA_ISTA
@@ -5384,6 +5384,7 @@ struct ImportState{
 			{"fitzHughNagumoCell"       , ArtificialCell::FN                            },
 			{"fitzHughNagumo1969Cell"   , ArtificialCell::FN_1969                       },
 			{"pinskyRinzelCA3Cell"      , ArtificialCell::PINSKY_RINZEL_CA3             },
+			{"hindmarshRose1984Cell"    , ArtificialCell::HR_1984                       },
 			{"IF_curr_alpha"            , ArtificialCell::PYNN_IF_CURR_ALPHA            },
 			{"IF_curr_exp"              , ArtificialCell::PYNN_IF_CURR_EXP              },
 			{"IF_cond_alpha"            , ArtificialCell::PYNN_IF_COND_ALPHA            },
@@ -5543,6 +5544,20 @@ struct ImportState{
 				if( !ParseQuantity<Dimensionless >(log, eCell, "betac"  , cell.betac  ) ) return false;
 				
 				if( !ParseQuantity<SpecificCapacitance>(log, eCell, "cm"  , cell.cm  ) ) return false;
+			}
+			else if( cell.type == ArtificialCell::HR_1984 ){
+				if( !ParseQuantity<Capacitance>(log, eCell, "C", cell.C ) ) return false;
+				if( !ParseQuantity<Voltage>(log, eCell, "v_scaling" , cell.v_scaling ) ) return false;
+				if( !ParseQuantity<Dimensionless>(log, eCell, "a" , cell.a ) ) return false;
+				if( !ParseQuantity<Dimensionless>(log, eCell, "b" , cell.b ) ) return false;
+				if( !ParseQuantity<Dimensionless>(log, eCell, "c" , cell.c ) ) return false;
+				if( !ParseQuantity<Dimensionless>(log, eCell, "d" , cell.d ) ) return false;
+				if( !ParseQuantity<Dimensionless>(log, eCell, "r" , cell.r ) ) return false;
+				if( !ParseQuantity<Dimensionless>(log, eCell, "s" , cell.s ) ) return false;
+				if( !ParseQuantity<Dimensionless>(log, eCell, "x1", cell.x1) ) return false;
+				if( !ParseQuantity<Dimensionless>(log, eCell, "x0", cell.x0) ) return false;
+				if( !ParseQuantity<Dimensionless>(log, eCell, "y0", cell.y0) ) return false;
+				if( !ParseQuantity<Dimensionless>(log, eCell, "z0", cell.z0) ) return false;
 			}
 			else if( cell.type == ArtificialCell::PYNN_IF_CURR_ALPHA || cell.type == ArtificialCell::PYNN_IF_CURR_EXP ){
 				if( !ParseBasePynnIaf(log, eCell, cell ) ) return false;
@@ -5710,6 +5725,22 @@ struct ImportState{
 					{ "alphac" , cell.alphac },
 					{ "betac"  , cell.betac  },
 					{ "cm"     , cell.cm     },
+				}, cell.component ) ) return false;
+			}
+			else if( cell.type == ArtificialCell::HR_1984 ){
+				if( !TryLemsifyComponent( log, eCell, sType, {
+					{ "C" , cell.C  },
+					{ "v_scaling", cell.v_scaling },
+					{ "a" , cell.a  },
+					{ "b" , cell.b  },
+					{ "c" , cell.c  },
+					{ "d" , cell.d  },
+					{ "r" , cell.r  },
+					{ "s" , cell.s  },
+					{ "x1", cell.x1 },
+					{ "x0", cell.x0 },
+					{ "y0", cell.y0 },
+					{ "z0", cell.z0 },
 				}, cell.component ) ) return false;
 			}
 			else if( cell.type == ArtificialCell::PYNN_IF_CURR_ALPHA || cell.type == ArtificialCell::PYNN_IF_CURR_EXP ){
@@ -9613,6 +9644,7 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 		"fitzHughNagumo1969Cell",
 		"fitzHughNagumoCell",
 		"pinskyRinzelCA3Cell",
+		"hindmarshRose1984Cell",
 		
 		"IF_curr_alpha",
 		"IF_curr_exp",

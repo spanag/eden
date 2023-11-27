@@ -103,7 +103,12 @@
 	/>
 	-->
 	
-	<!-- A novel LEMS cell that receives inputs -->
+	<hindmarshRose1984Cell id="hr_regular"
+		a="1.0" b="3.0" c="-3.0" d="5.0" s="4.0" x1="-1.3" r="0.002"
+		x0="-1.1" y0="-9" z0="1.0" v_scaling="35mV" C="28.57142857 pF"
+	/> <!-- as seen on https://github.com/OpenSourceBrain/HindmarshRose1984/blob/master/NeuroML2/HindmarshRose1984Cell.net.nml -->
+	
+	<!-- A novel LEMS cell that receives inputs LATER if ever ... eventconnection?-->
 	
 	<!-- PyNN stuff -->
 	
@@ -186,6 +191,7 @@
 	<!-- Input sources -->
 	<pulseGenerator     id="pulseGen1"     delay="10ms" duration="50ms" amplitude="0.2nA"/>
 	<pulseGenerator     id="pulseGenE"     delay="10ms" duration="50ms" amplitude="0.8nA"/>
+	<pulseGenerator     id="pulseGenH"     delay="10ms" duration="50ms" amplitude="8.0nA"/>
 	<pulseGeneratorDL   id="pulseDL_1"   delay="10ms" duration="20ms" amplitude="14"/>
 	<sineGenerator      id="Inp_sineGenerator"      delay="20ms" duration="50ms" amplitude="1.0nA" phase="0" period="5ms"/>
 	
@@ -216,6 +222,7 @@
 		<population id="Pop_iafRefCell"               component="iafRef"    size="1" />
 		<population id="Pop_izhikevichCell"           component="izBurst"   size="1" />
 		<population id="Pop_izhikevich2007Cell"       component="iz2007RS"  size="1" />
+		<population id="Pop_hindmarshRose1984Cell"    component="hr_regular" size="1" />
 		<population id="Pop_adExIaFCell"              component="adExBurst" size="1" />
 		<population id="Pop_fitzHughNagumoCell"       component="fn1"       size="1" />
 		<population id="Pop_fitzHughNagumo1969Cell"   component="fn1969"    size="1" />
@@ -236,6 +243,7 @@
 		<explicitInput target="Pop_iafRefCell[0]"               input="pulseGen1" destination="synapses"/>
 		<explicitInput target="Pop_izhikevichCell[0]"           input="pulseDL_1" destination="synapses"/>
 		<explicitInput target="Pop_izhikevich2007Cell[0]"       input="pulseGen1" destination="synapses"/>
+		<explicitInput target="Pop_hindmarshRose1984Cell[0]"    input="pulseGenH" destination="synapses"/>
 		<explicitInput target="Pop_adExIaFCell[0]"              input="pulseGenE" destination="synapses"/>
 		<!-- fitzHughNagumoCell     does not receive current (but it should, it supports I_offset  already) -->
 		<!-- fitzHughNagumo1969Cell does not receive current (but it should, it supports I_offset  already) -->

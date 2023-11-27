@@ -1978,6 +1978,7 @@ struct ArtificialCell{
 		FN,
 		FN_1969,
 		PINSKY_RINZEL_CA3,
+		HR_1984,
 		
 		PYNN_IF_CURR_ALPHA,
 		PYNN_IF_CURR_EXP,
@@ -2004,11 +2005,15 @@ struct ArtificialCell{
 	
 	Real refract; // for refractory-period cells
 	
-	Real a,b,c,d, v0, vpeak, k; // for Izhikevich cells
+	Real a,b,c,d; // for Izhikevich and Hindmarsh-Rose cells
+	Real v0, vpeak, k; // for Izhikevich cells
+	Real v_scaling, r, s, x1, x0, y0, z0; // for Hindmarsh-Rose cells
 	
 	Real vt, delt; // for ADEX cells
 	
 	Real I, phi, w0; // for FN cells
+	
+	// HERE fot HR cells
 	
 	// for Pinsky-Rinzel CA3 cells (why is this a core component?)
 	Real iSoma, iDend, gNmda, gAmpa, gc, gLs, gLd, gNa, gKdr, gCa, gKahp, gKC, eNa, eCa, eK, eL, qd0, pp, alphac, betac, cm;

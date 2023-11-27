@@ -47,7 +47,7 @@ RUN python3 -m pip install tables>=3.3.0
 # ---> Install NeuroML tool reqs
 USER jovyan
 
-RUN python3 -m pip install libneuroml==0.5.3 pyneuroml==1.0.10
+RUN python3 -m pip install libneuroml==0.5.5 pyneuroml==1.1.7
 # or ...Get the original source code
 # WORKDIR $HOME
 # Could also download just the branch to be used,
