@@ -136,7 +136,7 @@ TOOLCHAIN_LIBS_PATH ?= /usr/local/
 
 # Compiler flags
 # TODO more optimization flags
-CFLAGS_basic := -Wall -Werror -Wno-unused-result -lm -lstdc++fs -DBUILD_STAMP=\"$(BUILD_STAMP)\" ${CFLAGS_extra}
+CFLAGS_basic := -Wall -Werror -Wno-unused-result -lm -DBUILD_STAMP=\"$(BUILD_STAMP)\" ${CFLAGS_extra}
 CFLAGS_release := ${CFLAGS_basic} -DNDEBUG -O3
 CFLAGS_debug := ${CFLAGS_basic} -g
 
@@ -149,11 +149,11 @@ CFLAGS_cpu = ${CFLAGS_omp}
 LIBS ?=  
 # TODO use those flags defined above...
 ifneq (,$(findstring linux,$(TARGET)))
-	LIBS := $(LIBS) -ldl
+	LIBS := $(LIBS) -ldl -lstdc++fs
 	# LATER -Wl,-Bstatic -l:libdl.so -Wl,-Bdynamic if it's worth the hassle
 endif
 ifneq (,$(findstring darwin,$(TARGET)))
-	LIBS := $(LIBS) -ldl
+	LIBS := $(LIBS) -ldl -lstdc++fs
 endif
 ifneq (,$(findstring mingw,$(TARGET)))
 	CFLAGS_debug := ${CFLAGS_debug} -Wa,-mbig-obj

@@ -44,7 +44,6 @@ call :wget_if_missing %DOWNLOADS_DIR%\7z1900.msi https://7-zip.org/a/7z1900.msi 
 :: because wget fails to overwrite files in their names are supplied using a list...
 call :wget_if_missing %DOWNLOADS_DIR%\coreutils-5.3.0-bin.zip https://sourceforge.net/projects/gnuwin32/files/coreutils/5.3.0/coreutils-5.3.0-bin.zip || goto :error
 call :wget_if_missing %DOWNLOADS_DIR%\coreutils-5.3.0-dep.zip https://sourceforge.net/projects/gnuwin32/files/coreutils/5.3.0/coreutils-5.3.0-dep.zip || goto :error
-:: %WGET% -O %DOWNLOADS_DIR%\unxutils.zip https://sourceforge.net/projects/unxutils/files/unxutils/current/UnxUtils.zip || goto :error
 call :wget_if_missing %DOWNLOADS_DIR%\unxutils.zip https://sourceforge.net/projects/unxutils/files/unxutils/current/UnxUtils.zip || goto :error
 
 
@@ -54,8 +53,8 @@ call :wget_if_missing "%DOWNLOADS_DIR%\xxd-1.11_win32(static).zip" "https://sour
 
 %WGET% -O %DOWNLOADS_DIR%\gnumake-4.3.exe https://github.com/mbuilov/gnumake-windows/blob/master/gnumake-4.3.exe?raw=true --secure-protocol=TLSV1_3 || goto :error
 
-call :wget_if_missing %DOWNLOADS_DIR%\mingw32.7z "https://sourceforge.net/projects/mingw-w64/files/Toolchains targetting Win32/Personal Builds/mingw-builds/8.1.0/threads-posix/sjlj/i686-8.1.0-release-posix-sjlj-rt_v6-rev0.7z" || goto :error
-call :wget_if_missing %DOWNLOADS_DIR%\mingw64.7z "https://sourceforge.net/projects/mingw-w64/files/Toolchains targetting Win64/Personal Builds/mingw-builds/8.1.0/threads-posix/seh/x86_64-8.1.0-release-posix-seh-rt_v6-rev0.7z" || goto :error
+call :wget_if_missing %DOWNLOADS_DIR%\mingw32.7z "https://github.com/brechtsanders/winlibs_mingw/releases/download/9.5.0-10.0.0-msvcrt-r1/winlibs-i686-posix-dwarf-gcc-9.5.0-mingw-w64msvcrt-10.0.0-r1.7z" || goto :error
+call :wget_if_missing %DOWNLOADS_DIR%\mingw64.7z "https://github.com/brechtsanders/winlibs_mingw/releases/download/9.5.0-10.0.0-msvcrt-r1/winlibs-x86_64-posix-seh-gcc-9.5.0-mingw-w64msvcrt-10.0.0-r1.7z" || goto :error
 
 call :wget_if_missing %DOWNLOADS_DIR%\python-win32.zip https://www.python.org/ftp/python/3.7.9/python-3.7.9-embed-win32.zip || goto :error
 call :wget_if_missing %DOWNLOADS_DIR%\python-amd64.zip https://www.python.org/ftp/python/3.7.9/python-3.7.9-embed-amd64.zip || goto :error
