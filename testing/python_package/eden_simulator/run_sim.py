@@ -21,10 +21,63 @@ from . import embeden
 
 def runEden( example_lems_file, reload_events=False, threads=None, extra_cmdline_args=None, executable_path=None, verbose = False, full_cmdline=None):
 	'''
-	Run LEMS/NeuroML2 file with EDEN
+    Run a NeuroML2/LEMS file with EDEN.
+    
+    
+    Parameters
+    ----------
+    
+    example_lems_file : str
+        The filename where the `<Simulation>` to run is located.
+    
+    reload_events : bool, optional
+        Whether to return a:
+            - `dict` with the recorded time series, mapping each recorded `<LemsQuantityPath>` to its sampled values over time. All samples are taken at the same points in time, represented by the additional time vector `t` in seconds.
+            
+            - or a pair of `dict` s, the first as before and the second mapping each recorded event to its times of occurrence.
+    
+    threads : int, optional
+        The number of threads to run the simulation with, or `None` for automatic selection. 
+    
+    verbose : bool, optional
+        Add some more console output when running the simulator.
+    
+    extra_cmdline_args : list[str], optional
+        Additional command line arguments to pass to EDEN.  
+        Refer to the EDEN user's manual, "Command line API" for more details.
+        
+    full_cmdline : list[str], optional
+        Specify the exact argv to be passed to EDEN.  
+        Refer to the EDEN user's manual, "Command line API" for more details.
+    
+    executable_path : str, optional
+        Select a specific executable of EDEN to run the simulation with. Useful for custom installations and uses of EDEN.
+    
+    
+    Returns
+    -------
+
+    trajectories : dict[str, numpy.ndarray[float[n]]]
+        
+        - *when reload_events == False*
+        
+    (trajectories, events) :  tuple(dict, dict)
+        
+        - *when reload_events == True*; see `reload_events` parameter.
+    
+    
+    Notes
+    -----
+    
+    All values are returned in `fundamental` units or derived thereof.  
+    These are not always SI units!
+    
+    - e.g. molarity is in `mol/m3`, not `mol/L` !
+        
+    Refer to https://en.wikipedia.org/wiki/SI_derived_unit for a list of such units.
 	'''
 	cwd = os.getcwd()
-	#print(cwd)
+	# print(cwd)
 	
 	my_env = os.environ.copy()
 	# my_env["LD_LIBRARY_PATH"] = cwd # LATER add this to the actual location of the executable, in case it is not delocated enough...
@@ -115,6 +168,7 @@ def reload_saved_data(
     remove_dat_files_after_load=False,
 ):
     """Reload data saved from previous EDEN simulation run.
+    
     :param lems_file_name: name of LEMS file that was used to run the simulation.
     :type lems_file_name: str
     :param base_dir: directory to run in

@@ -22,6 +22,7 @@ OBJ_DIR ?= $(OUT_DIR)/obj
 
 # i.e. Python wheel artifacts
 WHEEL_DIR ?= $(BIN_DIR)
+WHEEL_DONT_REPAIR ?= false
 
 # Main product's source code
 SRC_EDEN := $(PROJ_BASE)/eden
@@ -196,10 +197,11 @@ all: clean ${TARGETS} test
 eden:  ${BIN_DIR}/eden${DOT_X}
 ${BIN_DIR}/eden${DOT_X}: ${OBJ_DIR}/eden${DOT_O} ${OBJ_DIR}/Utils${DOT_O} \
 		${OBJ_DIR}/NeuroML${DOT_O} ${OBJ_DIR}/LEMS_Expr${DOT_A} ${OBJ_DIR}/LEMS_CoreComponents${DOT_O} \
-		${OBJ_DIR}/${PUGIXML_NAME}${DOT_O} # third-party libs
+		${OBJ_DIR}/${PUGIXML_NAME}${DOT_O} ${OBJ_DIR}/${CJSON_NAME}${DOT_O} # third-party libs
 	$(CXX) $^ $(LIBS) $(CXXFLAGS) $(CFLAGS_omp) -o $@
 	$(MAYBE_NOT_TARGET_MAC) || true # /usr/bin/ld $@ -headerpad_max_install_names -o $@
-${OBJ_DIR}/eden${DOT_O}: ${SRC_EDEN}/Eden.cpp ${SRC_EDEN}/NeuroML.h ${SRC_EDEN}/neuroml/LEMS_Expr.h ${SRC_COMMON}/Common.h  ${SRC_COMMON}/MMMallocator.h
+${OBJ_DIR}/eden${DOT_O}: ${SRC_EDEN}/Eden.cpp ${SRC_EDEN}/NeuroML.h ${SRC_EDEN}/neuroml/LEMS_Expr.h ${SRC_COMMON}/Common.h  ${SRC_COMMON}/MMMallocator.h \
+	${SRC_CJSON}/cJSON.h
 	$(CXX) -c $< $(CXXFLAGS) $(CFLAGS_omp) -o $@
 
 # own helper libraries
@@ -262,9 +264,9 @@ wheel: eden
 	
 	cd $(WHEEL_BUILD_DIR) && python3 setup_wheel.py --package-version ${WHEEL_VERSION} bdist_wheel  $(EXTRA_WHEEL_PACKAGE_TAGS)
 	
-	$(MAYBE_NOT_TARGET_MAC) || ( delocate-wheel -k --wheel-dir $(WHEEL_BUILD_DIR)/dist/ $(WHEEL_FILE) && delocate-listdeps $(WHEEL_FILE) )
-	$(MAYBE_NOT_TARGET_LINUX) || python3 -m auditwheel repair --plat ${WHEEL_TARGET_PLAT} --only-plat --wheel-dir $(WHEEL_BUILD_DIR)/dist/ $(WHEEL_FILE)
-	$(MAYBE_NOT_TARGET_LINUX) || rm -f $(WHEEL_FILE) # just to avoid confusion with non-manylinux wheel
+	$(WHEEL_DONT_REPAIR) || $(MAYBE_NOT_TARGET_MAC) || ( delocate-wheel -k --wheel-dir $(WHEEL_BUILD_DIR)/dist/ $(WHEEL_FILE) && delocate-listdeps $(WHEEL_FILE) )
+	$(WHEEL_DONT_REPAIR) || $(MAYBE_NOT_TARGET_LINUX) || python3 -m auditwheel repair --plat ${WHEEL_TARGET_PLAT} --only-plat --wheel-dir $(WHEEL_BUILD_DIR)/dist/ $(WHEEL_FILE)
+	$(WHEEL_DONT_REPAIR) || $(MAYBE_NOT_TARGET_LINUX) || rm -f $(WHEEL_FILE) # just to avoid confusion with non-manylinux wheel
 	
 	cp $(WHEEL_BUILD_DIR)/dist/*.whl ${WHEEL_DIR}
 

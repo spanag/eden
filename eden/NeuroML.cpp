@@ -1577,7 +1577,8 @@ bool Model::ParseLemsQuantityPathInComponent(const ILogProxy &log, const Compone
 	Int &namespace_id = lems_instance_qty_path.namespace_thing_seq;
 	namespace_id = comptype.name_space.get_id(propname);
 	if( namespace_id < 0 ){
-		log.error("%s is not a define d quantity in component type %s", propname, component_types.getName(comptype_seq));
+		// FIXME parameters are not visible as namespace things??
+		log.error("%s is not a defined quantity in component type %s", propname, component_types.getName(comptype_seq));
 		return false;
 	}
 	

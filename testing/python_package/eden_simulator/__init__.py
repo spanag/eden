@@ -1,4 +1,6 @@
-
+"""
+EDEN bindings and helpers for Python.
+"""
 
 from .run_sim import runEden
 # version.py gets auto-generated at build time

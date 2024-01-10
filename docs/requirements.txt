@@ -1,0 +1,32 @@
+sphinx==7.1.2
+pydata-sphinx-theme==0.14.4
+
+nbsphinx
+nbconvert==7.8.0
+ipykernel
+pandoc==2.0.1
+sphinxcontrib-bibtex>=2.1
+sphinxcontrib-svg2pdfconverter
+
+sphinx-last-updated-by-git
+sphinx-codeautolink
+
+sphinx-design
+
+notebook<7
+numpy
+pandas
+matplotlib
+
+k3d
+ipyvolume
+
+trimesh
+
+pyrender
+# @ git+https://github.com/mmatl/pyrender@master
+# a newer version of pyopengl is needed: https://github.com/EvelynFan/FaceFormer/issues/7#issuecomment-1092615864
+pyopengl>=3.1.4
+pyopengl_accelerate
+# a side effect of pip trying to meet the 
+networkx>3.2 

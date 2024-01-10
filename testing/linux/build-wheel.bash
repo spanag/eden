@@ -9,6 +9,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/docker/setup-options.bash"
 
 source "$(dirname "${BASH_SOURCE[0]}")/get-version.bash"
 
+WHEEL_VERSION=$VERSION
+
+rm -rf "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
+
+#TODO add an option to build *without* using Docker
+# and merge with the 'build docs' use case
+
 BUILD_ENVVAR_DOCKER_EXTRA=
 if [ -n "$MANYLINUX_CONTAINER_NEEDED_FOR_WHEEL" ]; then
 	BUILD_ENV_IMAGE=eden-manylinux:latest
@@ -24,11 +32,6 @@ else
 fi
 
 make -f "${REPO_DIR}/testing/linux/docker/Makefile" $BUILD_ENV_MAKEFILE_TARGET
-
-WHEEL_VERSION=$VERSION
-
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
 
 # TODO mount source tree readonly - needs to remove use of sandbox...
 $SUDO_DOCKER run -it --rm \
