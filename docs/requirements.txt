@@ -23,8 +23,7 @@ ipyvolume
 
 trimesh
 
-pyrender
-# @ git+https://github.com/mmatl/pyrender@master
+pyrender @ git+https://github.com/mmatl/pyrender@master
 # a newer version of pyopengl is needed: https://github.com/EvelynFan/FaceFormer/issues/7#issuecomment-1092615864
 pyopengl>=3.1.4
 pyopengl_accelerate

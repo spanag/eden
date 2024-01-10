@@ -8,7 +8,7 @@ LF="
 # set -v
 RUN_DIRECT=1
 
-DEBUG_SPHINX=7 # for debugging
+DEBUG_SPHINX= # for debugging
 
 if [ -z "$ARTIFACTS_DIR" ]; then
 	ARTIFACTS_DIR=artifacts_docs
@@ -90,8 +90,9 @@ fi
 rm -rf "$BUILD_DIR/docs" "$ARTIFACTS_DIR"
 # cp -r "$REPO_DIR/docs" "$BUILD_DIR/docs"
 cp -r "$REPO_DIR/." "$BUILD_DIR"
+
 # now build the docs!
-if [ -z "$DONT_RUN_SHPINX" ]; then # TODO a less awkward flag for readthedocs...
+if [ -z "$DONT_RUN_SPHINX" ]; then # TODO a less awkward flag for readthedocs...
 python3 -m sphinx -T -E -W --keep-going -b html -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/html
 fi
 

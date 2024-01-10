@@ -8,7 +8,7 @@ Welcome to EDEN's documentation!
 
 .. https://www.sphinx-doc.org/en/master/usage/restructuredtext/basics.html
 
-**EDEN** (*E*\ xtensible *D*\ ynamics *E*\ ngine for *N*\ eurons) is a simulation program for `spiking neural networks <https://en.wikipedia.org/wiki/Spiking_neural_network>`_ that takes models described in `NeuroML <https://docs.neuroml.org/>`_ and generates the simulated behaviour of these networks.
+**EDEN** (*E*\ xtensible *D*\ ynamics *E*\ ngine for *N*\ etworks) is a simulation program for `spiking neural networks <https://en.wikipedia.org/wiki/Spiking_neural_network>`_ that takes models described in `NeuroML <https://docs.neuroml.org/>`_ and generates the simulated behaviour of these networks.
 
 ..  TODO link TODO rate based?
 

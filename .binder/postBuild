@@ -1,0 +1,5 @@
+#!/bin/bash
+set -ex
+
+pip install eden-simulator -r docs/requirements.txt
+# TODO build and install the freshest eden in the repo instead!
