@@ -2597,8 +2597,8 @@ struct Simulation{
 	
 	// ---> fields
 	// use double values for absolute time values LATER, also for children elements of course
-	Real length; // duration, that's how it's called in LEMS
-	Real step; // timestep, likewise
+	double length; // duration, that's how it's called in LEMS
+	double step; // timestep, likewise
 	
 	Int target_network;
 	

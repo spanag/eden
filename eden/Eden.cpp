@@ -591,7 +591,7 @@ struct EngineConfig{
 	long long work_items;
 	double t_initial; // in engine time units
 	double t_final;
-	float dt; // in engine time units
+	double dt; // in engine time units
 	
 	// NeuroML-standard IO facilities
 	std::vector<TrajectoryLogger> trajectory_loggers;
@@ -10676,6 +10676,8 @@ int main(int argc, char **argv){
 	};
 	const ScaleEntry seconds = {"sec",  0, 1.0};
 	const double EPS_TIMESTAMP = seconds.ConvertTo(1e-9, Scales<Time>::native); // if sim duration exceeds 100 days or dt reaches 1 nsec, contact the author for a better fix
+	// TODO: actually cast the number to float32 and allow a tolerance of ulp because that's how users may write their programs, it doesn't make sense to be by default more strict than this much .. allow a slack value as well TODO and a slack by the number of digits!!
+	// XXX expand width for timestamps, they should hold the whole double!
 	struct TimeseriesReader_File : public LineReader_File{
 		const EngineConfig::TrajectoryReader &reader;
 		
@@ -11486,7 +11488,6 @@ int main(int argc, char **argv){
 	double time = engine_config.t_initial;
 	// need multiple initialization steps, to make sure the dependency chains of all state variables are resolved
 	for( long long step = -3; time <= engine_config.t_final; step++ ){
-		
 		// same as tabs but for the raw raw tables this time at right before step !
 		FloatGetter GetSingleF32 = {global_state_now, global_tables_stateNow_f32, global_tables_const_f32_arrays, tabs};
 		auto GetSingleI64 = [&global_tables_stateNow_i64, &global_tables_const_i64_arrays, &tabs](const RawTablesLocator &tabloc) -> long long & {
