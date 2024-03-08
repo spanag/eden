@@ -62,8 +62,8 @@
     <population id="popS" component="spik" size="1"/>
     <population id="pop0" component="cell" size="1"/>
     
-    <projection id="proj0" presynapticPopulation="popS" postsynapticPopulation="pop0" synapse="old_syn"><connection id="0" preCellId="0" postCellId="0"/></projection>
-    <projection id="proj1" presynapticPopulation="popS" postsynapticPopulation="pop0" synapse="new_syn"><connection id="0" preCellId="0" postCellId="0"/></projection>
+    <projection id="proj0" presynapticPopulation="popS" postsynapticPopulation="pop0" synapse="old_syn"><connectionWD id="0" preCellId="0" postCellId="0" weight="1" delay="2 ms"/></projection>
+    <projection id="proj1" presynapticPopulation="popS" postsynapticPopulation="pop0" synapse="new_syn"><connectionWD id="0" preCellId="0" postCellId="0" weight="1" delay="2 ms"/></projection>
 </network>
 
 <Simulation id="sim1" length="5.03ms" step="0.010ms" target="EdenTestNetwork">

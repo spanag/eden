@@ -10675,7 +10675,8 @@ int main(int argc, char **argv){
 		EventsetFrame(){ timestamp = NEVER_BEFORE(); }
 	};
 	const ScaleEntry seconds = {"sec",  0, 1.0};
-	const double EPS_TIMESTAMP = seconds.ConvertTo(1e-9, Scales<Time>::native); // if sim duration exceeds 100 days or dt reaches 1 nsec, contact the author for a better fix
+	const double EPS_TIMESTAMP_BEFORE = seconds.ConvertTo(1e-9, Scales<Time>::native); // if sim duration exceeds 100 days or dt reaches 1 nsec, contact the author for a better fix
+	const double EPS_TIMESTAMP_AFTER = EPS_TIMESTAMP_BEFORE; // why not
 	// TODO: actually cast the number to float32 and allow a tolerance of ulp because that's how users may write their programs, it doesn't make sense to be by default more strict than this much .. allow a slack value as well TODO and a slack by the number of digits!!
 	// XXX expand width for timestamps, they should hold the whole double!
 	struct TimeseriesReader_File : public LineReader_File{
@@ -10847,7 +10848,7 @@ int main(int argc, char **argv){
 		const FixedWidthNumberPrinter &column_fmt;
 		
 		TimeseriesFrame last_frame; // must be peeked to enforce interval constraints
-		int next_sample; // for walking through explicit pooints
+		int next_sample; // for walking through explicit points
 		
 		TimeseriesWriter(const EngineConfig::TrajectoryLogger &_w, const FixedWidthNumberPrinter &_fm,
 			const std::string &_fn, FILE *_f, bool debug_netcode = false): LineWriter_File(_fn, _f, debug_netcode), logger(_w), column_fmt(_fm){
@@ -10965,8 +10966,8 @@ int main(int argc, char **argv){
 			filename = auth_path;
 		}
 		else{
-			printf("unknown URI scheme %s (suffix %s) for %s \"%s\"", scheme.c_str(), auth_path.c_str(), for_what.c_str(), url.c_str() );
-			exit(1);
+			fprintf(stderr,"unknown URI scheme %s (suffix %s) for %s \"%s\"", scheme.c_str(), auth_path.c_str(), for_what.c_str(), url.c_str() );
+			return false;
 		}
 		// completely disable buffering for magical files like pipes
 		// XXX explicitly flush instead
@@ -11698,18 +11699,29 @@ int main(int argc, char **argv){
 				// bool fetched_new_frame = false;
 				bool applied_frame = false;
 				// TODO keep current frame as well, i guess
-				double time_to_read_until = std::max(time-EPS_TIMESTAMP,0.);
-				while( (reader.next_frame.timestamp <= time_to_read_until) ){
-					if( (reader.next_frame.timestamp >= 0) && !reader.next_frame.values.empty() ){ // or check with "last processed frame" timestamp
-						ApplyFrame();
-						applied_frame = true;
-						// reader.next_frame.values.clear();
+				// HERE is a problem, we really should read continuous transitions within the timestep to be run AND allow lockstep opreration... this would work if reads and writes were async...
+				// how to allow slack while always passing a spike right away? an answer seems to be: log it in the middle of dt...
+				// how to allow slack while always passing a continuous right away then? lockstep is fun...
+				double time_to_read_until = std::max(time-EPS_TIMESTAMP_BEFORE,0.);
+				double time_to_appl_until = std::max(time+EPS_TIMESTAMP_AFTER ,0.);
+				auto MaybeApplyFrameIfReady = [&](){
+					if(reader.next_frame.timestamp <= time_to_appl_until){
+						if( (reader.next_frame.timestamp >= 0) && !reader.next_frame.values.empty() ){ // or check with "last processed frame" timestamp
+							ApplyFrame();
+							applied_frame = true;
+							// reader.next_frame.values.clear();
+						}
 					}
-					if(reader.next_frame.timestamp == time_to_read_until) break; // we don't need more frames to do this timestep
-					// otherwise we need more...
+				};
+				while(
+					(reader.next_frame.timestamp <= time_to_read_until)
+				){
+					MaybeApplyFrameIfReady();
+
+					// we need to read more frames...
 					// make more efficient LATER if needed, by skipping over based on timestamp or sth ... or rather not?
 					if(reader.IsActive()){
-						// printf("fetch timeseries %d %d\n", (int)step, (int)i); fflush(stdout);
+						if(config.debug_netcode){ printf("fetch timeseries %d %d\n", (int)step, (int)i); fflush(stdout);}
 						bool fetch_ok = reader.FetchFrame();
 						if(reader.IsBad()){
 							fprintf(stderr, "Error encountered for reader with url %s , exiting\n", dar.url.c_str());
@@ -11726,6 +11738,8 @@ int main(int argc, char **argv){
 						// reader.next_frame.timestamp = reader.next_frame.NEVER_AGAIN();
 					}
 				}
+				MaybeApplyFrameIfReady(); // on each timestep for now, because it's continuous values
+				
 				// LATER restructure logic, to not double update on every timestep (dependeing on implementation, level of buffering etc...)
 				// TODO put some expicit slack for timestamps to linger, like max_sampling_period, to allow more concurrency.
 				
@@ -11787,16 +11801,22 @@ int main(int argc, char **argv){
 				// bool applied_frame = false;
 				// TODO keep current frame as well, i guess
 				
-				double time_to_read_until = std::max(time-EPS_TIMESTAMP,0.);
+				double time_to_read_until = std::max(time-EPS_TIMESTAMP_BEFORE,0.);
+				double time_to_appl_until = std::max(time+EPS_TIMESTAMP_AFTER ,0.);
+				auto MaybeApplyFrameIfReady = [&](){
+					if(reader.next_frame.timestamp <= time_to_appl_until){
+						if( (reader.next_frame.timestamp >= 0) && !reader.next_frame.instances.empty() ){ // or check with "last processed frame" timestamp
+							ApplyFrame();
+							// applied_frame = true;
+							reader.next_frame.instances.clear();
+						}
+					}
+				};
 				// printf("%f %f %f\n", time,dt,time_to_read_until);
 				// NB: handle all spikes before the timestep, but not exactly *on* the timestep; leave those to be activated on the next timestep (like those on time + epsilon), in line with how cells < actually for spikes...
-				while( (reader.next_frame.timestamp < time_to_read_until) ){
-					if( (reader.next_frame.timestamp >= 0) && !reader.next_frame.instances.empty() ){ // or check with "last processed frame" timestamp
-						ApplyFrame();
-						// applied_frame = true;
-						reader.next_frame.instances.clear();
-					}
-					if(reader.next_frame.timestamp == time_to_read_until) break; // NB: this won't happen, keep it for the intent
+				while( (reader.next_frame.timestamp <= time_to_read_until) ){
+					MaybeApplyFrameIfReady();
+					// if(reader.next_frame.timestamp == time_to_read_until) break; // NB: this won't happen, keep it for the intent
 					// otherwise we need more...
 					// make more efficient LATER if needed, by skipping over based on timestamp or sth ... or rather not?
 					if(reader.IsActive()){
@@ -11815,6 +11835,7 @@ int main(int argc, char **argv){
 						reader.next_frame.timestamp = reader.next_frame.NEVER_AGAIN();
 					}
 				}
+				MaybeApplyFrameIfReady(); // won't repeat if cleared
 				
 				// TODO put some expicit slack for timestamps to linger, like max_sampling_period, to allow more concurrency.
 				

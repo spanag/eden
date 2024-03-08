@@ -1,4 +1,4 @@
-
+#!/bin/python3
 import sys
 import logging
 logging.basicConfig(format='%(levelname)s:%(message)s')#, level=logging.DEBUG)
@@ -12,7 +12,7 @@ else: raise ValueError(f'option "{type}" is not valid; only "event" or "trajecto
 readname = sys.argv[3] #'fifa'
 writname = sys.argv[4] #'fifb'
 # TODO the roundoff can add a jitter of (sim dt) as it stands, make it work assuming dt is an integer timestep of usec...
-delay = 0.010 
+# delay = 0.010 
 
 # s = 'StartA\n'
 logging.debug(f'ReadyA {type} {readname} {writname}')
@@ -41,6 +41,6 @@ with open(readname, 'rb',buffering=0) as fi:
 			# or lstrip() + re.findall(r'^\S', st)[0] to preserve trailnig whitespace
 			upds = str(float(timestamp)+delay)+sep+remainder+'\n'#+f'A {i}! \n'
 			# print('upd', upds.encode("utf-8"))
-			# logging.debug(f'A {i}')
+			# logging.debug(f'A {i} '+upds)
 			fo.write(upds.encode("utf-8"))
 			i += 1

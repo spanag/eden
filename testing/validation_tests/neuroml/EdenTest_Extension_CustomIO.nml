@@ -66,9 +66,9 @@
     <spikeArray id="Inp4"><spike id="0" time="36.001 ms"/></spikeArray>
     
     <!-- Note: the difference between is because of the delayeur introducing a roundoff error EXCEPT when is evenly divisible like 16000 usec
-    This is really the delyeur's fault anc ould eb averted by using rounded off delays or even rounded off timestamps? ... TODO -->
+    This is really the delayeur's fault and could be averted by using rounded off delays or even rounded off timestamps? ... TODO -->
     <spikeArray id="InpSD">
-        <spike id="0" time="16 ms"/>
+        <spike id="0" time="15.999 ms"/>
         <spike id="1" time="27.999 ms"/>
     </spikeArray>
     <spikeArray id="InpSX">

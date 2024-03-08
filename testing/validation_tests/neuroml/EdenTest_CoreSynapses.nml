@@ -62,7 +62,7 @@
     <alphaCondSynapse id="Syn_alphaCondSynapse" tau_syn="2" e_rev="0"/>
     <expCurrSynapse   id="Syn_expCurrSynapse"   tau_syn="2"/>
     <alphaCurrSynapse id="Syn_alphaCurrSynapse" tau_syn="2"/>
-	<!-- FIXME weight, delay !! -->
+	<!-- TODO add more combinations for weight, delay for native vs lems, phy vs. art to test all code paths -->
 	
     <pulseGenerator     id="Inp_pulseGenerator"     delay="10ms" duration="20ms" amplitude="0.2nA"/>
 	<sineGenerator      id="Inp_sineGenerator"      delay="20ms" duration="50ms" amplitude="1.0nA" phase="0" period="5ms"/>
@@ -172,7 +172,7 @@
 			<connection id="0" preCellId="/0" postCellId="/9" preSegmentId="0" postSegmentId="0"/>
 		</projection>
 		<projection id="projChem10" presynapticPopulation="ChemPre" postsynapticPopulation="ChemPost" synapse="Syn_alphaCurrSynapse">
-			<connection id="0" preCellId="/0" postCellId="/10" preSegmentId="0" postSegmentId="0"/>
+			<connectionWD id="0" preCellId="/0" postCellId="/10" preSegmentId="0" postSegmentId="0" weight=".5" delay="10 ms"/>
 		</projection>
 		
 		<projection id="projChem21" presynapticPopulation="ChemPre" postsynapticPopulation="ChemPost" synapse="Syn_alphaCurrentSynapse">

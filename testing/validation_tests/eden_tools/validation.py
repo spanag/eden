@@ -412,9 +412,10 @@ def RunTest(
 		res = VerifySimResults( results_Neuron, results_Eden, criteria,
 			events_Neuron=events_Neuron, events_Eden=events_Eden,
 			skip_missing_criteria=skip_missing, explain_verification_on_fail=explain_verification_on_fail)
-		if res is True and ok:
-			ok = True
-			print('PASS %s %s' % ( test_filename, testcase_type ) )
+		
+		ok = ok and ( res is True )
+		print('%s %s %s' % ( ('PASS' if ok else 'FAIL'), test_filename, testcase_type ) )
+		
 	else:
 		raise ValueError('Unknown test type "'+ typ + '"')
 	

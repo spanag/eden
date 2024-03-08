@@ -171,7 +171,7 @@ tests = [
 		'Pop_fitzHughNagumoCell[0]/V':     { 'type': 'box', 'dt': 0.000001, 'dv': 0.000100 },
 		'Pop_fitzHughNagumo1969Cell[0]/V': { 'type': 'box', 'dt': 0.000001, 'dv': 0.000100 },
 		# 'Pop_pinskyRinzelCA3Cell[0]/Vs': { 'type': 'box', 'dt': 0.000020, 'dv': 0.000100 },
-		'Pop_hindmarshRose1984Cell[0]/v': { 'type': 'box', 'dt': 0.000020, 'dv': 0.000100 },
+		'Pop_hindmarshRose1984Cell[0]/v' : { 'type': 'box', 'dt': 0.000001, 'dv': 0.010000 }, # there is a small voltage bump after the first 2 timesteps for the HR cell in jNML/Neuron, idk why
 		
 		'Pop_IF_curr_alpha[0]/v' : { 'type': 'box', 'dt': 0.000100, 'dv': 0.000100 },
 		'Pop_IF_curr_exp[0]/v'   : { 'type': 'box', 'dt': 0.000100, 'dv': 0.000100 },

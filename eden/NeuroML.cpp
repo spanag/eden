@@ -6191,6 +6191,7 @@ struct ImportState{
 									log.error(eConn, "connection synapse type %s not found", synName);
 									return false;
 								}
+								// TODO like RequiredNmlId
 								// TODO realize any comptype as synapse!!
 								
 								// don't forget to send spikes to sole post-synaptic mechanism when voltage exceeds spikeThresh
