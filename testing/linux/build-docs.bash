@@ -9,14 +9,17 @@ LF="
 # RUN_DIRECT=1
 
 DEBUG_SPHINX= # for debugging
-
-if [ -z "$ARTIFACTS_DIR" ]; then
-	ARTIFACTS_DIR=artifacts_docs
-	echo "ARTIFACTS_DIR was not defined, set to \"$ARTIFACTS_DIR\""
-fi
-if [ -z "$BUILD_DIR" ]; then
-	BUILD_DIR=build_docs
-	echo "BUILD_DIR was not defined, set to \"$BUILD_DIR\""
+if [ -n "$BUILD_IN_PLACE" ]; then
+	echo "BUILD_IN_PLACE set"
+else
+	if [ -z "$ARTIFACTS_DIR" ]; then
+		ARTIFACTS_DIR=artifacts_docs
+		echo "ARTIFACTS_DIR was not defined, set to \"$ARTIFACTS_DIR\""
+	fi
+	if [ -z "$BUILD_DIR" ]; then
+		BUILD_DIR=build_docs
+		echo "BUILD_DIR was not defined, set to \"$BUILD_DIR\""
+	fi
 fi
 
 # https://stackoverflow.com/questions/5265817/how-to-get-full-path-of-a-file
@@ -90,12 +93,14 @@ if [ -n "$RUN_DIRECT" ]; then
 			python3 -m pip install $PIP_INSTALL_BUILD_DOCS_EXTRA -r "$REPO_DIR/docs/requirements.txt" # 
 		fi
 	fi
-
 	# python3 -c "import eden_simulator; print(dir(eden_simulator));"
-	rm -rf "$BUILD_DIR/docs" "$ARTIFACTS_DIR/*"
-	# cp -r "$REPO_DIR/docs" "$BUILD_DIR/docs"
-	cp -r "$REPO_DIR/." "$BUILD_DIR"
-
+	
+	if [ -z "$BUILD_IN_PLACE" ]; then
+		rm -rf "$BUILD_DIR/docs" "$ARTIFACTS_DIR/*"
+		# cp -r "$REPO_DIR/docs" "$BUILD_DIR/docs"
+		cp -r "$REPO_DIR/." "$BUILD_DIR"
+	fi
+	
 	# now build the docs!
 	if [ -z "$DONT_RUN_SPHINX" ]; then # TODO a less awkward flag for readthedocs...
 		python3 -m sphinx -T -E -W --keep-going -b html -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/html
