@@ -1,5 +1,64 @@
 #!/bin/bash
 set -ex
+LF="
+"
+DEB_ARCH=$(dpkg --print-architecture)
 
-pip install eden-simulator -r docs/requirements.txt
-# TODO build and install the freshest eden in the repo instead!
+if [ -z $ONLY_BUILD_EDEN ]; then
+if [ -z $READTHEDOCS ]; then
+	apt-get update 
+	# get chrome(ium) from a deb file because Ubuntu only provides them in `snap` format which doesn't work in Docker (namely Colab, Binder, readthedocs &c).
+	# Install Google Chrome™ not Chromium, because sometimes chromium packages are not compatible with ubuntu, and sometimes automation expects the branded, encumbered Google Chrome™
+	# https://askubuntu.com/questions/79280/how-to-install-chrome-browser-properly-via-command-line
+	# https://unix.stackexchange.com/questions/612981/install-older-versions-of-google-chrome-stable-on-ubuntu-14-10
+	# https://www.ubuntuupdates.org/package/google_chrome/stable/main/base/google-chrome-stable
+	# these may work on ubuntu: http://packages.linuxmint.com/pool/upstream/c/chromium/
+	CHROME_VERSION="121.0.6167.160"
+	CHROME_DEB_FILEPATH=/tmp/chrome.deb
+	wget --no-verbose -O "${CHROME_DEB_FILEPATH}" https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROME_VERSION}-1_${DEB_ARCH}.deb
+	apt-get install -y --fix-broken "${CHROME_DEB_FILEPATH}"
+	rm -f "${CHROME_DEB_FILEPATH}"
+	ls -la /home/jovyan
+	# google-chrome --version touches ~/.local, it should not run as root ! ($HOME may be set to /home/jovyan in jupyter docker images)
+	sudo --user jovyan $(which google-chrome) --version
+	# ls -la /home/jovyan
+	# exit 1
+fi
+fi
+echo $PATH
+# why are pip and python not found, and why does python3 say it doesn't have pip ?  the answer, my friend, is ...
+# that sudo'd commands run under a different PATH !
+# https://stackoverflow.com/questions/44726377/sudo-python-command-not-found
+
+# TODO build and install the freshest eden in the repo instead! But only if not on main i guess?
+if [ -z $DONT_BUILD_EDEN ]; then
+	# now set up the config...
+	REPO_DIR="$(dirname "${BASH_SOURCE[0]}")/../"
+	cd $REPO_DIR
+	ls -l
+	source "testing/linux/default-repo-path.bash"
+
+	# more elegant LATER
+	source "testing/linux/setup-options.bash"
+	source "testing/linux/get-version.bash"
+
+	OUT_DIR="$(sudo --user jovyan mktemp -d)"
+	ENV+=OUT_DIR="$OUT_DIR"$LF
+	ENV+=BUILD_STAMP="$VERSION"$LF
+	ENV+=BUILD="release"$LF
+	ENV+=TARGETS="eden wheel"$LF
+	ENV+=WHEEL_VERSION="$VERSION"$LF
+	ENV+=WHEEL_DONT_REPAIR="true"$LF # instead of qualifying a plat_name
+	ENV+=PATH="$PATH"$LF
+	VNE=$(printf '%s' "$ENV" | awk -F= '{printf "%s=\"%s\" ",$1,$2 ;}')
+	( cd "${REPO_DIR}"; sudo --user jovyan env -S "$VNE" bash -c "testing/linux/docker/build_on_docker.bash") #TODO refactor
+	# ls -la $OUT_DIR/bin
+	ls -la /home/jovyan
+	sudo --user jovyan $(which pip) uninstall -y eden-simulator
+	WHEEL_TO_TEST=$(find "$OUT_DIR/bin" -type f -name "eden_simulator-$VERSION-py3-none-*.whl")
+	sudo --user jovyan $(which pip) install "$WHEEL_TO_TEST"
+	ls -la /home/jovyan
+	# exit 1
+	rm -rf "$OUT_DIR"
+	cd -
+fi

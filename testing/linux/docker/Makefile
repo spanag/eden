@@ -7,6 +7,7 @@ PROJ_BASE ?= $(TESTING_DIR)/../
 USER_UID_GID = $(shell id -u):$(shell id -g)
 
 EDEN_DOCKER_BUILD_ENV_IMAGE_NAME?=eden-build
+EDEN_DOCKER_BUILD_DOCS_ENV_IMAGE_NAME?=eden-build-docs
 EDEN_DOCKER_BUILD_MANYLINUX_IMAGE_NAME?=eden-manylinux
 EDEN_DOCKER_TEST_ENV_IMAGE_NAME?=eden-test
 EDEN_DOCKER_IMAGE_NAME?=eden-standalone
@@ -14,6 +15,7 @@ EDEN_DOCKER_IMAGE_TAG?=latest
 
 EDEN_DOCKER_BUILD_MANYLINUX_IMAGE_FULLNAME?=${EDEN_DOCKER_BUILD_MANYLINUX_IMAGE_NAME}:${EDEN_DOCKER_IMAGE_TAG}
 EDEN_DOCKER_BUILD_ENV_IMAGE_FULLNAME?=${EDEN_DOCKER_BUILD_ENV_IMAGE_NAME}:${EDEN_DOCKER_IMAGE_TAG}
+EDEN_DOCKER_BUILD_DOCS_ENV_IMAGE_FULLNAME?=${EDEN_DOCKER_BUILD_DOCS_ENV_IMAGE_NAME}:${EDEN_DOCKER_IMAGE_TAG}
 EDEN_DOCKER_TEST_ENV_IMAGE_FULLNAME?=${EDEN_DOCKER_TEST_ENV_IMAGE_NAME}:${EDEN_DOCKER_IMAGE_TAG}
 EDEN_DOCKER_IMAGE_FULLNAME?=${EDEN_DOCKER_IMAGE_NAME}:${EDEN_DOCKER_IMAGE_TAG}
 
@@ -21,6 +23,8 @@ SUDO_DOCKER:=${DOCKER_TESTING_DIR}/sudo_docker.bash # workaround to omit sudo if
 
 docker_build_env: ${DOCKER_TESTING_DIR}/build_env.Dockerfile
 	${SUDO_DOCKER} build -t ${EDEN_DOCKER_BUILD_ENV_IMAGE_FULLNAME} - < $<
+docker_build_docs_env: ${DOCKER_TESTING_DIR}/build_docs_env.Dockerfile
+	${SUDO_DOCKER} build -t ${EDEN_DOCKER_BUILD_DOCS_ENV_IMAGE_FULLNAME} --file $< ${PROJ_BASE}
 docker_build_manylinux: ${DOCKER_TESTING_DIR}/build_manylinux.Dockerfile
 	${SUDO_DOCKER} build --build-arg MANYLINUX_IMAGE=${MANYLINUX_IMAGE} -t ${EDEN_DOCKER_BUILD_MANYLINUX_IMAGE_FULLNAME} - < $<
 
@@ -38,7 +42,7 @@ build_eden_for_docker: ${DOCKER_TESTING_DIR}/eden_standalone.Dockerfile docker_b
 
 # automatic, containerized testing
 # add all containers as dependencies to ensure that at least, they are built, LATER actually run the tests for all images
-test: docker_test_env build_eden_for_docker
+test: docker_test_env build_eden_for_docker docker_build_docs_env
 	rm -rf testing/sandbox/validation_tests
 	cp -rT ${PROJ_BASE}testing/validation_tests testing/sandbox/validation_tests
 	chmod -R 777 testing/sandbox/validation_tests

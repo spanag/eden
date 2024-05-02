@@ -2700,7 +2700,7 @@ struct NmlImportContext_Holder{
 };
 
 // Get the NeuroML model, use NmlImportContext_Holder to keep its strings loaded also
-bool ReadNeuroML(const char *filename, Model &model, bool entire_simulation, bool verbose = false, FILE *info_log = stdout, FILE *error_log = stderr);
-bool ReadNeuroML(const char *filename, Model &model, bool entire_simulation, NmlImportContext_Holder &import_context, bool verbose = false, FILE *info_log = stdout, FILE *error_log = stderr);
+bool ReadNeuroML(const char *filename, Model &model, bool verbose = false, FILE *info_log = stdout, FILE *error_log = stderr);
+bool ReadNeuroML(const char *filename, Model &model, NmlImportContext_Holder &import_context, bool verbose = false, FILE *info_log = stdout, FILE *error_log = stderr);
 
 #endif

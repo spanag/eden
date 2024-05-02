@@ -1,9 +1,7 @@
+# Sphinx stuff
 sphinx==7.1.2
 pydata-sphinx-theme==0.14.4
 
-nbsphinx
-nbconvert==7.8.0
-ipykernel
 pandoc==2.0.1
 sphinxcontrib-bibtex>=2.1
 sphinxcontrib-svg2pdfconverter
@@ -13,12 +11,26 @@ sphinx-codeautolink
 
 sphinx-design
 
+# Sphinx + Jupyter stuff
+nbsphinx
+nbconvert==7.8.0
+ipykernel
+
+
+# Jupyter stuff
 notebook<7
 numpy
+scipy>=1.12 # for an evenly spread, *quasi* pseudo random distribution
+
+# Display + demo stuff
+eden-simulator
 pandas
 matplotlib
+si-prefix # for human readable sizes
+pint>=0.23 # for physical quantity math
+pyoxipng # for compressing figures
 
-k3d
+k3d[dev, examples]
 ipyvolume
 
 trimesh
@@ -27,5 +39,5 @@ pyrender @ git+https://github.com/mmatl/pyrender@master
 # a newer version of pyopengl is needed: https://github.com/EvelynFan/FaceFormer/issues/7#issuecomment-1092615864
 pyopengl>=3.1.4
 pyopengl_accelerate
-# a side effect of pip trying to meet the 
+# a side effect of pip trying to meet the combination of pyrender and pyopengl...
 networkx>3.2 

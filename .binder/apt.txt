@@ -1,2 +1,6 @@
+# for 
 libosmesa6
-# TODO flex, bison ... to build the freshest eden.
+
+# flex, bison ... to build the freshest eden.
+flex
+bison

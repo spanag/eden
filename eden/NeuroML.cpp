@@ -856,11 +856,29 @@ void Model::LemsSegmentLocatorToString( const Network &net, const Simulation::Le
 	ret += net.populations.getName(path.population) + ("["+accurate_string(path.cell_instance)+"]");
 	// if it's a physical cell, add an explicit segment locator, just to be nice
 	if(cell.type == CellType::PHYSICAL){
+		// printf("patth %ld %f\n",path.segment_seq,path.fractionAlong);
+		const Morphology &morph = morphologies.get(cell.physical.morphology);
 		// add segment locator
 		ret += "/";
-		ret += accurate_string(path.segment_seq);
-		if(path.fractionAlong != 0.5) ret += accurate_string(path.fractionAlong);
-		// don't add a slash in the end, refer to the very point on cell
+		ret += accurate_string(morph.segments.getId(path.segment_seq));
+		if(path.fractionAlong != 0.5){
+			// TODO constant!
+			float clamped_frac = path.fractionAlong;
+			float max_clamped_fractionAlong = .99999; // or nextafterf(1,0)? beware of text roundoff though
+			if(max_clamped_fractionAlong < clamped_frac) clamped_frac = max_clamped_fractionAlong;
+			if(clamped_frac < 0) clamped_frac = 0;
+			char tmps[50];
+			sprintf(tmps, "%.17f", clamped_frac);
+			std::string sFrac = tmps;
+			size_t dot = sFrac.find('.');
+			if(dot == std::string::npos){
+				ret += ".0";
+			}
+			else{
+				ret += sFrac.c_str()+1;// assume "0.xyz"
+			}
+			// printf("patth %s\n",ret.c_str());
+		}// don't add a slash in the end, refer to the very point on cell
 	}
 	return;
 }
@@ -1478,9 +1496,15 @@ bool Model::ParseLemsSegmentLocator(const ILogProxy &log, const std::vector<std:
 	auto GetFractionalSegmentId = [&MatchesFractionalSegmentId](const char *sId, Int &segment_id, Real &fractionAlong){
 		if(!MatchesFractionalSegmentId(sId)) return false;
 		auto dot = strchr(sId,'.');
+		// printf("parss %s\n",sId);
+		// exit(54);
 		if(dot){
 			if(!StrToL(sId, segment_id, false)) return false; // allow stopping at dot
 			if(!( StrToF(dot, fractionAlong) && 0 <= fractionAlong && fractionAlong <= 1 )) return false;
+			float max_clamped_fractionAlong = .99998; // or nextafterf(1,0)? beware of text roundoff though...
+			if(max_clamped_fractionAlong <= fractionAlong) fractionAlong = 1; // XXX workaround
+			
+			// printf("parss %ld %f\n",segment_id,fractionAlong);
 		}
 		else{
 			if(!StrToL(sId, segment_id)) return false;
@@ -8200,7 +8224,7 @@ struct ImportState{
 				const auto &eOutFile = eSimEl;
 				Simulation::EventWriter evw;
 				bool is_classic_type = (strcmp(eSimEl.name(), "EventOutputFile") == 0);
-				if(is_classic_type) log.warning(eSimEl, eSimEl.name()); 
+				if(!is_classic_type) log.warn_experimental(eSimEl, eSimEl.name());
 				
 				//unique name
 				auto outfi_name = RequiredNmlId(log, eOutFile, sim.event_writers);
@@ -9571,7 +9595,7 @@ struct ImportState{
 
 //Top-level NeuroML import routine
 // TODO add debug mode
-bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simulation, NmlImportContext &import_context, bool verbose, FILE *info_log, FILE *error_log){
+bool ReadNeuroML(const char *top_level_filename, Model &model, NmlImportContext &import_context, bool verbose, FILE *info_log, FILE *error_log){
 	
 	bool ok = false;
 	fprintf(info_log, "Starting import from NeuroML file %s\n", top_level_filename);
@@ -10022,12 +10046,6 @@ bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simul
 		if( !import_state.ParseSimulation(log, eElm) ) goto CLEANUP; }
 		
 	// parse the hopefully unique target
-	if( entire_simulation ){
-	if(top_level_nodes_by_name.getOrNew("Target").empty()){
-		fprintf(error_log, "no <Target> tag specified\n");
-		goto CLEANUP;
-	}
-	}
 	for(const pugi::xml_node &eElm : top_level_nodes_by_name.getOrNew("Target") ){
 		if( !import_state.ParseTarget(log, eElm) ) goto CLEANUP; }
 	
@@ -10060,11 +10078,11 @@ NmlImportContext_Holder &NmlImportContext_Holder::operator=( NmlImportContext_Ho
 };
 NmlImportContext_Holder::~NmlImportContext_Holder() = default;
 
-bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simulation, bool verbose, FILE *info_log, FILE *error_log){
+bool ReadNeuroML(const char *top_level_filename, Model &model, bool verbose, FILE *info_log, FILE *error_log){
 	NmlImportContext import_context; // just make up one on the spot
-	return ReadNeuroML(top_level_filename, model, entire_simulation, import_context, verbose, info_log, error_log);
+	return ReadNeuroML(top_level_filename, model, import_context, verbose, info_log, error_log);
 	// beware: non-essential information like strings and xml tags, filenames etc are lost after this point, unless a holter is used!!
 }
-bool ReadNeuroML(const char *top_level_filename, Model &model, bool entire_simulation, NmlImportContext_Holder &import_context_holder, bool verbose, FILE *info_log, FILE *error_log){
-	return ReadNeuroML(top_level_filename, model, entire_simulation, *(import_context_holder.impl), verbose, info_log, error_log);
+bool ReadNeuroML(const char *top_level_filename, Model &model, NmlImportContext_Holder &import_context_holder, bool verbose, FILE *info_log, FILE *error_log){
+	return ReadNeuroML(top_level_filename, model, *(import_context_holder.impl), verbose, info_log, error_log);
 }

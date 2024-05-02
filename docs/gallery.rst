@@ -8,10 +8,11 @@ Examples
 .. nblinkgallery::
     :caption: Tutorials
     :name: rst-link-tutorials
-
+    
     quickstart
+    tut_net
+    exa_lfp
 
-.. anim
 
 ..
     .. nblinkgallery::

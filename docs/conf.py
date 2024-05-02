@@ -35,8 +35,9 @@ repo_name = 'eden'
 repo_url_prefix = f'https://gitlab.com/{repo_gitlab_user}/{repo_name}'
 repo_url_prefix_github = f'https://github.com/{repo_github_user}/{repo_name}'
 repo_gitlab_user_binder = repo_gitlab_user.replace('/','%2F')
+line_length_limit = 100_000_000_000
 
-for x in ['repo_gitlab_user', 'repo_github_user', 'repo_gitlab_user_binder', 'repo_name', 'repo_url_prefix', 'repo_url_prefix_github', 'repo_tag']: html_context[x] = globals()[x]
+for x in ['repo_gitlab_user', 'repo_github_user', 'repo_gitlab_user_binder', 'repo_name', 'repo_url_prefix', 'repo_url_prefix_github', 'repo_tag','line_length_limit']: html_context[x] = globals()[x]
 
 print(repo_local_path) 
 print(html_context)
@@ -55,7 +56,7 @@ html_theme_optionss = {'lalala':'444'}
 
 
 extensions = [
-	# 'sphinx.ext.autodoc',
+	'sphinx.ext.autodoc',
 	'sphinx.ext.autosummary',
 	'sphinx.ext.napoleon',
 	
@@ -83,9 +84,21 @@ def autodoc_skip_member(app, what, name, obj, would_skip, options):
 
 autodoc_default_options = {
     "exclude-members": "main, parse_dict_arg, parse_list_arg, build_namespace, convert_case, process_args",
+    "imported-members":True,
 }
+
+autosummary_generate = True  # Turn on sphinx.ext.autosummary, because why have it just work https://stackoverflow.com/questions/62613202/automatically-document-all-modules-recursively-with-sphinx-autodoc
+# it needs autyomodule to not be used on the same page, to show the module (if automodule precedes it then autosummary applies to children of the module)
+autosummary_ignore___all__ = False # sane behaviour was added in late 2021, as a niche alternative. But it doens't have an effect anyway...
 	
 # nbsphinx
+
+# hardcoded thumbnails for notebooks which normally don't show them, and for .gif thumbnails
+nbsphinx_thumbnails = {
+    'tut_net': '_static/thumb_tut_net.gif',
+    'exa_lfp': '_static/thumb_exa_lfp.png',
+}
+
 # This is processed by Jinja2 and inserted before each notebook https://github.com/spatialaudio/nbsphinx/blob/0.9.3/doc/conf.py#L43
 # https://github.com/spatialaudio/nbsphinx/issues/419#issuecomment-603522609
 # Add links to Binder, TODO deep, colab
@@ -100,7 +113,7 @@ nbsphinx_prolog = r"""
 
 .. raw:: html
 
-    <div class="admonition note">
+    <div id="run-notebook-online" class="admonition tip">
       This page was generated from
       <a class="reference external" href="{{ v.repo_url_prefix|e }}/blob/{{ v.repo_tag|e }}/{{ docname|e }}">{{ docname|e }}</a>.
       <span style="white-space: nowrap;">Interactive online version:</span>
@@ -143,8 +156,16 @@ rst_prolog = r"""
 """
 
 def setup(app):
+	import os
+	os.makedirs("docs/_images", exist_ok=True)
+	
 	# autodoc
 	app.connect("autodoc-skip-member", autodoc_skip_member)
+	def builder_inited(app):
+		env = app.env
+		env.settings['line_length_limit'] = 10_000_000_000 # NB: there's not much use making files bigger than the default 100M though
+	
+	app.connect('builder-inited', builder_inited)
 
 # -- Options for EPUB output --
 

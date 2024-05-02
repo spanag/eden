@@ -1,4 +1,5 @@
 Latest
+- Add experimental feature: `explain cell` which provides the per-compartment peroperties of physical cells, as well as per-compartment paintable 3D meshes of their shapes
 - Add support for <EventOutputFile> raster output
 - Add support for the newly standardized NeuroML artificial cell <hindmarshRose1984Cell>
 - Add support for alternative fluxes to artificial cells, via <DerivedVariable select="synapses[*]/<id>" reduce="add" />

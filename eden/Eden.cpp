@@ -19,12 +19,14 @@ Parallel simulation engine for ODE-based models
 
 #include "Common.h"
 #include "NeuroML.h"
+#include "MMMallocator.h"
 
+// std c headers
 #include <math.h>
 #include <limits.h>
 #include <errno.h>
 
-
+// std c++ headers
 #include <map>
 #include <set>
 #include <chrono>
@@ -33,14 +35,17 @@ Parallel simulation engine for ODE-based models
 #include <sstream>
 #include <filesystem>
 
-#include "MMMallocator.h"
+// third party included headers
+#include "thirdparty/cJSON-1.7.1/cJSON.h"
 
+// external dependency headers
 #include <omp.h>
 
 #ifdef USE_MPI
 #include <mpi.h>
 #endif
 
+// os headers
 #if defined (__linux__) || defined(__APPLE__)
 #include <dlfcn.h> // for dynamic loading
 #endif
@@ -338,6 +343,1389 @@ bool GetCellLocationFromPath( const Network &net, const Simulation::LemsEventPat
 	}
 	return loca.ok();
 }
+
+auto EvaluateLemsExpression = []( 
+	const TermTable &expression, const auto &symbol_values, const auto &symbol_dimensions, 
+	const DimensionSet &dimensions, Int &random_call_counter, 
+	Real &val_out, Dimension &dim_out, const auto &call_random 
+){
+	
+	auto Evaluate = [ ]( 
+		const auto &Evaluate, // the most elegant way to make a lambda recursive, oh well
+		const TermTable &expression, int node, const auto &symbol_values, const auto &symbol_dimensions, 
+		const DimensionSet &dimensions, Int &random_call_counter, 
+		Real &val_out, Dimension &dim_out, const auto &call_random 
+	)
+	-> void // Return type must be made explicit before recursive calls in the code, a line with if(0) return; could also work
+	{
+		
+		const auto &tab = expression;
+		//printf("node %d \n", node);
+		auto &term = tab[node];
+		if(term.type == Term::VALUE){
+			val_out = term.value;
+			dim_out = Dimension::Unity();
+		}
+		else if(term.type == Term::SYMBOL){
+			val_out = symbol_values[term.symbol];
+			dim_out = symbol_dimensions[term.symbol];
+		}
+		else if(term.isUnary() || term.isBinaryOperator()){
+			
+			// it is a math operation, could cause  dimension change -> possible conversion factor to shift between engine units
+			LemsUnit conversion_factor =  dimensions.GetNative(Dimension::Unity()); // or override
+			
+			if(term.isBinaryOperator()){
+				Real      val_l, val_r;
+				Dimension dim_l, dim_r;
+				
+				Evaluate(Evaluate, expression, term.left , symbol_values, symbol_dimensions, dimensions, random_call_counter, val_l, dim_l, call_random );
+				Evaluate(Evaluate, expression, term.right, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_r, dim_r, call_random );
+				
+				if(term.type == Term::PLUS){
+					val_out = val_l + val_r;
+					dim_out = dim_r; // NeuroML API should have ensured consistency
+				}
+				else if(term.type == Term::MINUS ){
+					val_out = val_l - val_r;
+					dim_out = dim_r; // NeuroML API should have ensured consistency
+				}
+				else if(term.type == Term::TIMES ){
+					val_out = val_l * val_r;
+					dim_out = dim_l * dim_r;
+					// correct for change of engine units...
+					val_out = ( dimensions.GetNative(dim_l) * dimensions.GetNative(dim_r) ).ConvertTo(val_out, dimensions.GetNative(dim_out)) ;
+				}
+				else if(term.type == Term::DIVIDE){
+					val_out = val_l / val_r;
+					dim_out = dim_l / dim_r;
+					// correct for change of engine units...
+					val_out = ( dimensions.GetNative(dim_l) / dimensions.GetNative(dim_r) ).ConvertTo(val_out, dimensions.GetNative(dim_out)) ;
+				}
+				else if(term.type == Term::LT    ){
+					val_out = ( val_l < val_r ) ? 1 : 0;
+					dim_out = Dimension::Unity(); // boolean
+				}
+				else if(term.type == Term::GT    ){
+					val_out = ( val_l > val_r ) ? 1 : 0;
+					dim_out = Dimension::Unity(); // boolean
+				}
+				else if(term.type == Term::LEQ   ){
+					val_out = ( val_l <= val_r ) ? 1 : 0;
+					dim_out = Dimension::Unity(); // boolean
+				}
+				else if(term.type == Term::GEQ   ){
+					val_out = ( val_l >= val_r ) ? 1 : 0;
+					dim_out = Dimension::Unity(); // boolean
+				}
+				else if(term.type == Term::EQ    ){
+					val_out = ( val_l == val_r ) ? 1 : 0;
+					dim_out = Dimension::Unity(); // boolean
+				}
+				else if(term.type == Term::NEQ   ){
+					val_out = ( val_l != val_r ) ? 1 : 0;
+					dim_out = Dimension::Unity(); // boolean
+				}
+				else if(term.type == Term::AND   ){
+					val_out = ( (bool)val_l && (bool)val_r ) ? 1 : 0;
+					dim_out = Dimension::Unity(); // boolean
+				}
+				else if(term.type == Term::OR    ){
+					val_out = ( (bool)val_l || (bool)val_r ) ? 1 : 0;
+					dim_out = Dimension::Unity(); // boolean
+				}
+				else if(term.type == Term::POWER ){
+					val_out = std::pow( val_l, val_r );
+					dim_out = Dimension::Unity(); // XXX i know
+				}
+				else{
+					assert(false);
+				}
+			}
+			else if( term.type == Term::RANDOM ){
+				Real val_r;
+				Dimension dim_r;
+				Evaluate(Evaluate, expression, term.right, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_r, dim_r, call_random );
+				
+				val_out = call_random(val_r, random_call_counter);
+				random_call_counter++;
+				
+				dim_out = dim_r; // should be pure number
+			}
+			else if(term.isUnaryFunction()){
+				Real val_r;
+				Dimension dim_r;
+				Evaluate(Evaluate, expression, term.right, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_r, dim_r, call_random );
+				
+						if(term.type == Term::ABS   ){ val_out = std::abs  ( val_r ); }
+				else if(term.type == Term::SQRT  ){ val_out = std::sqrt ( val_r ); }
+				else if(term.type == Term::SIN   ){ val_out = std::sin  ( val_r ); }
+				else if(term.type == Term::COS   ){ val_out = std::cos  ( val_r ); }
+				else if(term.type == Term::TAN   ){ val_out = std::tan  ( val_r ); }
+				else if(term.type == Term::SINH  ){ val_out = std::sinh ( val_r ); }
+				else if(term.type == Term::COSH  ){ val_out = std::cosh ( val_r ); }
+				else if(term.type == Term::TANH  ){ val_out = std::tanh ( val_r ); }
+				else if(term.type == Term::EXP   ){ val_out = std::exp  ( val_r ); }
+				else if(term.type == Term::LOG10 ){ val_out = std::log10( val_r ); }
+				else if(term.type == Term::LN    ){ val_out = std::log  ( val_r ); }
+				else if(term.type == Term::CEIL  ){ val_out = std::ceil ( val_r ); }
+				else if(term.type == Term::FLOOR ){ val_out = std::floor( val_r ); }
+				else if(term.type == Term::HFUNC ){ val_out = ( val_r < 0 ) ? 0 : 1; }
+				else{
+					assert(false);
+				}
+				
+				// math functions conveniently map from pure number to pure number, LATER specialcase if needed
+				dim_out = dim_r;
+			}
+			else if(term.isUnaryOperator()){
+				Real val_r;
+				Dimension dim_r;
+				Evaluate(Evaluate, expression, term.right, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_r, dim_r, call_random );
+				
+				if(term.type == Term::UMINUS ){
+					val_out = -val_r;
+					dim_out = dim_r;
+				}
+				else if(term.type == Term::UPLUS ){
+					val_out = +val_r;
+					dim_out = dim_r;
+				}
+				else if(term.type == Term::NOT ){
+					val_out = (bool)val_r;
+					dim_out = Dimension::Unity(); // boolean
+				}
+				else{
+					assert(false);
+				}
+			}
+			else{
+				assert(false);
+			}
+			
+		}
+		else{
+			printf("unknown term %d !\n", term.type);
+			assert(false); // TODO something better
+		}
+		// append debug info for e.g. dimensions
+		// printf("%g %s\n", val_out, dimensions.Stringify(dim_out).c_str());
+		//printf("bye node %d \n", node);
+	};
+	//TermTable::printTree(expression.tab, expression.tab.expression_root, 0);
+	val_out = NAN; // just to initialize
+	dim_out = Dimension::Unity(); // just to initialize
+	Evaluate(Evaluate, expression, expression.expression_root, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_out, dim_out, call_random);
+	return;
+};
+
+// The mapping of NeuroML segments to compartments.
+// When the the "cable" attribute is not used, each segment maps to one compartment.
+// But when cables are introduced, multiple segments could map to compartments and vice versa, and not exclusively:
+// 	two compartments could include (separate) parts of the same segment and two segments
+// This is because NeuroML2 <segment>s have the semantics of 3D points of a section, as well as sections themselves.
+struct CompartmentDiscretization{
+	
+	int32_t number_of_compartments;
+	
+	// for each segment(seg_seq), keep a list of the compartments it spans, and up to which fractionAlong it spans them.
+	// (Implicitly, the first compartment in the list contains the start of the segment ie where fractionAlong = 0.)
+	// NB: Each segment overlapping a cable is fully contained by it, thus it 
+	std::vector< std::vector<int32_t> >segment_to_compartment_seq; 
+	std::vector< std::vector<Real> >segment_to_compartment_fractionAlong;
+	// for each compartment, keep a list of the segments it contains, and fractionAlong for beginning and end.
+	// (Implicitly, each segment in between is included until its end and from its start.)
+	std::vector< std::vector<int32_t> >compartment_to_segment_seq; 
+	std::vector< Real >compartment_to_first_segment_start_fractionAlong;
+	std::vector< Real >compartment_to_last_segment_end_fractionAlong;
+	
+	// Also keep the tree-parent relationships, for they are not immediately clear without re-analysing cables
+	std::vector<int32_t>tree_parent_per_compartment; //-1 for root
+	
+	// Note that every cell could be unique, and perhaps 16 bits are enough to describe neurons...
+	// LATER efficiency trick: keep the above lists empty, non existent or something, for cases where the mapping is 1 to 1
+	
+	
+	
+	// Get the comp_seq which contains the fractionAlong across seg_seq (for this abstract mapping; layout in memory could be different)
+	int32_t GetCompartmentForSegmentLocation(Int seg_seq, Real fractionAlong) const {
+		// printf("Compartment for seg_seq %d fractionAlong %g \n", (int)seg_seq, fractionAlong );
+		// There is a possibillity for fractionAlong to deviate due to roundoff, perhaps the value could be clipped instead
+		assert( (0 <= fractionAlong) && (fractionAlong <= 1) );
+		
+		// the correct compartment is the first whose ending fractionAlong exceeds (thus it overlaps) the target fractionAlong
+		// use std::lower_bound if you find it better, through measurement
+		for( int i = 0; i < (int) segment_to_compartment_fractionAlong[seg_seq].size(); i++ ){
+			// printf("\tcheck %d %g ...\n", (int)segment_to_compartment_seq[seg_seq][i] , segment_to_compartment_fractionAlong[seg_seq][i] );
+			// <= used for fractionAlong = 1 case
+			if( fractionAlong <= segment_to_compartment_fractionAlong[seg_seq][i] ){
+				return segment_to_compartment_seq[seg_seq][i];
+			}
+		}
+		// on second thought, the whole range of fractionAlong should be covered, since segment_to_compartment_fractionAlong[seg_seq] ends in 1...
+		// Last chance fallback: produce the last segment (more likely to not include fractionAlong = 1, because of roundoff)
+		assert(false);
+		int32_t last_compartment = segment_to_compartment_fractionAlong[seg_seq].size() - 1;
+		if(last_compartment >= 0){
+			return last_compartment;
+		}
+		else return -1;
+	}
+	
+};
+
+// TODO distribute better 
+
+// preprocess Morphology for geometry, connectivity info, and compartmental subdivision
+// interaction between state variables is, of course, also determined by connectivity between compartments
+// NeuroML assumes a tree model of truncated cone-shaped 'segments'
+// 	( which may be further subdivided in compartments, for compatibility with NEURON )
+bool GetCompartmentDiscretizationForCellType(const Morphology &morph, CompartmentDiscretization &comp_disc, bool debug_mode = false){
+	
+	// const bool verbose = false;
+	const bool debug_log_discretisation = (debug_mode && 0);
+	
+	
+	// Before determining the values of compartments, it would be convenient to lay out their symbolic layout on an array.
+	// Fortunately, we can determine this for the NeuroML 'cables' description, before actually chopping the neurite segments;
+	// though this might not be generalisable for other algorithms.
+	// The invariant of the array representation of compartments is the same as the array representation of segments: that parents must come before children.
+	// Therefore the cables may appear in a different order than the one they were specified in the original NeuroML description, since segment groups may appear in mostly any order.
+	
+	// Determine which segments belong to which 'cable' group.
+	std::vector<Int> cable_per_segment(morph.segments.size(), -1); //group_seq of cable for each segment
+	
+	const bool config_use_cable_discretization = 1;
+	if( config_use_cable_discretization ){
+	for( Int group_seq = 0; group_seq < (Int) morph.segment_groups.size(); group_seq++){
+		const auto &group = morph.segment_groups[group_seq];
+		
+		if( !group.is_cable ) continue;
+		
+		std::vector<Int> segs_in_cable = group.list.toArray();
+		for( Int seg_seq : segs_in_cable ){
+			// perhaps the segment is already included in another group?
+			Int previous_group_seq = cable_per_segment[seg_seq];
+			if(!(previous_group_seq < 0)){
+				// cables should not overlap!!
+				fprintf(stderr, "internal error: segment groups %ld and %ld should be non-overlapping, yet they overlap on segment %ld", group_seq, previous_group_seq, morph.lookupNmlId(seg_seq));
+				return false;
+			}
+			cable_per_segment[seg_seq] = group_seq;
+		}
+		
+	}
+	}
+	
+	// Assign compartments to the parts of the neuron. Each cable is assigned a continuous span of compartments, each non-cable segment is assigned its own compartment.
+	std::vector<Int> free_segment_to_compartment(morph.segments.size(), -1);
+	std::vector<Int> cable_to_compartment_offset(morph.segment_groups.size(), -1);
+	// TODO clarify: nseg is the number of *compartments* per cable
+	std::vector<Int> nseg_per_cable(morph.segment_groups.size(), -1);
+	
+	// LATER d_lambda rule perhaps?
+	Int number_of_compartments = 0;
+	for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
+		Int cable_seq = cable_per_segment[seg_seq];
+		
+		if( cable_seq >= 0 ){
+			// a cable
+			const Morphology::SegmentGroup &group = morph.segment_groups[cable_seq];
+			
+			assert(group.is_cable);
+			// allocate only if not the cable has not been allocated already, by a previous segment
+			if(!(cable_to_compartment_offset[cable_seq] < 0)) continue;
+			
+			Int cable_nseg = group.cable_nseg;
+			if( cable_nseg < 0 ) cable_nseg = 1; // by default, TODO add a shorthand getter in model
+			nseg_per_cable[cable_seq] = cable_nseg;
+			
+			cable_to_compartment_offset[cable_seq] = number_of_compartments;
+			number_of_compartments += cable_nseg;
+		}
+		else{
+			// a free-standing segment
+			// since NML segments are being sweeped, this free-standing segment should be encountered only once in this loop
+			assert(free_segment_to_compartment[seg_seq] < 0);
+			free_segment_to_compartment[seg_seq] = number_of_compartments;
+			number_of_compartments++;
+		}
+	}
+	if(debug_log_discretisation){
+		printf("Number of compartments in cell: %ld\n", number_of_compartments);
+		printf("Compartments of Free-standing segments:\n");
+		for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
+			if( free_segment_to_compartment[seg_seq] >= 0 ){
+				printf("%ld ",seg_seq);
+			}
+		}
+		printf("\n");
+		printf("Compartments of Cables:\n");
+		for( Int group_seq = 0; group_seq < (Int)morph.segment_groups.size(); group_seq++ ){
+			Int first_comp = cable_to_compartment_offset[group_seq];
+			if( first_comp < 0 ) continue;
+			
+			printf("%ld - %ld ", first_comp, nseg_per_cable[group_seq] - 1 );
+		}
+		printf("\n");
+	}
+	auto &segment_to_compartment_seq                       = comp_disc.segment_to_compartment_seq                      ;
+	auto &segment_to_compartment_fractionAlong             = comp_disc.segment_to_compartment_fractionAlong            ;
+	auto &compartment_to_segment_seq                       = comp_disc.compartment_to_segment_seq                      ;
+	auto &compartment_to_first_segment_start_fractionAlong = comp_disc.compartment_to_first_segment_start_fractionAlong;
+	auto &compartment_to_last_segment_end_fractionAlong    = comp_disc.compartment_to_last_segment_end_fractionAlong   ;
+	
+	
+	comp_disc.number_of_compartments = number_of_compartments;
+	// Prepare the maps from compartments to cells, by allocating them to the right size
+	// for each compartment, keep a list of the segments it contains, and fractionAlong for beginning and end.
+	// (Implicitly, each segment in between is included until its end and from its start.)
+	segment_to_compartment_seq.resize( morph.segments.size() ); 
+	segment_to_compartment_fractionAlong.resize( morph.segments.size() );
+	
+	compartment_to_segment_seq.resize( number_of_compartments ); 
+	compartment_to_first_segment_start_fractionAlong.assign( number_of_compartments, -1 ); 
+	compartment_to_last_segment_end_fractionAlong.assign( number_of_compartments, -1 ); 
+	
+	// Process the structure of cables: slice them into compartments of equal length.
+	// later on, the density mechanism specs have to be applied on segments anyway,
+	// 	so the discretisation can be pre-scribed without evaluating any physical comp properties (other than path length) in advance.
+	for(Int group_seq = 0; group_seq < (Int)morph.segment_groups.size(); group_seq++){
+		const Morphology::SegmentGroup &group = morph.segment_groups[group_seq];
+		
+		if(!(group.is_cable && config_use_cable_discretization)) continue;
+		
+		auto cable_nseg = nseg_per_cable[group_seq];
+		
+		// Iterate the segments, chop them into the prescribed number of compartments.
+		// First, count the length of the cable
+		std::vector<Real> segment_length_over_cable(group.list.Count(),NAN);
+		Real running_total_segment_length = 0;
+		
+		// the sorted list of seg_seq 
+		std::vector<Int> segs_in_cable = group.list.toArray(); 
+		for(Int i = 0; i < (Int)segs_in_cable.size(); i++){
+			const auto &seg = morph.segments.atSeq(segs_in_cable[i]); 
+			if( i > 0 ){
+				if(seg.parent != segs_in_cable[i-1]){
+					fprintf(stderr, "internal error: group is not a proper unbranched cable: segment %ld 's parent is %ld when it should be %ld",
+						morph.segments.getId(segs_in_cable[i]), morph.segments.getId(seg.parent), morph.segments.getId(segs_in_cable[i-1]));
+					return false;
+				}
+				// check that fractionAlong = 1 (attached to end of parent) for a properly unbranched cable
+				if(seg.parent >= 0 && seg.fractionAlong != 1){
+					fprintf(stderr, "internal error: group is not a proper unbranched cable: segment %ld is not attached to end of parent but on fractionAlong = %.17g instead",
+						morph.segments.getId(segs_in_cable[i]), seg.fractionAlong);
+					return false;
+				}
+			}
+			running_total_segment_length += DistancePt3d( seg.proximal, seg.distal );
+			segment_length_over_cable[i] = running_total_segment_length;
+			
+		}
+		// running_total_segment_length has total length of the cable by now
+		const auto total_cable_length = running_total_segment_length;
+		
+		if(debug_log_discretisation){
+			printf("segcumlen\n");
+			for(int i = 0; i < (Int)segs_in_cable.size(); i++){
+				printf("%f\n", segment_length_over_cable[i]);
+			}
+		}
+		
+		// now slide along the cable, and chop/merge segments into the new compartments
+		Int segment_under_compartment = 0; // invariant: after each iteration, segment_under_compartment points to the segment over the farthest edge of the last processed compartment
+		// therefore end_compartment_path_length <= segment_length_over_cable[segment_under_compartment]
+		
+		// NB this variable is not used since compartment borders are distributed evenly along path length of the cable. 
+		// It might be useful in case the distribution is not even LATER
+		// std::vector<Real> compartment_length_over_cable(cable_nseg,NAN);
+		// TODO special case where soma is spherical and yet participating in a cable! Keep the soma spherical and distribute nseg - 1?
+		// current implementation will simply not account for the segment as it has zero length
+		for(Int comp_in_cable = 0; comp_in_cable < cable_nseg; comp_in_cable++){
+			
+			// The borders of path_length that this compartment covers
+			// The mapping is fixed and linear over path_length, for now
+			Real start_compartment_path_length = ((comp_in_cable+0)/Real(cable_nseg)) * total_cable_length; // Divide by nseg before multiplying other factors, to get a perfect 1.0 for the last seg
+			Real end_compartment_path_length = ((comp_in_cable+1)/Real(cable_nseg)) * total_cable_length;
+			
+			Int comp_seq = cable_to_compartment_offset[group_seq] + comp_in_cable;
+			
+			if(debug_log_discretisation) printf("cable group_seq %d comp %d, comp_seq %d begin\n", (int) group_seq, (int)comp_in_cable, (int) comp_seq);
+			
+			
+			// Gather the slices of NML segments
+			// Since all said properties are directly summable from their component parts, this is an inline method to avoid extra complexity, for now.
+			auto AddSegmentSliceToCompartment = [ 
+				&segment_to_compartment_seq, &segment_to_compartment_fractionAlong,
+				&compartment_to_segment_seq, &compartment_to_first_segment_start_fractionAlong, &compartment_to_last_segment_end_fractionAlong
+			]( 
+				Int comp_seq, Int seg_seq, Real segment_fractionAlong_start, Real segment_fractionAlong_end 
+			){
+				assert(0 <= segment_fractionAlong_start && segment_fractionAlong_start <= segment_fractionAlong_end && segment_fractionAlong_end <= 1);
+				
+				// for each segment, keep a list of the compartments it spans, and up to which fractionAlong it spans them.
+				// for each compartment, keep a list of the segments it contains, and fractionAlong for beginning and end.
+				
+				// if it is the first segment being added to the compartment, set the fractionAlong
+				if( compartment_to_segment_seq[comp_seq].empty() ){
+					compartment_to_first_segment_start_fractionAlong[comp_seq] = segment_fractionAlong_start;
+				}
+				// set the fractionAlong of last segment incrementally, to be updated by following segments being attached.
+				compartment_to_last_segment_end_fractionAlong[comp_seq] = segment_fractionAlong_end;
+				// maybe setting the first and last fractionAlong can be done explicitly in the per-cable chopping loop, but this is less fragile.
+				
+				
+				compartment_to_segment_seq[comp_seq].push_back(seg_seq);
+				
+				segment_to_compartment_seq[seg_seq].push_back(comp_seq);
+				segment_to_compartment_fractionAlong[seg_seq].push_back(segment_fractionAlong_end);
+				
+			};
+			
+			// helpers for converting path length to fractionAlong, whet else is there to say, with a fallback for zero length segments
+			// TODO make it more elegant
+			auto PathLengthToFractionAlong_OrZero = [](Real start, Real end, Real query){
+				Real fractionAlong = (query - start)/(end - start);
+				if( abs(end - start) < 0.001 ){
+					// in case the diameter changes in an abruptly short span of path length, fix segment_fractionAlong to a valid and quite accurate value
+					// NB: this remains ambiguous! fractionAlong could be 1 as well, therefore this must be checked beforehand or this routine should be called on a codepath where 1 is explicitly used
+					fractionAlong = 0;
+				}
+				return fractionAlong;
+			};
+			auto SegmentQueryToFractionAlong_OrZero = [PathLengthToFractionAlong_OrZero, &segment_length_over_cable](Int seg_idx, Real query_path_along){
+				Real start_segment_path_length = 0;
+				if( seg_idx > 0 ) start_segment_path_length = segment_length_over_cable[seg_idx-1];
+				Real end_segment_path_length = segment_length_over_cable[seg_idx];
+				
+				return PathLengthToFractionAlong_OrZero(start_segment_path_length, end_segment_path_length, query_path_along);
+			};
+			
+			// The path_length that has been accumulated in the compartment so far
+			Real index_compartment_path_length = start_compartment_path_length;
+			
+			// merge all segments that end up to end_compartment_path_length
+			while( 
+				segment_under_compartment < (Int)segment_length_over_cable.size() 
+				&& segment_length_over_cable[segment_under_compartment] <= end_compartment_path_length 
+			){
+				// Integrate frustum from index_compartment_path_length to end of current segment.
+				
+				Real segment_fractionAlong = SegmentQueryToFractionAlong_OrZero(segment_under_compartment, index_compartment_path_length); // NB: returns zero for empty segment
+				if( abs(segment_fractionAlong - 1) < 0.0001 ){
+					// no need to integrate this minuscule part, skip
+					//would add abs(index_compartment_path_length - segment_length_over_cable[segment_under_compartment]) < 0.001 condition but have to account for zero length segments
+				}
+				else{
+					auto seg_seq = segs_in_cable[segment_under_compartment];
+					if(debug_log_discretisation) printf("complete seg %ld (%d) fractionAlong %f->end\n", segment_under_compartment, (int) seg_seq, segment_fractionAlong);
+					AddSegmentSliceToCompartment(comp_seq, seg_seq, segment_fractionAlong, 1);
+				}
+				
+				index_compartment_path_length = segment_length_over_cable[segment_under_compartment];
+				segment_under_compartment++;
+			}
+			// If the compartments spans a part of the, 
+			if( segment_under_compartment < (Int)segment_length_over_cable.size() 
+				&& end_compartment_path_length < segment_length_over_cable[segment_under_compartment] 
+			){
+				// Integrate frustum from index_compartment_path_length to end of current compartment, on current segment.
+				Real segment_fractionAlong_start = SegmentQueryToFractionAlong_OrZero(segment_under_compartment, index_compartment_path_length);
+				Real segment_fractionAlong_end = SegmentQueryToFractionAlong_OrZero(segment_under_compartment, end_compartment_path_length);
+				// add an exception to include the whole segment to the end, if it is the last compartment of the cable. To avoid letting this end be unaccounted for.
+				if( comp_in_cable + 1 == cable_nseg ){
+					// segment_fractionAlong_end = 1;
+				}
+				
+				
+				if( abs(segment_fractionAlong_end - segment_fractionAlong_start) < 0.0001 ){
+					// no need to integrate this minuscule part, skip
+				}
+				else{
+					if(debug_log_discretisation) printf("partial seg %ld fractionAlong %f->%f\n", segment_under_compartment, segment_fractionAlong_start, segment_fractionAlong_end);
+					AddSegmentSliceToCompartment(comp_seq, segs_in_cable[segment_under_compartment], segment_fractionAlong_start, segment_fractionAlong_end);
+				}
+				
+				// compartment_length_over_cable[comp_in_cable] = end_compartment_path_length;
+			}
+		}
+		
+	}
+	
+	// Define the segments not in cables as individual compartments.
+	// Perhaps save memory somehow, in this case LATER
+	for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
+		Int comp_seq = free_segment_to_compartment[seg_seq];
+		if(!( comp_seq >= 0 )) continue;
+		
+		segment_to_compartment_seq[seg_seq].push_back(comp_seq);
+		segment_to_compartment_fractionAlong[seg_seq].push_back(1);
+		
+		compartment_to_segment_seq[comp_seq].push_back(seg_seq);
+		compartment_to_first_segment_start_fractionAlong[comp_seq] = 0;
+		compartment_to_last_segment_end_fractionAlong[comp_seq] = 1;
+		
+	}
+	
+	// Resolving the (parent-child) connections between segments to the corresponding compartments
+	// is done here, it is more convenient since the cables are processed in this pass over cell types.
+	// This could be rolled in the preceding loops (per cable and per segment) but it would complicate that code further.
+	// (Also by requiring iterating over cables to follow a seg_seq_compatible order so that prent cable is already resolved)
+	// Another alternative is to ierate through each segment, linking compartments in series along each,
+	// 	and linking compartments that the segment starts with since fractionAlong=0, to their parents. But why make this more difficult than it has to be
+	// {
+	auto &tree_parent_per_compartment = comp_disc.tree_parent_per_compartment;
+	tree_parent_per_compartment.assign( number_of_compartments, -1 );
+	// std::vector<bool> cable_processed( morph.segment_groups.size(), false );
+	
+	// Resolve parents for free segments.
+	for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
+		Int comp_seq = free_segment_to_compartment[seg_seq];
+		if( comp_seq < 0 ) continue;
+		
+		//the segment maps to exactly one compartment, map it
+		const auto &seg = morph.segments.atSeq(seg_seq); 
+		if( seg.parent >= 0 ){
+			tree_parent_per_compartment[comp_seq] = comp_disc.GetCompartmentForSegmentLocation( seg.parent, seg.fractionAlong );
+		}
+		else tree_parent_per_compartment[comp_seq] = -1;
+		
+	}
+	// Resolve parents for cables.
+	for(Int group_seq = 0; group_seq < (Int)morph.segment_groups.size(); group_seq++){
+		const Morphology::SegmentGroup &group = morph.segment_groups[group_seq];
+		
+		if(!(group.is_cable && config_use_cable_discretization)) continue;
+		
+		
+		auto cable_nseg = nseg_per_cable[group_seq];
+		assert( cable_nseg >= 1 );
+		
+		auto first_comp_on_cable = cable_to_compartment_offset[group_seq];
+		
+		// For all compartments succeeding the first one, their parent property is obvious: i is the previous comp_seq in order obviously to their predecessors
+		for( int comp_seq = first_comp_on_cable + 1; comp_seq < first_comp_on_cable + cable_nseg; comp_seq++){
+			tree_parent_per_compartment[comp_seq] = comp_seq - 1;
+		}
+		// For the first compartment, use the parent of the first seg of the fisrt compartment
+		// (the first seg should, of course, be included in the first compartment starting from fractionAlong = 0)
+		Int first_seg_on_cable = compartment_to_segment_seq[first_comp_on_cable][0];
+		
+		assert(compartment_to_first_segment_start_fractionAlong[first_comp_on_cable] == 0);
+		
+		const auto &seg = morph.segments.atSeq(first_seg_on_cable); 
+		if( seg.parent >= 0 ){
+			tree_parent_per_compartment[first_comp_on_cable] = comp_disc.GetCompartmentForSegmentLocation( seg.parent, seg.fractionAlong );
+		}
+		else tree_parent_per_compartment[first_comp_on_cable] = -1;
+		
+	}
+	
+	if(debug_log_discretisation){
+		printf("Mapping:\n");
+		for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
+			printf("Seg %d:", (int) seg_seq);
+			for( Int j = 0; j < (Int) segment_to_compartment_seq[seg_seq].size(); j++ ){
+				printf(" %d (%g)", (int) segment_to_compartment_seq[seg_seq][j], segment_to_compartment_fractionAlong[seg_seq][j]);
+			}
+			printf("\n");
+			
+		}
+		for( Int comp_seq = 0; comp_seq < (Int)compartment_to_segment_seq.size(); comp_seq++ ){
+			printf("Comp %d:", (int) comp_seq);
+			printf(" (%g)", compartment_to_first_segment_start_fractionAlong[comp_seq]);
+			for( Int j = 0; j < (int) compartment_to_segment_seq[comp_seq].size(); j++ ){
+				printf(" %d", (int) compartment_to_segment_seq[comp_seq][j]);
+			}
+			printf(" (%g)", compartment_to_last_segment_end_fractionAlong[comp_seq]);
+			printf("\n");
+		}
+		
+		printf("Parents:\n");
+		for( Int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ) 	printf("\t%d", (int) comp_seq);	
+		printf("\n");
+		for( Int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ) 	printf("\t%d", (int) tree_parent_per_compartment[comp_seq]);	
+		printf("\n");
+	}
+	
+	return true;
+};
+
+bool GetCompartmentDiscretizationForCellType(const Model &model, const CellType & cell_type, CompartmentDiscretization &comp_disc){
+	if( cell_type.type != CellType::PHYSICAL ){
+		// one implicit segment(0), one true compartment
+		auto &c = comp_disc;
+		c.number_of_compartments = 1;
+		c.segment_to_compartment_seq = {{0}};
+		c.segment_to_compartment_fractionAlong = {{1}};
+		c.compartment_to_segment_seq = {{0}};
+		c.compartment_to_first_segment_start_fractionAlong = {0};
+		c.compartment_to_last_segment_end_fractionAlong = {1};
+		c.tree_parent_per_compartment = {-1};
+		
+		return true;
+	}
+	
+	const PhysicalCell &cell = cell_type.physical;
+	const Morphology &morph = model.morphologies.get(cell.morphology);
+	return GetCompartmentDiscretizationForCellType(morph, comp_disc);
+}
+struct PassiveCableProperties{
+		
+	// NeuroML assumes a tree model of truncated cone-shaped 'segments'
+	// 	( which may be further subdivided in compartments, for compatibility with NEURON )
+	std::vector< std::vector<int32_t> > comp_connections;
+	
+	// physical properties
+	std::vector<float> compartment_lengths;
+	std::vector<float> compartment_areas  ;
+	std::vector<float> compartment_volumes;
+	std::vector<float> compartment_path_length_from_root;
+	
+	std::vector<Real> compartment_capacitance;
+	// NB abuse NeuroML's tree morphology limitation to set axial resistance values in a compartment-parallel vector
+	// where each value is child's axial resistance to its *parent*
+	// Will need a more general way to store conductivity constants when
+	//  non-tree neuron topologies are implemented LATER
+	std::vector<Real> inter_compartment_axial_resistance;
+	
+	std::vector<Int> BwdEuler_OrderList;
+	std::vector<Int> BwdEuler_ParentList;
+	std::vector<Real> BwdEuler_InvRCDiagonal;
+	
+};
+
+bool GetCellPassiveCableProperties(
+	const Morphology &morph, const BiophysicalProperties &bioph, const CompartmentDiscretization &comp_disc, PassiveCableProperties &cabprops,
+	bool verbose = false, bool debug_mode = false
+){
+	const ScaleEntry microns = {"um", -6, 1.0}; // In NeuroML, Morphology is given in microns
+	
+	
+	auto &comp_connections = cabprops.comp_connections;
+	auto &compartment_lengths = cabprops.compartment_lengths;
+	auto &compartment_areas = cabprops.compartment_areas;
+	auto &compartment_volumes = cabprops.compartment_volumes;
+	auto &compartment_path_length_from_root = cabprops.compartment_path_length_from_root;
+	
+	auto number_of_compartments = comp_disc.number_of_compartments;
+	comp_connections.resize(number_of_compartments);
+	
+	// physical properties
+	compartment_lengths.assign(number_of_compartments, NAN);
+	compartment_areas  .assign(number_of_compartments, NAN);
+	compartment_volumes.assign(number_of_compartments, NAN);
+	compartment_path_length_from_root.assign(number_of_compartments, NAN);
+	
+	// TODO:
+	// If the values of properties have to be sampled across the neuron, there are two ways to go about it:
+	// The first one is to sample only for the middles of compartments. 
+	// This is more accurate if few segments are split into many compartments, and less accurate if many segments are merged into few compartments.
+	// It has the additional benefit that all calculations are performed compartment-wise, which is amenable to in-line initialisation in the per-compartment code.
+	// The second one is to sample for the middles of segments.
+	// This is less accurate if few segments are split into many compartments, and more accurate if many segments are merged into few compartments.
+	// It has the complication of mapping segment values to compartment values, through the conversion process of said segments into compartments; which is not as amenable to parallel run-time code.
+	// A third one is to apply all segment-and compartment-wise intersections, and evaluate each "compartment fragment" that comes out of that.
+	// All these approaches assume that said values can be interpolated smoothly along the length of neurites.
+	
+	// Another problem comes up with values which are simply not integrable over the extent of a neurite.
+	//  Examples are starting membrane voltage, and spike initiation "threshold" voltage. Exclusively one value can hold for these oer a compartment.
+	
+	// For now:
+	// - The geometric properties of the neurite compartments (area, volume) are precisely integrated using the linearly varying per segment values. This is convenient because these geometric values are laid out explicitly.
+	// - The resistance of the neurite is also precisely evaluated through the per segment values. To do otherwise would be to calculate the (1/length) factor to multiply by the per-compartment resistivity.
+	// - The conductance of density mechanisms is *IM*precisely evaluated by mapping the per-segment parameters over the compartments which overlap with the segments.
+	// - The conductance of inhomogeneous ion channel distributions is *IM*precisely evaluated through the per compartment central path lengths. This is possible through the pre-calculated per-compartment area.
+	
+	
+	
+	// Density mechanisms such as ion channels and ion pools are applied over the whole compartments that the designated segment group to apply over overlaps with, whether the overlap is partial or not.
+	// A possible unintended consequence is for a compartment that is straddling two segments with different mechanism specifications over the two segments, to contain both sets of mechanisms, each with excess conductance.
+	// This could be refined by introducing another paameter of "effective area over a compartment" to the numerical model of each mechanicm instance. 
+	// A hacky alternative could be to re-scale the Gmax, or ρmax, but this only applies if the effect is a linear function of area. (Also does not necessarily work with LEMS mechs.)
+	// But in principle, the proper way to ensure that mechnaism are applied to a specific compartment is to make an explicit semgment to represent the compartment.
+	
+	// process connectivity
+	printf("\tAnalyzing internal connectivity...\n");
+	for( Int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+		const auto comp_parent = comp_disc.tree_parent_per_compartment[comp_seq];
+		
+		if(!(comp_parent < 0)){
+			comp_connections[comp_seq].push_back(comp_parent);
+			comp_connections[comp_parent].push_back(comp_seq);
+		}
+		// Since comp_parent < comp_seq, each comp_connections[i] list is always going to be ordered !
+	}
+	
+	// process geometry of morphology
+	printf("\tAnalyzing geometry...\n");
+	for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+		
+		auto &comp_length = compartment_lengths[comp_seq];
+		auto &comp_area   = compartment_areas  [comp_seq];
+		auto &comp_volume = compartment_volumes[comp_seq];
+		
+		// summate by iterating through all segment-based fractions
+		comp_length = 0;
+		comp_area   = 0;
+		comp_volume = 0;
+		
+		const auto &segs_in_comp = comp_disc.compartment_to_segment_seq[comp_seq];
+		
+		for( int seg_in_comp = 0; seg_in_comp < (int) segs_in_comp.size(); seg_in_comp++ ){
+			Real from_fractionAlong = (seg_in_comp == 0) ? comp_disc.compartment_to_first_segment_start_fractionAlong[comp_seq] : 0;
+			Real   to_fractionAlong = (seg_in_comp+1 == (int) segs_in_comp.size()) ? comp_disc.compartment_to_last_segment_end_fractionAlong[comp_seq] : 1;
+			Int seg_seq = segs_in_comp[seg_in_comp];
+			
+			// TODO check if there is any case proximal should be the specified one, or the distal of parent seg instead
+			
+			const Morphology::Segment &seg = morph.segments.atSeq(seg_seq);
+			
+			// NOTE the actual 3D points used may differ from what's stated in the NeuroML tag
+			// following obscure rules followed by the NeuroML exporter
+			// TODO deduplicate the intra-seg mapping through lerp, to make sure it's consistent
+			
+			const Morphology::Segment::Point3DWithDiam seg_from = LerpPt3d(seg.proximal, seg.distal, from_fractionAlong);
+			const Morphology::Segment::Point3DWithDiam seg_to   = LerpPt3d(seg.proximal, seg.distal,   to_fractionAlong);
+			
+			Real comp_fragment_length = DistancePt3d( seg_from, seg_to );
+			
+			comp_length += comp_fragment_length;
+			comp_area   += GeomHelp::Area( comp_fragment_length, seg_from.d, seg_to.d );
+			comp_volume += GeomHelp::Volume( comp_fragment_length, seg_from.d, seg_to.d );
+			
+		}
+	}
+	// get path length from root too
+	// comp_seq order puts parents first always, just like seg_seq order
+	for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+		const auto comp_parent = comp_disc.tree_parent_per_compartment[comp_seq];
+		
+		if( comp_parent < 0 ){
+				// well, Neuron assumes the *proximal edge* of a compartment to be the beginning of "Path length from root",
+				// (thus diastnnce(comp0) = comp0_length/2) rather than the middle of the compartment (in which case it would be disctance(comp0) = 0).
+				// compartment_path_length_from_root[comp_seq] = 0;
+				compartment_path_length_from_root[comp_seq] = (compartment_lengths[comp_seq] / 2);
+				
+		}
+		else{
+			compartment_path_length_from_root[comp_seq] = 
+				compartment_path_length_from_root[comp_parent] 
+				+ (compartment_lengths[comp_parent] + compartment_lengths[comp_seq])/2 ;
+		}
+	}
+	
+	// process passive biophysics
+	printf("\tAnalyzing cable equation...\n");
+	// membrane specific capacitance, axial resistivity for every segment, sample them to integrate capacitance and resistance for each compartment.		
+	// d_lambda rule can also be calculated from Cm and Ra (NEURON book, chapter 5)
+	std::vector<Real> segment_Cm_(morph.segments.contents.size(), NAN);
+	std::vector<Real> segment_Ra_(morph.segments.contents.size(), NAN);
+	
+	for( auto spec : bioph.membraneProperties.capacitance_specs ) spec.apply(morph, segment_Cm_);
+	for( auto spec : bioph.intracellularProperties.resistivity_specs ) spec.apply(morph, segment_Ra_);
+	
+	// TODO throw a mighty fit in case Cm and Ra are incomplete
+	
+	// Now form the cabprops
+	auto &compartment_capacitance = cabprops.compartment_capacitance;
+	auto &inter_compartment_axial_resistance = cabprops.inter_compartment_axial_resistance;
+	compartment_capacitance.assign(number_of_compartments, NAN);
+	inter_compartment_axial_resistance.assign(number_of_compartments, NAN);
+	
+	// Resistance is not derived by the total edge-to-edge resistance of compartments, 
+	// because modellers ofter taper the ends of neurite to zero or another tiny value.
+	// And this causes the half total resistance of a compartment to be disproportionally 
+	// 	higher than the anticipated resistance of the proximal half of it,
+	// 	since it accounts for the tapered end thich is not important for inter-compartment resistivity (since the neurite ends there).
+	// Instead, the resistance between two compartments is the sum of the resistance 
+	// 	of the distal half of the parent compartment and that of the proximal half of the child compartment.
+	// Refer also to the code of NEURON that follows the same approach: treeset.cpp, routine diam_from_list
+	// and to notes on the NEURON message board:
+	// 	https://www.neuron.yale.edu/phpBB/viewtopic.php?f=15&t=2539&p=10078&hilit=axial+resistivity#p10078
+	// 	https://www.neuron.yale.edu/phpBB/viewtopic.php?f=8&t=3904&p=16807&hilit=axial+resistivity#p16808
+	// Note: This model is accurate for unbranched sections of neurite, but not for branches.
+	// Conductance and area in that case are not that well defined, since integrating from the middle of the compartment to the precise fractionALong the compartment still may not include the small-scale details of the branch: a model should be made by an expert for that LATER, or more generally getting to override such conductance values. 
+	// In any case, the true value of Ra 𓁛 is obscure anyway, so why should it matter... again, only an expert can tell.
+	// Note: Compartments with zero length are assumed to have zero resistance, (as they have zero length) even though they have non-zero area and volume (as implied spheres).
+	std::vector<Real> compartment_axial_resistance_proximal(number_of_compartments, NAN);
+	std::vector<Real> compartment_axial_resistance_distal(number_of_compartments, NAN);
+	
+	for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+		
+		if(verbose){
+			printf("Summating resistance and conductance for comp_seq %d\n", (int) comp_seq );
+		}
+		
+		const auto comp_length = compartment_lengths[comp_seq];
+		const auto comp_midpoint_length = comp_length / 2;
+		
+		auto &comp_axial_resistance_proximal = compartment_axial_resistance_proximal[comp_seq];
+		auto &comp_axial_resistance_distal   = compartment_axial_resistance_distal  [comp_seq];
+		compartment_axial_resistance_proximal[comp_seq] = 0;
+		compartment_axial_resistance_distal  [comp_seq] = 0;
+
+		auto &comp_capacitance = cabprops.compartment_capacitance [comp_seq];
+		comp_capacitance = 0;
+		
+		// also evaluate the d_lambda rule for the component, as a diagnostic for users who want to inspect the numerics at play
+		const Real compartment_lambda_hertz = 100;
+		Real compartment_lambda = 0;
+		
+		// summate by iterating through all segment-based fractions
+		Real running_comp_length = 0;
+		
+		const auto &segs_in_comp = comp_disc.compartment_to_segment_seq[comp_seq];
+		
+		for( int seg_in_comp = 0; seg_in_comp < (int) segs_in_comp.size(); seg_in_comp++ ){
+			Real from_fractionAlong = (seg_in_comp == 0) ? comp_disc.compartment_to_first_segment_start_fractionAlong[comp_seq] : 0;
+			Real   to_fractionAlong = (seg_in_comp+1 == (int) segs_in_comp.size()) ? comp_disc.compartment_to_last_segment_end_fractionAlong[comp_seq] : 1;
+			Int seg_seq = segs_in_comp[seg_in_comp];
+			
+			// TODO check if there is any case proximal should be the specified one, or the distal of parent seg instead
+			
+			if(verbose){
+				printf("seg %d (id %d), fractionAlong from %g to %g\n", (int) seg_seq, (int) morph.lookupNmlId(seg_seq), from_fractionAlong, to_fractionAlong );
+			}
+			
+			const Morphology::Segment &seg = morph.segments.atSeq(seg_seq);
+			
+			const Morphology::Segment::Point3DWithDiam seg_from = LerpPt3d(seg.proximal, seg.distal, from_fractionAlong);
+			const Morphology::Segment::Point3DWithDiam seg_to   = LerpPt3d(seg.proximal, seg.distal,   to_fractionAlong);
+			
+			Real comp_fragment_length = DistancePt3d( seg_from, seg_to );
+			Real comp_fragment_area   = GeomHelp::Area( comp_fragment_length, seg_from.d, seg_to.d );
+			
+			// Add capacitance to compartment fragment
+			Real comp_fragment_capacitance = segment_Cm_[seg_seq] * comp_fragment_area;
+			// and rescale to engine units
+			comp_fragment_capacitance = ( (Scales<SpecificCapacitance>::native) * (microns*microns) ).ConvertTo( comp_fragment_capacitance, Scales<Capacitance>::native );
+		
+			comp_capacitance += comp_fragment_capacitance;
+			
+			// Add resistance to the proximal and distal halves of the compartment
+			// running_comp_length is the sum of path length (arc length in NEURON lingo) of compartment fragments up to, excluding this iteration
+			Real Ra = segment_Ra_[seg_seq];
+			
+			// input: Ra in native unit, start-end in microns, returns resistance in native unit
+			auto GetFrustumResistance = [ &microns ]( Real Ra, Morphology::Segment::Point3DWithDiam from, Morphology::Segment::Point3DWithDiam to ){
+				// using the volumetric frustum integral, instead of cylinder approximation
+				// R = (Ra/pi)*( Length/(Radius_start*Radius_end) ) 
+				// To get this formula, integrate dR = dx * Ra/CrossSection = dx * Ra /( pi * ( (1-x/Length)*Radius_start + (x/Length)*Radius_end )^2 ) for x = 0...Length
+				Real resistance = Ra * (4/M_PI) * DistancePt3d(from, to) / ( from.d * to.d );
+				// and rescale to engine units
+				resistance = ( (Scales<Resistivity>::native * microns)/(microns^2) ).ConvertTo( resistance, Scales<Resistance>::native );
+				return resistance;
+			};
+			
+			if(verbose){
+				printf("resistance measurement: from_comp_length %g to_comp_length %g midpoint_length %g\n", 
+					running_comp_length, running_comp_length + comp_fragment_length, comp_midpoint_length
+				);
+			}
+			// XXX this is a workaround for isolated zero length sections.
+			// The advantages with this approach are that it:
+			// - is simple to implement
+			// - will behave like the NML exporter for the simple, expected cases (soma as sphere)
+			// - can attempt to simulate any model, when the NML exporter's trick does not account for some contrived cases that will still get ill defined numerically. 
+			// TODO follow the precise workaround that NeuroML does: If a segment has zero length AND proximal diameter = distal diameter AND ( it is the only segment in a cable  OR it is a self standing segment ) then consider it a cylinder with length = proximal diameter.
+			// Accounting for path length on this cylinder should also have a small(insignificant?) effect on inhomogeneous distributions.
+			// This also resolves the issue with whether Area should be based on a frustum or sphere.
+			// TODO put warnings in place for improper tracing of neurons, to avoid halting when axial resistance predictably ends up invalid, when the specific conditions for the NML exporter's edge case do not apply (for example, if a segment has zero length but varying diameter and it is the only one in the cable, or when a cable includes multiple segments with zero diameter)
+			// A variation could be to assume that all segments in a zero length cable are spheres...
+			if( comp_length == 0 ){
+				// Consider the form of a cylinder with diameter = length to calculate resistance.
+				// Note that proximal and distal diameters amy differ, assume both are something sane...
+				auto seg_to_extrapolated = seg_from;
+				seg_to_extrapolated.y += seg_to.d;
+				const Morphology::Segment::Point3DWithDiam seg_midpoint = LerpPt3d(seg.proximal, seg_to_extrapolated, 0.5);
+				
+				if(verbose){
+					printf("\t zero length segment\n" );
+				}
+				
+				comp_axial_resistance_proximal += GetFrustumResistance( Ra, seg_from, seg_midpoint);
+				comp_axial_resistance_distal   += GetFrustumResistance( Ra, seg_midpoint, seg_to_extrapolated  );
+			}
+			else if( running_comp_length + comp_fragment_length < comp_midpoint_length ){
+				// whole part of seg belongs to the proximal half
+				if(verbose){
+					printf("\t proximal half\n" );
+				}
+				comp_axial_resistance_proximal += GetFrustumResistance( Ra, seg_from, seg_to);
+			}
+			else if( comp_midpoint_length <= running_comp_length ){
+				// whole part of seg belongs to the distal half
+				if(verbose){
+					printf("\t distal half\n" );
+				}
+				comp_axial_resistance_distal   += GetFrustumResistance( Ra, seg_from, seg_to);
+			}
+			else{
+				assert( running_comp_length < comp_midpoint_length && comp_midpoint_length <= running_comp_length + comp_fragment_length );
+				// seg straddles the proximal and distal half
+				
+				// NB: this is the fraction to lerp over the seg fraction, from seg_from to seg_to.
+				// Not over the full extent of the seg, proximal to distal. 
+				Real compartment_midpoint_fragment_fraction = (comp_midpoint_length - running_comp_length) / comp_fragment_length;
+				// prefer NaN values to be mapped to fractionAlong = end, to keep the illusion of zero length segments being processed whole
+				if(!( compartment_midpoint_fragment_fraction < 1 )) compartment_midpoint_fragment_fraction = 1;
+				if(!( 0 < compartment_midpoint_fragment_fraction )) compartment_midpoint_fragment_fraction = 0;
+				
+				const Morphology::Segment::Point3DWithDiam seg_midpoint = LerpPt3d(seg_from, seg_to, compartment_midpoint_fragment_fraction);
+				
+				if(verbose){
+					printf("\t midpoint: fragment fraction %g\n", compartment_midpoint_fragment_fraction );
+				}
+				
+				comp_axial_resistance_proximal += GetFrustumResistance( Ra, seg_from, seg_midpoint);
+				comp_axial_resistance_distal   += GetFrustumResistance( Ra, seg_midpoint, seg_to  );
+			}
+			
+			// Add the estimate of AC wave length as per the NEURON book, just as a diagnostic value. 
+			
+			// inputs in native units, except for time which is in Hz, and that is in order to omit it from the scaling factor... it seems to be wbe working nonetheless, why not leave it that way ... because Ra * Cm = Time/Length and that must be counterbalanced!!! The correctioun would be to set the ScaleEntry of Hz explicitly, and correct if it doesn't match Ra*Cm/microns XXX
+			// Note that the average diameter is used in the calculation even though the integrand is a non linear function of diameter, if it's accurate enough for Hines it's good enough.
+			auto lambda_f_microns = [&microns](float diam, float freq_Hz, float Ra, float Cm, bool debug){
+				ScaleEntry scale_Ra = Scales<Resistivity>::native; // {"ohm_cm" ,-2, 1.0}; // NEURON units
+				ScaleEntry scale_Cm = Scales<SpecificCapacitance>::native; // {"uF_per_cm2",-2, 1.0}; // NEURON units
+				
+				float lambda_f = std::sqrt( diam/( 4 * M_PI * freq_Hz * Ra * Cm ) );
+				ScaleEntry dla_scale = ( microns / (scale_Ra * scale_Cm) )^(0.5);
+				if( debug ){
+					printf("dla %g %g %g\n", lambda_f, pow10(dla_scale.pow_of_10)*dla_scale.scale, lambda_f*(pow10(dla_scale.pow_of_10)*dla_scale.scale) );
+				}
+				return dla_scale.ConvertTo( lambda_f, microns );
+			};
+			
+			Real comp_fragment_lambda_microns = lambda_f_microns( (seg_from.d + seg_to.d) / 2, compartment_lambda_hertz, Ra, segment_Cm_[seg_seq], debug_mode );
+			compartment_lambda += comp_fragment_length / comp_fragment_lambda_microns;
+			
+			// done for this compartment fragment, add path length to sum
+			running_comp_length += comp_fragment_length;
+		}
+		
+		if(verbose){
+			printf("Compartment %d  capacitance: %g %s  proximal resistance: %g %s  distal resistance: %g %s\n", (int) comp_seq,
+				comp_capacitance              , Scales<Capacitance>::native.name,
+				comp_axial_resistance_proximal, Scales<Resistance >::native.name,
+				comp_axial_resistance_distal  , Scales<Resistance >::native.name
+			);
+		}
+		
+		// report total 100Hz ac wavelength
+		// try checking the d_lambda rule
+		const float d_lambda = 0.1;
+		// XXX why is this 0.9 factor here again ?? not a fixme since it matches the formula in NEURON
+		float nseg_factor = ( compartment_lambda / d_lambda ) + 0.9;
+		if( verbose ){
+		printf("nseg %.9f\n", nseg_factor);
+		}
+		int nseg = int( nseg_factor / 2 ) * 2 + 1 ; //really should be odd, to avoid midpoint shenanigans
+		(void) nseg; // It is useful as a diagnostic to show for modellers. subdivision perhaps LATER, but it would be better to use a separate neuron design tool for that
+		
+		// also take advantage of comp_seq order to resolve resistance with parent as well
+		auto comp_parent = comp_disc.tree_parent_per_compartment[comp_seq];
+		if(comp_parent >= 0){
+			inter_compartment_axial_resistance[comp_seq] = comp_axial_resistance_proximal + compartment_axial_resistance_distal[comp_parent];
+		
+		}
+		else{
+			inter_compartment_axial_resistance[comp_seq] = NAN;
+		}
+	}
+	if(verbose){
+	for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+		printf("Compartment %d resistance with parent %d: %g %s\n", 
+			(int) comp_seq, (int) comp_disc.tree_parent_per_compartment[comp_seq],
+			inter_compartment_axial_resistance[comp_seq] , Scales<Resistance>::native.name
+		);
+	}
+	}
+	for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+		auto comp_parent = comp_disc.tree_parent_per_compartment[comp_seq];
+		if( comp_parent < 0 ) continue;
+		auto resistance = inter_compartment_axial_resistance[comp_seq];
+		if(!( std::isfinite(resistance) && resistance > 0 )){
+			// TODO prettier printing, though it shouldn't happen
+			
+			printf("internal error: Conductance between compartments %d, %d is undefined \n", 
+			(int) comp_seq, (int) comp_parent );
+			return false;
+		};
+	}
+	
+	// Approximate the smallest time constant of the passive system, using the Method of Time Constants. for RC circuits:
+	// https://designers-guide.org/forum/Attachments/MTC.pdf
+	// fastest pole = sum (pole of each capacitor with conductivities to ground, if all other capacitors were shorted)
+	Real rate_total = 0;
+	ScaleEntry RC_scale = (Scales<Resistance>::native * Scales<Capacitance>::native);
+	for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+		//conveniently, in neural compartment models, other capacitors being shorted means only directly adjacent resistances matter
+		//  R1    R2    R3    R4
+		// -vvv-+-vvv-+-vvv-+-vvv-
+		//      |     =     |   
+		// GND -+-----+-----+- GND
+		float Gtotal = 0;
+		for( Int adjacent_comp : comp_connections[comp_seq] ){
+			size_t R_index = (adjacent_comp > comp_seq) ? adjacent_comp : comp_seq ; // NB: remember how inter_compartment_axial_resistance is structured
+			Real R = inter_compartment_axial_resistance[R_index];
+			Gtotal += 1/R;
+		}
+		
+		float rate = Gtotal / compartment_capacitance[comp_seq] ;
+		rate_total += rate;
+		
+		float tau = RC_scale.ConvertTo( 1/rate, Scales<Time>::native); //TODO check values once more
+		if( verbose ){
+		printf(" compartment axial %g %s\n", tau, Scales<Time>::native.name );
+		}
+	}
+	float tau_total = RC_scale.ConvertTo( 1/rate_total, Scales<Time>::native);
+	if(verbose) printf(" total axial %g %s\n", tau_total, Scales<Time>::native.name );
+	
+	
+	// Now perform analysis for Backward Euler method
+	printf("\tAnalyzing Bwd Euler...\n");
+	// Gauss elimination of one neuron's conductance matrix for Bwd Euler can be performed as a tree traversal, with the benefit of O(N) run time.
+	// The process followed is thus equivalent to the Hines algorithm (1983).
+	// The particular order of circuit nodes to visit could be tweaked. Here we use a depth-first traversal starting from node 0 (supposed to be the soma), but a BFS order could be used as well to reduce tree depth (and hopefully numerical error).
+	struct BackwardEuler{
+		public:
+		// just a reference to the connection matrix to be traversed
+		// typename could be made implicit with some template magic
+		const std::vector< std::vector<int32_t> > &conn_list;
+		// intermediate result: tha nodes visited by DFS.
+		std::vector< bool > node_gray;
+		// results: the sequence of nodes to visit, and the map of each node to its parent.
+		std::vector< Int > order_list; // per processing step
+		std::vector< Int > order_parent; // per node_seq
+		// Recursivly traverse
+		void DFS(
+			Int i // node being visited
+		){
+			node_gray[i] = true;
+			
+			for( Int j : conn_list[i]){
+				if( node_gray[j] ) continue;
+				
+				// otherwise, explore
+				order_parent[j] = i;
+				node_gray[j] = true;
+				DFS( j );
+			}
+			
+			order_list.push_back(i);
+		}
+		
+		protected:
+		BackwardEuler( const std::vector< std::vector<int32_t> > &_conn ) : conn_list(_conn) {
+			
+			Int nCells = (Int)conn_list.size();
+			
+			node_gray = std::vector< bool >( nCells, false );
+			order_list = std::vector< Int >();
+			order_parent = std::vector< Int >( nCells, -1 );
+			
+		}
+		public:
+		static void GetOrderLists(
+			const std::vector< std::vector<int32_t> >conn_list,
+			std::vector< Int > &order_list,
+			std::vector< Int > &parent_list,
+			Int start_from = 0
+		){
+			BackwardEuler ob(conn_list);
+			
+			ob.DFS( start_from );
+			
+			order_list = ob.order_list;
+			parent_list = ob.order_parent;
+		}
+	};
+	
+	// Fill in the Bwd Euler order for the tree
+	auto &order_list = cabprops.BwdEuler_OrderList;
+	auto &order_parent = cabprops.BwdEuler_ParentList;
+	BackwardEuler::GetOrderLists( comp_connections, order_list, order_parent );
+	
+	if( verbose ){
+	printf("Order: ");
+	for( Int val : order_list ){
+		printf("%ld ", val);
+	}
+	printf("\n");
+	printf("Parent: ");
+	for( Int val : order_parent ){
+		printf("%ld ", val);
+	}
+	printf("\n");
+	}
+	
+	// Also fill in the part of the diagonal that's axial conductance to other, since it's going to be fixed during the simulation
+	// 	(a made variable LATER)
+	auto &compartment_adjacent_InvRC = cabprops.BwdEuler_InvRCDiagonal;
+	compartment_adjacent_InvRC = std::vector<Real>(number_of_compartments, 0 );
+	// and get the connectivity diagonals for bwd Euler
+	for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
+		for( int adjacent_comp : comp_connections[comp_seq] ){
+			Int idx = std::max( comp_seq, adjacent_comp ); // NB: remember how inter_compartment_axial_resistance is structured
+			auto R = inter_compartment_axial_resistance[ idx ];
+			auto C = compartment_capacitance[ comp_seq ];
+			auto D = ( (Scales<Resistance>::native * Scales<Capacitance>::native)^(-1) ).ConvertTo( 1/(R*C), Scales<Frequency>::native );
+			compartment_adjacent_InvRC[comp_seq] += D;
+		}
+	}
+	
+	if( verbose ){
+	printf("Diagonal 1/RC Constant(%s): ", Scales<Frequency>::native.name );
+	for( auto val : compartment_adjacent_InvRC ){
+		printf("%g ", val);
+	}
+	printf("\n");
+	}
+	
+	return true;
+};
+
+
+// the mapping from segments to compartments is not necessarily direct.
+// 	Produce a list that contains all compartments that overlap with said segments
+IdListRle SpecToCompList(
+	const Morphology &morph, const AcrossSegOrSegGroup &spec, 
+	const CompartmentDiscretization &comp_disc
+){
+	IdListRle comp_list;
+	spec.reduce( morph, [ &comp_disc, &comp_list ]( Int seg_seq ){
+		for( Int comp_seq : comp_disc.segment_to_compartment_seq[seg_seq] ) comp_list.Addd(comp_seq);
+	} );
+	comp_list.Compact();
+	return comp_list;
+};
+template<typename T, typename U>
+void ApplyFixedValue( const IdListRle &id_list, const T &value, U &array ){
+	id_list.reduce( [&value, &array]( Int comp_seq ){
+		array[comp_seq] = value;
+	} );
+};
+
+// We'll see what to refactor out of this as a common factor, maybe keep everything because who cares about the unused parts
+struct IonChannelDistributionInstance{
+	
+	Int ion_species;
+	Int ion_channel;
+	ChannelDistribution::Type type;
+	
+	Real conductivity;
+	Real erev; // for Fixed and Population
+	Real vshift; //for vshift
+	Real permeability; // for GHK1
+	Int number; // for Population
+	
+	IonChannelDistributionInstance(){
+		
+	}
+};
+struct IonSpeciesDistributionInstance{
+	
+	//Int ion_species;
+	Int conc_model_seq;
+	
+	Real initialConcentration; // used with core types
+	Real initialExtConcentration;
+	
+	IonSpeciesDistributionInstance(){
+		
+	}
+};
+// TODO place somewhere more appropriate
+// except for data values, it's the same between structurally-identical compartments
+// so they can be simulated with the exact same code
+			
+struct CompartmentDefinition{
+	// could convert into proxy object, to allow Struct-of-Arrays transformation, for both memory and time efficiency, LATER
+	Real V0, Vt, AxialResistance, Capacitance; // TODO eliminate from here, or think it a different way
+	
+	
+	std::vector<IonChannelDistributionInstance> ionchans;
+	std::map< Int, IonSpeciesDistributionInstance > ions;
+	
+	std::vector<int32_t> adjacent_compartments;
+	
+	IdListRle input_types;
+	IdListRle synaptic_component_types;
+	
+	bool spike_output;
+	
+	// TODO hash
+	// TODO perhaps create a structure subset, that is enough to generate the code and differentiate the codes
+	
+};
+bool GetCompartmentDefinitions( 
+	const Morphology &morph, const BiophysicalProperties &bioph, const DimensionSet &dimensions, const CompartmentDiscretization &comp_disc, 
+	const PassiveCableProperties &cabprops,
+	std::vector< CompartmentDefinition > &comp_definitions 
+){ 
+	comp_definitions.resize(comp_disc.number_of_compartments);
+	
+	
+	// initial potential, threshold for every compartment
+	std::vector<float> compartment_V0(comp_disc.number_of_compartments, NAN);
+	std::vector<float> compartment_Vt(comp_disc.number_of_compartments, NAN); // TODO verify it is not NAN when a spiking connection is defined in respective compartment
+	// TODO throw a mighty fit in case V0 is incomplete
+	
+	for( auto spec : bioph.membraneProperties.initvolt_specs ) ApplyFixedValue(SpecToCompList(morph, spec, comp_disc), spec.value, compartment_V0);
+	for( auto spec : bioph.membraneProperties.threshold_specs ) ApplyFixedValue(SpecToCompList(morph, spec, comp_disc), spec.value, compartment_Vt);
+	
+	for( int comp_seq = 0; comp_seq < comp_disc.number_of_compartments; comp_seq++ ){
+		auto &comp_def = comp_definitions[comp_seq]; 
+		comp_def.V0 = compartment_V0[comp_seq];
+		comp_def.Vt = compartment_Vt[comp_seq];
+		comp_def.AxialResistance = cabprops.inter_compartment_axial_resistance[comp_seq];
+		comp_def.Capacitance = cabprops.compartment_capacitance[comp_seq];
+		
+		comp_def.adjacent_compartments = cabprops.comp_connections[comp_seq];
+	}
+	
+	// add the ion channel distributions too
+	for(const auto &spec : bioph.membraneProperties.channel_specs){
+		
+		auto comp_arr = SpecToCompList(morph, spec, comp_disc).toArray();
+		
+		// used when the is not uniform uniform per compartment
+		std::vector<Real> inho_parameter_values;
+		
+		if(spec.conductivity.type == ChannelDistribution::Conductivity::NON_UNIFORM){
+			inho_parameter_values.assign(comp_arr.size(), NAN);
+			
+			assert( ((const AcrossSegOrSegGroup &) spec).type == AcrossSegOrSegGroup::Type::GROUP );
+			const auto &seg_group = morph.segment_groups[spec.seqid];
+			
+			const auto &inho = spec.conductivity.inho;
+			assert( inho.parm >= 0 );
+			const auto &inhoparm = seg_group.inhomogeneous_parameters.get(inho.parm);
+			
+			// Fetch the parameter values
+			if( inhoparm.metric == Morphology::InhomogeneousParameter::PATH_LENGTH_FROM_ROOT ){
+				for( int32_t comp_in_spec = 0; comp_in_spec < (int32_t)comp_arr.size(); comp_in_spec++ ){
+					int32_t comp_seq = comp_arr[comp_in_spec];
+					inho_parameter_values[comp_in_spec] = cabprops.compartment_path_length_from_root[comp_seq];
+				}
+			}
+			else{
+				printf("internal error: unknown inhomogeneous parameter type %d", (int)inhoparm.metric );
+				return false;
+			}
+			
+			// Optionally post-process in the context of this segment group's set of values.
+			// p0 is the minimum value found in the set of samples, and p1 is the maximum found. 
+			// These "guard" values are chosen intentionally, to match NEURON's SubsetDomainIterator behaviour. (Refer to subiter.hoc file)
+			Real p0 = 1e9;
+			Real p1 = 1;
+			for( auto &val : inho_parameter_values ) p0 = std::min(p0, val);
+			for( auto &val : inho_parameter_values ) p1 = std::max(p1, val);
+			
+			if( inhoparm.subtract_the_minimum ){
+				for( auto &val : inho_parameter_values ) val -= p0;
+				p1 -= p0;
+				p0 = 0;
+			}
+			if( inhoparm.divide_by_maximum ){
+				for( auto &val : inho_parameter_values ) val /= p1;
+				p0 /= p1;
+				p1 = 1;
+			}
+			
+			// Also make sure that random() is not used in the arithmetic expression of the distribution
+			for( const auto &term : inho.value.terms ){
+				if( term.type == Term::Type::RANDOM ){
+					printf("inhomogeneous ion channel conductivity involving random() not supported yet\n");
+					return false;
+				}
+			}
+		}
+		
+		for( int32_t comp_in_spec = 0; comp_in_spec < (int32_t)comp_arr.size(); comp_in_spec++ ){
+			int32_t comp_seq = comp_arr[comp_in_spec];
+			
+			IonChannelDistributionInstance instance;
+			
+			instance.ion_species = spec.ion_species;
+			instance.ion_channel = spec.ion_channel;
+			instance.type = spec.type;
+			
+			if(spec.conductivity.type == ChannelDistribution::Conductivity::FIXED){
+				instance.conductivity = spec.conductivity.value;
+			}
+			else if(spec.conductivity.type == ChannelDistribution::Conductivity::NON_UNIFORM){
+				// XXX the inhomogeneous parameters may contain random(). Thus, in the general case, they have to be evaluated separately for each cell, at instantiation time !
+				
+				const auto &inho = spec.conductivity.inho;
+				
+				// the only symbol is the inhomogeneous parameter, and it could be either dimensionless microns or dimensionless pure, 
+				// depending on if inhoparm.divide_by_maximum was used 
+				Real value_context[1] = { inho_parameter_values[comp_in_spec] };
+				const Dimension dimension_context[1] = { Dimension::Unity() };
+				assert( inho.value.symbol_refs.size() <= 1 );
+				
+				Real val = NAN;
+				Dimension dim_unused = Dimension::Unity(); // should be dimensionless SI conductivity when parsed
+				Int random_call_counter = 0; // no other calls to random() that need to be put on a counter
+				EvaluateLemsExpression(
+					inho.value, value_context, dimension_context,
+					dimensions, random_call_counter, val, dim_unused, 
+					[]( Real random_arg, Int random_call_counter ){
+						(void) random_arg; (void) random_call_counter;
+						// random numbers might be used LATER, only if necessary. In this scope, we can't really use a value because Evaluate must be called seperately for each neuron instance, at instantiation stage ... not codegen stage
+						return NAN;
+					}
+				);
+				
+				// val is given in SI value, convert it to engine value
+				const ScaleEntry mhos_per_m2 = {"S_per_m2"  , 0, 1.0};
+				// assume that the returned value is always SI conductivity whether the factor is length or normalised, TODO explain this somewhere!
+				// printf("evall %10g %10g %10g\n",value_context[0],val, mhos_per_m2.ConvertTo( val, Scales<Conductivity>::native) );
+				
+				instance.conductivity = mhos_per_m2.ConvertTo( val, Scales<Conductivity>::native );
+			}
+			else{
+				printf("internal error: unknown inhomogeneous ion channel conductivity type\n");
+				return false;
+			}
+			
+			instance.erev = spec.erev;
+			instance.vshift = spec.vshift;
+			instance.permeability = spec.permeability;
+			instance.number = spec.number;
+			
+			
+			comp_definitions[comp_seq].ionchans.push_back(instance);
+		};
+	}
+	
+	// and the concentration models
+	for(const auto &spec : bioph.intracellularProperties.ion_species_specs){
+		IonSpeciesDistributionInstance instance;
+		
+		//instance.ion_species = spec.species;
+		instance.conc_model_seq = spec.concentrationModel;
+		
+		instance.initialConcentration = spec.initialConcentration;
+		instance.initialExtConcentration = spec.initialExtConcentration;
+		
+		SpecToCompList(morph, spec, comp_disc).reduce([&comp_definitions, &spec, instance]( Int comp_seq ){
+			comp_definitions[comp_seq].ions[spec.species] = instance;
+		});
+	}
+	// what TODO with external concentrations ??
+	
+	// TODO fill in input/synapse occurences to compartment signatures? or just don't duplicate them in this struct!
+	
+	return true;
+}
+
+
 // MPI context, just a few globals like world size, rank etc.
 #ifdef USE_MPI
 struct MpiContext{
@@ -770,6 +2158,11 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	const auto &simulations         = model.simulations         ;
 	const auto &target_simulation   = model.target_simulation   ;
 	
+	// which simulation?
+	if(target_simulation < 0){
+		fprintf(stderr, "no <Target> tag specified\n");
+		return false;
+	}
 	const Simulation &sim = simulations.get(target_simulation);
 	
 	
@@ -790,7 +2183,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			simulation_random_seed = std::chrono::duration_cast<std::chrono::seconds>(time_now.time_since_epoch()).count();
 		}
 	}
-	
 	
 	const Network &net = networks.get(sim.target_network);
 	
@@ -983,60 +2375,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// The mapping of properties to offsets, for physical cells
 		struct PhysicalCell{
 			
-			// The mapping of NeuroML segments to compartments.
-			// When the the "cable" attribute is not used, each segment maps to one compartment.
-			// But when cables are introduced, multiple segments could map to compartments and vice versa, and not exclusively:
-			// 	two compartments could include (separate) parts of the same segment and two segments
-			// This is because NeuroML2 <segment>s have the semantics of 3D points of a section, as well as sections themselves.
-			struct CompartmentDiscretization{
-				
-				int32_t number_of_compartments;
-				
-				// for each segment(seg_seq), keep a list of the compartments it spans, and up to which fractionAlong it spans them.
-				// (Implicitly, the first compartment in the list contains the start of the segment ie where fractionAlong = 0.)
-				// NB: Each segment overlapping a cable is fully contained by it, thus it 
-				std::vector< std::vector<int32_t> >segment_to_compartment_seq; 
-				std::vector< std::vector<Real> >segment_to_compartment_fractionAlong;
-				// for each compartment, keep a list of the segments it contains, and fractionAlong for beginning and end.
-				// (Implicitly, each segment in between is included until its end and from its start.)
-				std::vector< std::vector<int32_t> >compartment_to_segment_seq; 
-				std::vector< Real >compartment_to_first_segment_start_fractionAlong;
-				std::vector< Real >compartment_to_last_segment_end_fractionAlong;
-				
-				// Also keep the tree-parent relationships, for they are not immediately clear without re-analysing cables
-				std::vector<int32_t>tree_parent_per_compartment; //-1 for root
-				
-				// Note that every cell could be unique, and perhaps 16 bits are enough to describe neurons...
-				// LATER efficiency trick: keep the above lists empty, non existent or something, for cases where the mapping is 1 to 1
-				
-				
-				
-				// Get the comp_seq which contains the fractionAlong across seg_seq (for this abstract mapping; layout in memory could be different)
-				int32_t GetCompartmentForSegmentLocation(Int seg_seq, Real fractionAlong) const {
-					// printf("Compartment for seg_seq %d fractionAlong %g \n", (int)seg_seq, fractionAlong );
-					// There is a possibillity for fractionAlong to deviate due to roundoff, perhaps the value could be clipped instead
-					assert( (0 <= fractionAlong) && (fractionAlong <= 1) );
-					
-					// the correct compartment is the first whose ending fractionAlong exceeds (thus it overlaps) the target fractionAlong
-					// use std::lower_bound if you find it better, through measurement
-					for( int i = 0; i < (int) segment_to_compartment_fractionAlong[seg_seq].size(); i++ ){
-						// printf("\tcheck %d %g ...\n", (int)segment_to_compartment_seq[seg_seq][i] , segment_to_compartment_fractionAlong[seg_seq][i] );
-						// <= used for fractionAlong = 1 case
-						if( fractionAlong <= segment_to_compartment_fractionAlong[seg_seq][i] ){
-							return segment_to_compartment_seq[seg_seq][i];
-						}
-					}
-					// on second thought, the whole range of fractionAlong should be covered, since segment_to_compartment_fractionAlong[seg_seq] ends in 1...
-					// Last chance fallback: produce the last segment (more likely to not include fractionAlong = 1, because of roundoff)
-					assert(false);
-					int32_t last_compartment = segment_to_compartment_fractionAlong[seg_seq].size() - 1;
-					if(last_compartment >= 0){
-						return last_compartment;
-					}
-					else return -1;
-				}
-				
-			};
 			CompartmentDiscretization compartment_discretization;
 			
 			// some indexing structure to map symbolic representation to realized memory addresses and vice versa
@@ -1080,14 +2418,12 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				SimulatorConfig::CableEquationSolver type;
 				
 				// default structure from NeuroML, till unique cells LATER
+				// TODO merge with references to cabprops?
 				std::vector< Int > BwdEuler_OrderList;
 				std::vector< Int > BwdEuler_ParentList;
 				std::vector< Real > BwdEuler_InvRCDiagonal;
 				
 			}cable_solver;
-			
-			
-			
 			
 			struct CableSolverImplementation{
 				// for tables, for each compartment
@@ -1099,57 +2435,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			};
 			CableSolverImplementation cable_solver_implementation;
 			
-			
-			struct IonChannelDistributionInstance{
-				
-				Int ion_species;
-				Int ion_channel;
-				ChannelDistribution::Type type;
-				
-				Real conductivity;
-				Real erev; // for Fixed and Population
-				Real vshift; //for vshift
-				Real permeability; // for GHK1
-				Int number; // for Population
-				
-				IonChannelDistributionInstance(){
-					
-				}
-			};
-			struct IonSpeciesDistributionInstance{
-				
-				//Int ion_species;
-				Int conc_model_seq;
-				
-				Real initialConcentration; // used with core types
-				Real initialExtConcentration;
-				
-				IonSpeciesDistributionInstance(){
-					
-				}
-			};
-			// TODO place somewhere more appropriate
-			// except for data values, it's the same between structurally-identical compartments
-			// so they can be simulated with the exact same code
-			struct CompartmentDefinition{
-				// could convert into proxy object, to allow Struct-of-Arrays transformation, for both memory and time efficiency, LATER
-				Real V0, Vt, AxialResistance, Capacitance; // Don't remove these, keep to maintain a versatile api.
-				
-				
-				std::vector<IonChannelDistributionInstance> ionchans;
-				std::map< Int, IonSpeciesDistributionInstance > ions;
-				
-				std::vector<int32_t> adjacent_compartments;
-				
-				IdListRle input_types;
-				IdListRle synaptic_component_types;
-				
-				bool spike_output;
-				
-				// TODO hash
-				// TODO perhaps create a structure subset, that is enough to generate the code and differentiate the codes
-				CompartmentDefinition(){ spike_output = false; }
-			};
 			std::vector< CompartmentDefinition > comp_definitions;
 			
 			// indices to retrieve which table is which
@@ -1251,13 +2536,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			}
 		};
 		// just for convenience
-		typedef PhysicalCell::IonChannelDistributionInstance IonChannelDistributionInstance;
-		typedef PhysicalCell::IonSpeciesDistributionInstance IonSpeciesDistributionInstance;
 		typedef PhysicalCell::IonChannelDistImplementation IonChannelDistImplementation;
 		typedef PhysicalCell::IonSpeciesDistImplementation IonSpeciesDistImplementation;
 		typedef PhysicalCell::CompartmentGrouping CompartmentGrouping;
 		typedef PhysicalCell::CompartmentImplementation CompartmentImplementation;
-		typedef PhysicalCell::CompartmentDefinition CompartmentDefinition;
 		
 		PhysicalCell physical_cell;
 		
@@ -1394,373 +2676,9 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			const PhysicalCell &cell = cell_type.physical;
 			const Morphology &morph = morphologies.get(cell.morphology);
 			
-			const bool debug_log_discretisation = (config.debug && 0);
-			
-			// Before determining the values of compartments, it would be convenient to lay out their symbolic layout on an array.
-			// Fortunately, we can determine this for the NeuroML 'cables' description, before actually chopping the neurite segments;
-			// though this might not be generalisable for other algorithms.
-			// The invariant of the array representation of compartments is the same as the array representation of segments: that parents must come before children.
-			// Therefore the cables may appear in a different order than the one they were specified in the original NeuroML description, since segment groups may appear in mostly any order.
-			
-			// Determine which segments belong to which 'cable' group.
-			std::vector<Int> cable_per_segment(morph.segments.size(), -1); //group_seq of cable for each segment
-			
-			const bool config_use_cable_discretization = 1;
-			if( config_use_cable_discretization ){
-			for( Int group_seq = 0; group_seq < (Int) morph.segment_groups.size(); group_seq++){
-				const auto &group = morph.segment_groups[group_seq];
-				
-				if( !group.is_cable ) continue;
-				
-				std::vector<Int> segs_in_cable = group.list.toArray();
-				for( Int seg_seq : segs_in_cable ){
-					// perhaps the segment is already included in another group?
-					Int previous_group_seq = cable_per_segment[seg_seq];
-					if(!(previous_group_seq < 0)){
-						// cables should not overlap!!
-						fprintf(stderr, "internal error: segment groups %ld and %ld should be non-overlapping, yet they overlap on segment %ld", group_seq, previous_group_seq, morph.lookupNmlId(seg_seq));
-						return false;
-					}
-					cable_per_segment[seg_seq] = group_seq;
-				}
-				
-			}
-			}
-			
-			// Assign compartments to the parts of the neuron. Each cable is assigned a continuous span of compartments, each non-cable segment is assigned its own compartment.
-			std::vector<Int> free_segment_to_compartment(morph.segments.size(), -1);
-			std::vector<Int> cable_to_compartment_offset(morph.segment_groups.size(), -1);
-			// TODO clarify: nseg is the number of *compartments* per cable
-			std::vector<Int> nseg_per_cable(morph.segment_groups.size(), -1);
-			
-			// LATER d_lambda rule perhaps?
-			Int number_of_compartments = 0;
-			for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
-				Int cable_seq = cable_per_segment[seg_seq];
-				
-				if( cable_seq >= 0 ){
-					// a cable
-					const Morphology::SegmentGroup &group = morph.segment_groups[cable_seq];
-					
-					assert(group.is_cable);
-					// allocate only if not the cable has not been allocated already, by a previous segment
-					if(!(cable_to_compartment_offset[cable_seq] < 0)) continue;
-					
-					Int cable_nseg = group.cable_nseg;
-					if( cable_nseg < 0 ) cable_nseg = 1; // by default, TODO add a shorthand getter in model
-					nseg_per_cable[cable_seq] = cable_nseg;
-					
-					cable_to_compartment_offset[cable_seq] = number_of_compartments;
-					number_of_compartments += cable_nseg;
-				}
-				else{
-					// a free-standing segment
-					// since NML segments are being sweeped, this free-standing segment should be encountered only once in this loop
-					assert(free_segment_to_compartment[seg_seq] < 0);
-					free_segment_to_compartment[seg_seq] = number_of_compartments;
-					number_of_compartments++;
-				}
-			}
-			if(debug_log_discretisation){
-				printf("Number of compartments in cell: %ld\n", number_of_compartments);
-				printf("Compartments of Free-standing segments:\n");
-				for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
-					if( free_segment_to_compartment[seg_seq] >= 0 ){
-						printf("%ld ",seg_seq);
-					}
-				}
-				printf("\n");
-				printf("Compartments of Cables:\n");
-				for( Int group_seq = 0; group_seq < (Int)morph.segment_groups.size(); group_seq++ ){
-					Int first_comp = cable_to_compartment_offset[group_seq];
-					if( first_comp < 0 ) continue;
-					
-					printf("%ld - %ld ", first_comp, nseg_per_cable[group_seq] - 1 );
-				}
-				printf("\n");
-			}
 			auto &pig = sig.physical_cell;
 			auto &comp_disc  = pig.compartment_discretization;
-			auto &segment_to_compartment_seq                       = comp_disc.segment_to_compartment_seq                      ;
-			auto &segment_to_compartment_fractionAlong             = comp_disc.segment_to_compartment_fractionAlong            ;
-			auto &compartment_to_segment_seq                       = comp_disc.compartment_to_segment_seq                      ;
-			auto &compartment_to_first_segment_start_fractionAlong = comp_disc.compartment_to_first_segment_start_fractionAlong;
-			auto &compartment_to_last_segment_end_fractionAlong    = comp_disc.compartment_to_last_segment_end_fractionAlong   ;
-			
-			
-			comp_disc.number_of_compartments = number_of_compartments;
-			// Prepare the maps from compartments to cells, by allocating them to the right size
-			// for each compartment, keep a list of the segments it contains, and fractionAlong for beginning and end.
-			// (Implicitly, each segment in between is included until its end and from its start.)
-			segment_to_compartment_seq.resize( morph.segments.size() ); 
-			segment_to_compartment_fractionAlong.resize( morph.segments.size() );
-			
-			compartment_to_segment_seq.resize( number_of_compartments ); 
-			compartment_to_first_segment_start_fractionAlong.assign( number_of_compartments, -1 ); 
-			compartment_to_last_segment_end_fractionAlong.assign( number_of_compartments, -1 ); 
-			
-			// Process the structure of cables: slice them into compartments of equal length.
-			// later on, the density mechanism specs have to be applied on segments anyway,
-			// 	so the discretisation can be pre-scribed without evaluating any physical comp properties (other than path length) in advance.
-			for(Int group_seq = 0; group_seq < (Int)morph.segment_groups.size(); group_seq++){
-				const Morphology::SegmentGroup &group = morph.segment_groups[group_seq];
-				
-				if(!(group.is_cable && config_use_cable_discretization)) continue;
-				
-				auto cable_nseg = nseg_per_cable[group_seq];
-				
-				// Iterate the segments, chop them into the prescribed number of compartments.
-				// First, count the length of the cable
-				std::vector<Real> segment_length_over_cable(group.list.Count(),NAN);
-				Real running_total_segment_length = 0;
-				
-				// the sorted list of seg_seq 
-				std::vector<Int> segs_in_cable = group.list.toArray(); 
-				for(Int i = 0; i < (Int)segs_in_cable.size(); i++){
-					const auto &seg = morph.segments.atSeq(segs_in_cable[i]); 
-					if( i > 0 ){
-						if(seg.parent != segs_in_cable[i-1]){
-							fprintf(stderr, "internal error: group is not a proper unbranched cable: segment %ld 's parent is %ld when it should be %ld",
-								morph.segments.getId(segs_in_cable[i]), morph.segments.getId(seg.parent), morph.segments.getId(segs_in_cable[i-1]));
-							return false;
-						}
-						// check that fractionAlong = 1 (attached to end of parent) for a properly unbranched cable
-						if(seg.parent >= 0 && seg.fractionAlong != 1){
-							fprintf(stderr, "internal error: group is not a proper unbranched cable: segment %ld is not attached to end of parent but on fractionAlong = %.17g instead",
-								morph.segments.getId(segs_in_cable[i]), seg.fractionAlong);
-							return false;
-						}
-					}
-					running_total_segment_length += DistancePt3d( seg.proximal, seg.distal );
-					segment_length_over_cable[i] = running_total_segment_length;
-					
-				}
-				// running_total_segment_length has total length of the cable by now
-				const auto total_cable_length = running_total_segment_length;
-				
-				if(debug_log_discretisation){
-					printf("segcumlen\n");
-					for(int i = 0; i < (Int)segs_in_cable.size(); i++){
-						printf("%f\n", segment_length_over_cable[i]);
-					}
-				}
-				
-				// now slide along the cable, and chop/merge segments into the new compartments
-				Int segment_under_compartment = 0; // invariant: after each iteration, segment_under_compartment points to the segment over the farthest edge of the last processed compartment
-				// therefore end_compartment_path_length <= segment_length_over_cable[segment_under_compartment]
-				
-				// NB this variable is not used since compartment borders are distributed evenly along path length of the cable. 
-				// It might be useful in case the distribution is not even LATER
-				// std::vector<Real> compartment_length_over_cable(cable_nseg,NAN);
-				// TODO special case where soma is spherical and yet participating in a cable! Keep the soma spherical and distribute nseg - 1?
-				// current implementation will simply not account for the segment as it has zero length
-				for(Int comp_in_cable = 0; comp_in_cable < cable_nseg; comp_in_cable++){
-					
-					// The borders of path_length that this compartment covers
-					// The mapping is fixed and linear over path_length, for now
-					Real start_compartment_path_length = ((comp_in_cable+0)/Real(cable_nseg)) * total_cable_length; // Divide by nseg before multiplying other factors, to get a perfect 1.0 for the last seg
-					Real end_compartment_path_length = ((comp_in_cable+1)/Real(cable_nseg)) * total_cable_length;
-					
-					Int comp_seq = cable_to_compartment_offset[group_seq] + comp_in_cable;
-					
-					if(debug_log_discretisation) printf("cable group_seq %d comp %d, comp_seq %d begin\n", (int) group_seq, (int)comp_in_cable, (int) comp_seq);
-					
-					
-					// Gather the slices of NML segments
-					// Since all said properties are directly summable from their component parts, this is an inline method to avoid extra complexity, for now.
-					auto AddSegmentSliceToCompartment = [ 
-						&segment_to_compartment_seq, &segment_to_compartment_fractionAlong,
-						&compartment_to_segment_seq, &compartment_to_first_segment_start_fractionAlong, &compartment_to_last_segment_end_fractionAlong
-					]( 
-						Int comp_seq, Int seg_seq, Real segment_fractionAlong_start, Real segment_fractionAlong_end 
-					){
-						assert(0 <= segment_fractionAlong_start && segment_fractionAlong_start <= segment_fractionAlong_end && segment_fractionAlong_end <= 1);
-						
-						// for each segment, keep a list of the compartments it spans, and up to which fractionAlong it spans them.
-						// for each compartment, keep a list of the segments it contains, and fractionAlong for beginning and end.
-						
-						// if it is the first segment being added to the compartment, set the fractionAlong
-						if( compartment_to_segment_seq[comp_seq].empty() ){
-							compartment_to_first_segment_start_fractionAlong[comp_seq] = segment_fractionAlong_start;
-						}
-						// set the fractionAlong of last segment incrementally, to be updated by following segments being attached.
-						compartment_to_last_segment_end_fractionAlong[comp_seq] = segment_fractionAlong_end;
-						// maybe setting the first and last fractionAlong can be done explicitly in the per-cable chopping loop, but this is less fragile.
-						
-						
-						compartment_to_segment_seq[comp_seq].push_back(seg_seq);
-						
-						segment_to_compartment_seq[seg_seq].push_back(comp_seq);
-						segment_to_compartment_fractionAlong[seg_seq].push_back(segment_fractionAlong_end);
-						
-					};
-					
-					// helpers for converting path length to fractionAlong, whet else is there to say, with a fallback for zero length segments
-					// TODO make it more elegant
-					auto PathLengthToFractionAlong_OrZero = [](Real start, Real end, Real query){
-						Real fractionAlong = (query - start)/(end - start);
-						if( abs(end - start) < 0.001 ){
-							// in case the diameter changes in an abruptly short span of path length, fix segment_fractionAlong to a valid and quite accurate value
-							// NB: this remains ambiguous! fractionAlong could be 1 as well, therefore this must be checked beforehand or this routine should be called on a codepath where 1 is explicitly used
-							fractionAlong = 0;
-						}
-						return fractionAlong;
-					};
-					auto SegmentQueryToFractionAlong_OrZero = [PathLengthToFractionAlong_OrZero, &segment_length_over_cable](Int seg_idx, Real query_path_along){
-						Real start_segment_path_length = 0;
-						if( seg_idx > 0 ) start_segment_path_length = segment_length_over_cable[seg_idx-1];
-						Real end_segment_path_length = segment_length_over_cable[seg_idx];
-						
-						return PathLengthToFractionAlong_OrZero(start_segment_path_length, end_segment_path_length, query_path_along);
-					};
-					
-					// The path_length that has been accumulated in the compartment so far
-					Real index_compartment_path_length = start_compartment_path_length;
-					
-					// merge all segments that end up to end_compartment_path_length
-					while( 
-						segment_under_compartment < (Int)segment_length_over_cable.size() 
-						&& segment_length_over_cable[segment_under_compartment] <= end_compartment_path_length 
-					){
-						// Integrate frustum from index_compartment_path_length to end of current segment.
-						
-						Real segment_fractionAlong = SegmentQueryToFractionAlong_OrZero(segment_under_compartment, index_compartment_path_length); // NB: returns zero for empty segment
-						if( abs(segment_fractionAlong - 1) < 0.0001 ){
-							// no need to integrate this minuscule part, skip
-							//would add abs(index_compartment_path_length - segment_length_over_cable[segment_under_compartment]) < 0.001 condition but have to account for zero length segments
-						}
-						else{
-							auto seg_seq = segs_in_cable[segment_under_compartment];
-							if(debug_log_discretisation) printf("complete seg %ld (%d) fractionAlong %f->end\n", segment_under_compartment, (int) seg_seq, segment_fractionAlong);
-							AddSegmentSliceToCompartment(comp_seq, seg_seq, segment_fractionAlong, 1);
-						}
-						
-						index_compartment_path_length = segment_length_over_cable[segment_under_compartment];
-						segment_under_compartment++;
-					}
-					// If the compartments spans a part of the, 
-					if( segment_under_compartment < (Int)segment_length_over_cable.size() 
-						&& end_compartment_path_length < segment_length_over_cable[segment_under_compartment] 
-					){
-						// Integrate frustum from index_compartment_path_length to end of current compartment, on current segment.
-						Real segment_fractionAlong_start = SegmentQueryToFractionAlong_OrZero(segment_under_compartment, index_compartment_path_length);
-						Real segment_fractionAlong_end = SegmentQueryToFractionAlong_OrZero(segment_under_compartment, end_compartment_path_length);
-						// add an exception to include the whole segment to the end, if it is the last compartment of the cable. To avoid letting this end be unaccounted for.
-						if( comp_in_cable + 1 == cable_nseg ){
-							// segment_fractionAlong_end = 1;
-						}
-						
-						
-						if( abs(segment_fractionAlong_end - segment_fractionAlong_start) < 0.0001 ){
-							// no need to integrate this minuscule part, skip
-						}
-						else{
-							if(debug_log_discretisation) printf("partial seg %ld fractionAlong %f->%f\n", segment_under_compartment, segment_fractionAlong_start, segment_fractionAlong_end);
-							AddSegmentSliceToCompartment(comp_seq, segs_in_cable[segment_under_compartment], segment_fractionAlong_start, segment_fractionAlong_end);
-						}
-						
-						// compartment_length_over_cable[comp_in_cable] = end_compartment_path_length;
-					}
-				}
-				
-			}
-			
-			// Define the segments not in cables as individual compartments.
-			// Perhaps save memory somehow, in this case LATER
-			for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
-				Int comp_seq = free_segment_to_compartment[seg_seq];
-				if(!( comp_seq >= 0 )) continue;
-				
-				segment_to_compartment_seq[seg_seq].push_back(comp_seq);
-				segment_to_compartment_fractionAlong[seg_seq].push_back(1);
-				
-				compartment_to_segment_seq[comp_seq].push_back(seg_seq);
-				compartment_to_first_segment_start_fractionAlong[comp_seq] = 0;
-				compartment_to_last_segment_end_fractionAlong[comp_seq] = 1;
-				
-			}
-			
-			// Resolving the (parent-child) connections between segments to the corresponding compartments
-			// is done here, it is more convenient since the cables are processed in this pass over cell types.
-			// This could be rolled in the preceding loops (per cable and per segment) but it would complicate that code further.
-			// (Also by requiring iterating over cables to follow a seg_seq_compatible order so that prent cable is already resolved)
-			// Another alternative is to ierate through each segment, linking compartments in series along each,
-			// 	and linking compartments that the segment starts with since fractionAlong=0, to their parents. But why make this more difficult than it has to be
-			// {
-			auto &tree_parent_per_compartment = comp_disc.tree_parent_per_compartment;
-			tree_parent_per_compartment.assign( number_of_compartments, -1 );
-			// std::vector<bool> cable_processed( morph.segment_groups.size(), false );
-			
-			// Resolve parents for free segments.
-			for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
-				Int comp_seq = free_segment_to_compartment[seg_seq];
-				if( comp_seq < 0 ) continue;
-				
-				//the segment maps to exactly one compartment, map it
-				const auto &seg = morph.segments.atSeq(seg_seq); 
-				if( seg.parent >= 0 ){
-					tree_parent_per_compartment[comp_seq] = comp_disc.GetCompartmentForSegmentLocation( seg.parent, seg.fractionAlong );
-				}
-				else tree_parent_per_compartment[comp_seq] = -1;
-				
-			}
-			// Resolve parents for cables.
-			for(Int group_seq = 0; group_seq < (Int)morph.segment_groups.size(); group_seq++){
-				const Morphology::SegmentGroup &group = morph.segment_groups[group_seq];
-				
-				if(!(group.is_cable && config_use_cable_discretization)) continue;
-				
-				
-				auto cable_nseg = nseg_per_cable[group_seq];
-				assert( cable_nseg >= 1 );
-				
-				auto first_comp_on_cable = cable_to_compartment_offset[group_seq];
-				
-				// For all compartments succeeding the first one, their parent property is obvious: i is the previous comp_seq in order obviously to their predecessors
-				for( int comp_seq = first_comp_on_cable + 1; comp_seq < first_comp_on_cable + cable_nseg; comp_seq++){
-					tree_parent_per_compartment[comp_seq] = comp_seq - 1;
-				}
-				// For the first compartment, use the parent of the first seg of the fisrt compartment
-				// (the first seg should, of course, be included in the first compartment starting from fractionAlong = 0)
-				Int first_seg_on_cable = compartment_to_segment_seq[first_comp_on_cable][0];
-				
-				assert(compartment_to_first_segment_start_fractionAlong[first_comp_on_cable] == 0);
-				
-				const auto &seg = morph.segments.atSeq(first_seg_on_cable); 
-				if( seg.parent >= 0 ){
-					tree_parent_per_compartment[first_comp_on_cable] = comp_disc.GetCompartmentForSegmentLocation( seg.parent, seg.fractionAlong );
-				}
-				else tree_parent_per_compartment[first_comp_on_cable] = -1;
-				
-			}
-			
-			if(debug_log_discretisation){
-				printf("Mapping:\n");
-				for( Int seg_seq = 0; seg_seq < (Int)morph.segments.size(); seg_seq++ ){
-					printf("Seg %d:", (int) seg_seq);
-					for( Int j = 0; j < (Int) segment_to_compartment_seq[seg_seq].size(); j++ ){
-						printf(" %d (%g)", (int) segment_to_compartment_seq[seg_seq][j], segment_to_compartment_fractionAlong[seg_seq][j]);
-					}
-					printf("\n");
-					
-				}
-				for( Int comp_seq = 0; comp_seq < (Int)compartment_to_segment_seq.size(); comp_seq++ ){
-					printf("Comp %d:", (int) comp_seq);
-					printf(" (%g)", compartment_to_first_segment_start_fractionAlong[comp_seq]);
-					for( Int j = 0; j < (int) compartment_to_segment_seq[comp_seq].size(); j++ ){
-						printf(" %d", (int) compartment_to_segment_seq[comp_seq][j]);
-					}
-					printf(" (%g)", compartment_to_last_segment_end_fractionAlong[comp_seq]);
-					printf("\n");
-				}
-				
-				printf("Parents:\n");
-				for( Int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ) 	printf("\t%d", (int) comp_seq);	
-				printf("\n");
-				for( Int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ) 	printf("\t%d", (int) tree_parent_per_compartment[comp_seq]);	
-				printf("\n");
-			}
-			
+			if(!GetCompartmentDiscretizationForCellType(morph, comp_disc, config.debug)) return false;
 		}
 		else if( cell_type.type == CellType::ARTIFICIAL ){
 			// no segments no worries
@@ -2160,182 +3078,6 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	// Note: symbol values are assumed to be in engine native scales
 	// TODO roll the random call counter into the random() functor, unless we want to keep a certain traversal order
 	//  ... which is still better enforced by calling the functor
-	auto EvaluateLemsExpression = []( 
-		const TermTable &expression, const auto &symbol_values, const auto &symbol_dimensions, 
-		const DimensionSet &dimensions, Int &random_call_counter, 
-		Real &val_out, Dimension &dim_out, const auto &call_random 
-	){
-		
-		auto Evaluate = [ ]( 
-			const auto &Evaluate, // the most elegant way to make a lambda recursive, oh well
-			const TermTable &expression, int node, const auto &symbol_values, const auto &symbol_dimensions, 
-			const DimensionSet &dimensions, Int &random_call_counter, 
-			Real &val_out, Dimension &dim_out, const auto &call_random 
-		)
-		-> void // Return type must be made explicit before recursive calls in the code, a line with if(0) return; could also work
-		{
-			
-			const auto &tab = expression;
-			//printf("node %d \n", node);
-			auto &term = tab[node];
-			if(term.type == Term::VALUE){
-				val_out = term.value;
-				dim_out = Dimension::Unity();
-			}
-			else if(term.type == Term::SYMBOL){
-				val_out = symbol_values[term.symbol];
-				dim_out = symbol_dimensions[term.symbol];
-			}
-			else if(term.isUnary() || term.isBinaryOperator()){
-				
-				// it is a math operation, could cause  dimension change -> possible conversion factor to shift between engine units
-				LemsUnit conversion_factor =  dimensions.GetNative(Dimension::Unity()); // or override
-				
-				if(term.isBinaryOperator()){
-					Real      val_l, val_r;
-					Dimension dim_l, dim_r;
-					
-					Evaluate(Evaluate, expression, term.left , symbol_values, symbol_dimensions, dimensions, random_call_counter, val_l, dim_l, call_random );
-					Evaluate(Evaluate, expression, term.right, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_r, dim_r, call_random );
-					
-					if(term.type == Term::PLUS){
-						val_out = val_l + val_r;
-						dim_out = dim_r; // NeuroML API should have ensured consistency
-					}
-					else if(term.type == Term::MINUS ){
-						val_out = val_l - val_r;
-						dim_out = dim_r; // NeuroML API should have ensured consistency
-					}
-					else if(term.type == Term::TIMES ){
-						val_out = val_l * val_r;
-						dim_out = dim_l * dim_r;
-						// correct for change of engine units...
-						val_out = ( dimensions.GetNative(dim_l) * dimensions.GetNative(dim_r) ).ConvertTo(val_out, dimensions.GetNative(dim_out)) ;
-					}
-					else if(term.type == Term::DIVIDE){
-						val_out = val_l / val_r;
-						dim_out = dim_l / dim_r;
-						// correct for change of engine units...
-						val_out = ( dimensions.GetNative(dim_l) / dimensions.GetNative(dim_r) ).ConvertTo(val_out, dimensions.GetNative(dim_out)) ;
-					}
-					else if(term.type == Term::LT    ){
-						val_out = ( val_l < val_r ) ? 1 : 0;
-						dim_out = Dimension::Unity(); // boolean
-					}
-					else if(term.type == Term::GT    ){
-						val_out = ( val_l > val_r ) ? 1 : 0;
-						dim_out = Dimension::Unity(); // boolean
-					}
-					else if(term.type == Term::LEQ   ){
-						val_out = ( val_l <= val_r ) ? 1 : 0;
-						dim_out = Dimension::Unity(); // boolean
-					}
-					else if(term.type == Term::GEQ   ){
-						val_out = ( val_l >= val_r ) ? 1 : 0;
-						dim_out = Dimension::Unity(); // boolean
-					}
-					else if(term.type == Term::EQ    ){
-						val_out = ( val_l == val_r ) ? 1 : 0;
-						dim_out = Dimension::Unity(); // boolean
-					}
-					else if(term.type == Term::NEQ   ){
-						val_out = ( val_l != val_r ) ? 1 : 0;
-						dim_out = Dimension::Unity(); // boolean
-					}
-					else if(term.type == Term::AND   ){
-						val_out = ( (bool)val_l && (bool)val_r ) ? 1 : 0;
-						dim_out = Dimension::Unity(); // boolean
-					}
-					else if(term.type == Term::OR    ){
-						val_out = ( (bool)val_l || (bool)val_r ) ? 1 : 0;
-						dim_out = Dimension::Unity(); // boolean
-					}
-					else if(term.type == Term::POWER ){
-						val_out = std::pow( val_l, val_r );
-						dim_out = Dimension::Unity(); // XXX i know
-					}
-					else{
-						assert(false);
-					}
-				}
-				else if( term.type == Term::RANDOM ){
-					Real val_r;
-					Dimension dim_r;
-					Evaluate(Evaluate, expression, term.right, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_r, dim_r, call_random );
-					
-					val_out = call_random(val_r, random_call_counter);
-					random_call_counter++;
-					
-					dim_out = dim_r; // should be pure number
-				}
-				else if(term.isUnaryFunction()){
-					Real val_r;
-					Dimension dim_r;
-					Evaluate(Evaluate, expression, term.right, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_r, dim_r, call_random );
-					
-							if(term.type == Term::ABS   ){ val_out = std::abs  ( val_r ); }
-					else if(term.type == Term::SQRT  ){ val_out = std::sqrt ( val_r ); }
-					else if(term.type == Term::SIN   ){ val_out = std::sin  ( val_r ); }
-					else if(term.type == Term::COS   ){ val_out = std::cos  ( val_r ); }
-					else if(term.type == Term::TAN   ){ val_out = std::tan  ( val_r ); }
-					else if(term.type == Term::SINH  ){ val_out = std::sinh ( val_r ); }
-					else if(term.type == Term::COSH  ){ val_out = std::cosh ( val_r ); }
-					else if(term.type == Term::TANH  ){ val_out = std::tanh ( val_r ); }
-					else if(term.type == Term::EXP   ){ val_out = std::exp  ( val_r ); }
-					else if(term.type == Term::LOG10 ){ val_out = std::log10( val_r ); }
-					else if(term.type == Term::LN    ){ val_out = std::log  ( val_r ); }
-					else if(term.type == Term::CEIL  ){ val_out = std::ceil ( val_r ); }
-					else if(term.type == Term::FLOOR ){ val_out = std::floor( val_r ); }
-					else if(term.type == Term::HFUNC ){ val_out = ( val_r < 0 ) ? 0 : 1; }
-					else if(term.type == Term::INT ){ val_out = (long long)( val_r ); }
-					else{
-						assert(false);
-					}
-					
-					// math functions conveniently map from pure number to pure number, LATER specialcase if needed
-					dim_out = dim_r;
-				}
-				else if(term.isUnaryOperator()){
-					Real val_r;
-					Dimension dim_r;
-					Evaluate(Evaluate, expression, term.right, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_r, dim_r, call_random );
-					
-					if(term.type == Term::UMINUS ){
-						val_out = -val_r;
-						dim_out = dim_r;
-					}
-					else if(term.type == Term::UPLUS ){
-						val_out = +val_r;
-						dim_out = dim_r;
-					}
-					else if(term.type == Term::NOT ){
-						val_out = (bool)val_r;
-						dim_out = Dimension::Unity(); // boolean
-					}
-					else{
-						assert(false);
-					}
-				}
-				else{
-					assert(false);
-				}
-				
-			}
-			else{
-				printf("unknown term %d !\n", term.type);
-				assert(false); // TODO something better
-			}
-			// append debug info for e.g. dimensions
-			// printf("%g %s\n", val_out, dimensions.Stringify(dim_out).c_str());
-			//printf("bye node %d \n", node);
-		};
-		//TermTable::printTree(expression.tab, expression.tab.expression_root, 0);
-		val_out = NAN; // just to initialize
-		dim_out = Dimension::Unity(); // just to initialize
-		Evaluate(Evaluate, expression, expression.expression_root, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_out, dim_out, call_random);
-		return;
-	};
-	
 	struct DescribeLems{
 		
 		static std::string ExpressionInfix( const ComponentType::ResolvedTermTable &expression, const ComponentType &type, const DimensionSet &dimensions, Int &random_call_counter, Dimension &dim_out ){
@@ -4024,663 +4766,23 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		
 		const ScaleEntry microns = {"um", -6, 1.0}; // In NeuroML, Morphology is given in microns
 		
-		// preprocess Morphology for geometry, connectivity info, and compartmental subdivision
-		// interaction between state variables is, of course, also determined by connectivity between compartments
-		// NeuroML assumes a tree model of truncated cone-shaped 'segments'
-		// 	( which may be further subdivided in compartments, for compatibility with NEURON )
+		
 		std::vector< std::vector<int32_t> > comp_connections(number_of_compartments);
 		
-		// physical properties
-		std::vector<float> compartment_lengths(number_of_compartments, NAN);
-		std::vector<float> compartment_areas  (number_of_compartments, NAN);
-		std::vector<float> compartment_volumes(number_of_compartments, NAN);
-		std::vector<float> compartment_path_length_from_root(number_of_compartments, NAN);
-		
-		
-		// TODO:
-		// If the values of properties have to be sampled across the neuron, there are two ways to go about it:
-		// The first one is to sample only for the middles of compartments. 
-		// This is more accurate if few segments are split into many compartments, and less accurate if many segments are merged into few compartments.
-		// It has the additional benefit that all calculations are performed compartment-wise, which is amenable to in-line initialisation in the per-compartment code.
-		// The second one is to sample for the middles of segments.
-		// This is less accurate if few segments are split into many compartments, and more accurate if many segments are merged into few compartments.
-		// It has the complication of mapping segment values to compartment values, through the conversion process of said segments into compartments; which is not as amenable to parallel run-time code.
-		// A third one is to apply all segment-and compartment-wise intersections, and evaluate each "compartment fragment" that comes out of that.
-		// All these approaches assume that said values can be interpolated smoothly along the length of neurites.
-		
-		// Another problem comes up with values which are simply not integrable over the extent of a neurite.
-		//  Examples are starting membrane voltage, and spike initiation "threshold" voltage. Exclusively one value can hold for these oer a compartment.
-		
-		// For now:
-		// - The geometric properties of the neurite compartments (area, volume) are precisely integrated using the linearly varying per segment values. This is convenient because these geometric values are laid out explicitly.
-		// - The resistance of the neurite is also precisely evaluated through the per segment values. To do otherwise would be to calculate the (1/length) factor to multiply by the per-compartment resistivity.
-		// - The conductance of density mechanisms is *IM*precisely evaluated by mapping the per-segment parameters over the compartments which overlap with the segments.
-		// - The conductance of inhomogeneous ion channel distributions is *IM*precisely evaluated through the per compartment central path lengths. This is possible through the pre-calculated per-compartment area.
-		
-		
-		
-		// Density mechanisms such as ion channels and ion pools are applied over the whole compartments that the designated segment group to apply over overlaps with, whether the overlap is partial or not.
-		// A possible unintended consequence is for a compartment that is straddling two segments with different mechanism specifications over the two segments, to contain both sets of mechanisms, each with excess conductance.
-		// This could be refined by introducing another paameter of "effective area over a compartment" to the numerical model of each mechanicm instance. 
-		// A hacky alternative could be to re-scale the Gmax, or ρmax, but this only applies if the effect is a linear function of area. (Also does not necessarily work with LEMS mechs.)
-		// But in principle, the proper way to ensure that mechnaism are applied to a specific compartment is to make an explicit semgment to represent the compartment.
-		
-		// process connectivity
-		printf("\tAnalyzing internal connectivity...\n");
-		for( Int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
-			const auto comp_parent = comp_disc.tree_parent_per_compartment[comp_seq];
-			
-			if(!(comp_parent < 0)){
-				comp_connections[comp_seq].push_back(comp_parent);
-				comp_connections[comp_parent].push_back(comp_seq);
-			}
-			// Since comp_parent < comp_seq, each comp_connections[i] list is always going to be ordered !
-		}
-		
-		// process geometry of morphology
-		printf("\tAnalyzing geometry...\n");
-		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
-			
-			auto &comp_length = compartment_lengths[comp_seq];
-			auto &comp_area   = compartment_areas  [comp_seq];
-			auto &comp_volume = compartment_volumes[comp_seq];
-			
-			// summate by iterating through all segment-based fractions
-			comp_length = 0;
-			comp_area   = 0;
-			comp_volume = 0;
-			
-			const auto &segs_in_comp = comp_disc.compartment_to_segment_seq[comp_seq];
-			
-			for( int seg_in_comp = 0; seg_in_comp < (int) segs_in_comp.size(); seg_in_comp++ ){
-				Real from_fractionAlong = (seg_in_comp == 0) ? comp_disc.compartment_to_first_segment_start_fractionAlong[comp_seq] : 0;
-				Real   to_fractionAlong = (seg_in_comp+1 == (int) segs_in_comp.size()) ? comp_disc.compartment_to_last_segment_end_fractionAlong[comp_seq] : 1;
-				Int seg_seq = segs_in_comp[seg_in_comp];
-				
-				// TODO check if there is any case proximal should be the specified one, or the distal of parent seg instead
-				
-				const Morphology::Segment &seg = morph.segments.atSeq(seg_seq);
-				
-				// NOTE the actual 3D points used may differ from what's stated in the NeuroML tag
-				// following obscure rules followed by the NeuroML exporter
-				// TODO deduplicate the intra-seg mapping through lerp, to make sure it's consistent
-				
-				const Morphology::Segment::Point3DWithDiam seg_from = LerpPt3d(seg.proximal, seg.distal, from_fractionAlong);
-				const Morphology::Segment::Point3DWithDiam seg_to   = LerpPt3d(seg.proximal, seg.distal,   to_fractionAlong);
-				
-				Real comp_fragment_length = DistancePt3d( seg_from, seg_to );
-				
-				comp_length += comp_fragment_length;
-				comp_area   += GeomHelp::Area( comp_fragment_length, seg_from.d, seg_to.d );
-				comp_volume += GeomHelp::Volume( comp_fragment_length, seg_from.d, seg_to.d );
-				
-			}
-		}
-		// get path length from root too
-		// comp_seq order puts parents first always, just like seg_seq order
-		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
-			const auto comp_parent = comp_disc.tree_parent_per_compartment[comp_seq];
-			
-			if( comp_parent < 0 ){
-					// well, Neuron assumes the *proximal edge* of a compartment to be the beginning of "Path length from root",
-					// (thus diastnnce(comp0) = comp0_length/2) rather than the middle of the compartment (in which case it would be disctance(comp0) = 0).
-					// compartment_path_length_from_root[comp_seq] = 0;
-					compartment_path_length_from_root[comp_seq] = (compartment_lengths[comp_seq] / 2);
-					
-			}
-			else{
-				compartment_path_length_from_root[comp_seq] = 
-					compartment_path_length_from_root[comp_parent] 
-					+ (compartment_lengths[comp_parent] + compartment_lengths[comp_seq])/2 ;
-			}
-		}
-		
-		// process passive biophysics
-		printf("\tAnalyzing cable equation...\n");
-		// membrane specific capacitance, axial resistivity for every segment, sample them to integrate capacitance and resistance for each compartment.		
-		// d_lambda rule can also be calculated from Cm and Ra (NEURON book, chapter 5)
-		std::vector<Real> segment_Cm_(morph.segments.contents.size(), NAN);
-		std::vector<Real> segment_Ra_(morph.segments.contents.size(), NAN);
-		
-		for( auto spec : bioph.membraneProperties.capacitance_specs ) spec.apply(morph, segment_Cm_);
-		for( auto spec : bioph.intracellularProperties.resistivity_specs ) spec.apply(morph, segment_Ra_);
-		
-		// TODO throw a mighty fit in case Cm and Ra are incomplete
-		
-		// 
-		std::vector<Real> compartment_capacitance(number_of_compartments, NAN);
-		
-		// NB abuse NeuroML's tree morphology limitation to set axial resistance values in a compartment-parallel vector
-		// where each value is child's axial resistance to its *parent*
-		// Will need a more general way to store conductivity constants when
-		//  non-tree neuron topologies are implemented LATER
-		std::vector<Real> inter_compartment_axial_resistance(number_of_compartments, NAN);
-		
-		// Resistance is not derived by the total edge-to-edge resistance of compartments, 
-		// because modellers ofter taper the ends of neurite to zero or another tiny value.
-		// And this causes the half total resistance of a compartment to be disproportionally 
-		// 	higher than the anticipated resistance of the proximal half of it,
-		// 	since it accounts for the tapered end thich is not important for inter-compartment resistivity (since the neurite ends there).
-		// Instead, the resistance between two compartments is the sum of the resistance 
-		// 	of the distal half of the parent compartment and that of the proximal half of the child compartment.
-		// Refer also to the code of NEURON that follows the same approach: treeset.cpp, routine diam_from_list
-		// and to notes on the NEURON message board:
-		// 	https://www.neuron.yale.edu/phpBB/viewtopic.php?f=15&t=2539&p=10078&hilit=axial+resistivity#p10078
-		// 	https://www.neuron.yale.edu/phpBB/viewtopic.php?f=8&t=3904&p=16807&hilit=axial+resistivity#p16808
-		// Note: This model is accurate for unbranched sections of neurite, but not for branches.
-		// Conductance and area in that case are not that well defined, since integrating from the middle of the compartment to the precise fractionALong the compartment still may not include the small-scale details of the branch: a model should be made by an expert for that LATER, or more generally getting to override such conductance values. 
-		// In any case, the true value of Ra 𓁛 is obscure anyway, so why should it matter... again, only an expert can tell.
-		// Note: Compartments with zero length are assumed to have zero resistance, (as they have zero length) even though they have non-zero area and volume (as implied spheres).
-		std::vector<Real> compartment_axial_resistance_proximal(number_of_compartments, NAN);
-		std::vector<Real> compartment_axial_resistance_distal(number_of_compartments, NAN);
-		
-		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
-			
-			if(config.verbose){
-				printf("Summating resistance and conductance for comp_seq %d\n", (int) comp_seq );
-			}
-			
-			const auto comp_length = compartment_lengths[comp_seq];
-			const auto comp_midpoint_length = comp_length / 2;
-			
-			auto &comp_axial_resistance_proximal = compartment_axial_resistance_proximal[comp_seq];
-			auto &comp_axial_resistance_distal   = compartment_axial_resistance_distal  [comp_seq];
-			compartment_axial_resistance_proximal[comp_seq] = 0;
-			compartment_axial_resistance_distal  [comp_seq] = 0;
-
-			auto &comp_capacitance = compartment_capacitance [comp_seq];
-			comp_capacitance = 0;
-			
-			// also evaluate the d_lambda rule for the component, as a diagnostic for users who want to inspect the numerics at play
-			const Real compartment_lambda_hertz = 100;
-			Real compartment_lambda = 0;
-			
-			// summate by iterating through all segment-based fractions
-			Real running_comp_length = 0;
-			
-			const auto &segs_in_comp = comp_disc.compartment_to_segment_seq[comp_seq];
-			
-			for( int seg_in_comp = 0; seg_in_comp < (int) segs_in_comp.size(); seg_in_comp++ ){
-				Real from_fractionAlong = (seg_in_comp == 0) ? comp_disc.compartment_to_first_segment_start_fractionAlong[comp_seq] : 0;
-				Real   to_fractionAlong = (seg_in_comp+1 == (int) segs_in_comp.size()) ? comp_disc.compartment_to_last_segment_end_fractionAlong[comp_seq] : 1;
-				Int seg_seq = segs_in_comp[seg_in_comp];
-				
-				// TODO check if there is any case proximal should be the specified one, or the distal of parent seg instead
-				
-				if(config.verbose){
-					printf("seg %d (id %d), fractionAlong from %g to %g\n", (int) seg_seq, (int) morph.lookupNmlId(seg_seq), from_fractionAlong, to_fractionAlong );
-				}
-				
-				const Morphology::Segment &seg = morph.segments.atSeq(seg_seq);
-				
-				const Morphology::Segment::Point3DWithDiam seg_from = LerpPt3d(seg.proximal, seg.distal, from_fractionAlong);
-				const Morphology::Segment::Point3DWithDiam seg_to   = LerpPt3d(seg.proximal, seg.distal,   to_fractionAlong);
-				
-				Real comp_fragment_length = DistancePt3d( seg_from, seg_to );
-				Real comp_fragment_area   = GeomHelp::Area( comp_fragment_length, seg_from.d, seg_to.d );
-				
-				// Add capacitance to compartment fragment
-				Real comp_fragment_capacitance = segment_Cm_[seg_seq] * comp_fragment_area;
-				// and rescale to engine units
-				comp_fragment_capacitance = ( (Scales<SpecificCapacitance>::native) * (microns*microns) ).ConvertTo( comp_fragment_capacitance, Scales<Capacitance>::native );
-			
-				comp_capacitance += comp_fragment_capacitance;
-				
-				// Add resistance to the proximal and distal halves of the compartment
-				// running_comp_length is the sum of path length (arc length in NEURON lingo) of compartment fragments up to, excluding this iteration
-				Real Ra = segment_Ra_[seg_seq];
-				
-				// input: Ra in native unit, start-end in microns, returns resistance in native unit
-				auto GetFrustumResistance = [ &microns ]( Real Ra, Morphology::Segment::Point3DWithDiam from, Morphology::Segment::Point3DWithDiam to ){
-					// using the volumetric frustum integral, instead of cylinder approximation
-					// R = (Ra/pi)*( Length/(Radius_start*Radius_end) ) 
-					// To get this formula, integrate dR = dx * Ra/CrossSection = dx * Ra /( pi * ( (1-x/Length)*Radius_start + (x/Length)*Radius_end )^2 ) for x = 0...Length
-					Real resistance = Ra * (4/M_PI) * DistancePt3d(from, to) / ( from.d * to.d );
-					// and rescale to engine units
-					resistance = ( (Scales<Resistivity>::native * microns)/(microns^2) ).ConvertTo( resistance, Scales<Resistance>::native );
-					return resistance;
-				};
-				
-				if(config.verbose){
-					printf("resistance measurement: from_comp_length %g to_comp_length %g midpoint_length %g\n", 
-						running_comp_length, running_comp_length + comp_fragment_length, comp_midpoint_length
-					);
-				}
-				// XXX this is a workaround for isolated zero length sections.
-				// The advantages with this approach are that it:
-				// - is simple to implement
-				// - will behave like the NML exporter for the simple, expected cases (soma as sphere)
-				// - can attempt to simulate any model, when the NML exporter's trick does not account for some contrived cases that will still get ill defined numerically. 
-				// TODO follow the precise workaround that NeuroML does: If a segment has zero length AND proximal diameter = distal diameter AND ( it is the only segment in a cable  OR it is a self standing segment ) then consider it a cylinder with length = proximal diameter.
-				// Accounting for path length on this cylinder should also have a small(insignificant?) effect on inhomogeneous distributions.
-				// This also resolves the issue with whether Area should be based on a frustum or sphere.
-				// TODO put warnings in place for improper tracing of neurons, to avoid halting when axial resistance predictably ends up invalid, when the specific conditions for the NML exporter's edge case do not apply (for example, if a segment has zero length but varying diameter and it is the only one in the cable, or when a cable includes multiple segments with zero diameter)
-				// A variation could be to assume that all segments in a zero length cable are spheres...
-				if( comp_length == 0 ){
-					// Consider the form of a cylinder with diameter = length to calculate resistance.
-					// Note that proximal and distal diameters amy differ, assume both are something sane...
-					auto seg_to_extrapolated = seg_from;
-					seg_to_extrapolated.y += seg_to.d;
-					const Morphology::Segment::Point3DWithDiam seg_midpoint = LerpPt3d(seg.proximal, seg_to_extrapolated, 0.5);
-					
-					if(config.verbose){
-						printf("\t zero length segment\n" );
-					}
-					
-					comp_axial_resistance_proximal += GetFrustumResistance( Ra, seg_from, seg_midpoint);
-					comp_axial_resistance_distal   += GetFrustumResistance( Ra, seg_midpoint, seg_to_extrapolated  );
-				}
-				else if( running_comp_length + comp_fragment_length < comp_midpoint_length ){
-					// whole part of seg belongs to the proximal half
-					if(config.verbose){
-						printf("\t proximal half\n" );
-					}
-					comp_axial_resistance_proximal += GetFrustumResistance( Ra, seg_from, seg_to);
-				}
-				else if( comp_midpoint_length <= running_comp_length ){
-					// whole part of seg belongs to the distal half
-					if(config.verbose){
-						printf("\t distal half\n" );
-					}
-					comp_axial_resistance_distal   += GetFrustumResistance( Ra, seg_from, seg_to);
-				}
-				else{
-					assert( running_comp_length < comp_midpoint_length && comp_midpoint_length <= running_comp_length + comp_fragment_length );
-					// seg straddles the proximal and distal half
-					
-					// NB: this is the fraction to lerp over the seg fraction, from seg_from to seg_to.
-					// Not over the full extent of the seg, proximal to distal. 
-					Real compartment_midpoint_fragment_fraction = (comp_midpoint_length - running_comp_length) / comp_fragment_length;
-					// prefer NaN values to be mapped to fractionAlong = end, to keep the ilusion of zero length segments being processed whole
-					if(!( compartment_midpoint_fragment_fraction < 1 )) compartment_midpoint_fragment_fraction = 1;
-					if(!( 0 < compartment_midpoint_fragment_fraction )) compartment_midpoint_fragment_fraction = 0;
-					
-					const Morphology::Segment::Point3DWithDiam seg_midpoint = LerpPt3d(seg_from, seg_to, compartment_midpoint_fragment_fraction);
-					
-					if(config.verbose){
-						printf("\t midpoint: fragment fraction %g\n", compartment_midpoint_fragment_fraction );
-					}
-					
-					comp_axial_resistance_proximal += GetFrustumResistance( Ra, seg_from, seg_midpoint);
-					comp_axial_resistance_distal   += GetFrustumResistance( Ra, seg_midpoint, seg_to  );
-				}
-				
-				// Add the estimate of AC wave length as per the NEURON book, just as a diagnostic value. 
-				
-				// inputs in native units, except for time whoch is in Hz, and that is in order to omit it from the scaling factor... it seems to be wbe working nonetheless, why not leave it that way ... because Ra * Cm = Time/Length and that must be counterbalanced!!! The correctioun would be to set the ScaleEntry of Hz explicitly, and correct if it doesn't match Ra*Cm/microns XXX
-				// Note that the average diameter is used in the calculation even though the integrand is a non linear function of diameter, if it's accurate enough for Hines it's good enough.
-				auto lambda_f_microns = [&microns](float diam, float freq_Hz, float Ra, float Cm, bool debug){
-					ScaleEntry scale_Ra = Scales<Resistivity>::native; // {"ohm_cm" ,-2, 1.0}; // NEURON units
-					ScaleEntry scale_Cm = Scales<SpecificCapacitance>::native; // {"uF_per_cm2",-2, 1.0}; // NEURON units
-					
-					float lambda_f = std::sqrt( diam/( 4 * M_PI * freq_Hz * Ra * Cm ) );
-					ScaleEntry dla_scale = ( microns / (scale_Ra * scale_Cm) )^(0.5);
-					if( debug ){
-						printf("dla %g %g %g\n", lambda_f, pow10(dla_scale.pow_of_10)*dla_scale.scale, lambda_f*(pow10(dla_scale.pow_of_10)*dla_scale.scale) );
-					}
-					return dla_scale.ConvertTo( lambda_f, microns );
-				};
-				
-				Real comp_fragment_lambda_microns = lambda_f_microns( (seg_from.d + seg_to.d) / 2, compartment_lambda_hertz, Ra, segment_Cm_[seg_seq], config.debug );
-				compartment_lambda += comp_fragment_length / comp_fragment_lambda_microns;
-				
-				// done for this compartment fragment, add path length to sum
-				running_comp_length += comp_fragment_length;
-			}
-			
-			if(config.verbose){
-				printf("Compartment %d  capacitance: %g %s  proximal resistance: %g %s  distal resistance: %g %s\n", (int) comp_seq,
-					comp_capacitance              , Scales<Capacitance>::native.name,
-					comp_axial_resistance_proximal, Scales<Resistance >::native.name,
-					comp_axial_resistance_distal  , Scales<Resistance >::native.name
-				);
-			}
-			
-			// report total 100Hz ac wavelength
-			// try checking the d_lambda rule
-			const float d_lambda = 0.1;
-			// XXX why is this 0.9 factor here again ?? not a fixme since it matches the formula in NEURON
-			float nseg_factor = ( compartment_lambda / d_lambda ) + 0.9;
-			if( config.verbose ){
-			printf("nseg %.9f\n", nseg_factor);
-			}
-			int nseg = int( nseg_factor / 2 ) * 2 + 1 ; //really should be odd, to avoid midpoint shenanigans
-			(void) nseg; // It is useful as a diagnostic to show for modellers. subdivision perhaps LATER, but it would be better to use a separate neuron design tool for that
-			
-			// also take advantage of comp_seq order to resolve resistance with parent as well
-			auto comp_parent = comp_disc.tree_parent_per_compartment[comp_seq];
-			if(comp_parent >= 0){
-				inter_compartment_axial_resistance[comp_seq] = comp_axial_resistance_proximal + compartment_axial_resistance_distal[comp_parent];
-			
-			}
-			else{
-				inter_compartment_axial_resistance[comp_seq] = NAN;
-			}
-		}
-		if(config.verbose){
-		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
-			printf("Compartment %d resistance with parent %d: %g %s\n", 
-				(int) comp_seq, (int) comp_disc.tree_parent_per_compartment[comp_seq],
-				inter_compartment_axial_resistance[comp_seq] , Scales<Resistance>::native.name
-			);
-		}
-		}
-		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
-			auto comp_parent = comp_disc.tree_parent_per_compartment[comp_seq];
-			if( comp_parent < 0 ) continue;
-			auto resistance = inter_compartment_axial_resistance[comp_seq];
-			if(!( std::isfinite(resistance) && resistance > 0 )){
-				// TODO prettier printing, though it shouldn't happen
-				
-				printf("internal error: Conductance between compartments %d, %d is undefined \n", 
-				(int) comp_seq, (int) comp_parent );
-				return false;
-			};
-		}
-		
-		// Approximate the smallest time constant of the passive system, using the Method of Time Constants. for RC circuits:
-		// https://designers-guide.org/forum/Attachments/MTC.pdf
-		// fastest pole = sum (pole of each capacitor with conductivities to ground, if all other capacitors were shorted)
-		Real rate_total = 0;
-		ScaleEntry RC_scale = (Scales<Resistance>::native * Scales<Capacitance>::native);
-		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
-			//conveniently, in neural compartment models, other capacitors being shorted means only directly adjacent resistances matter
-			//  R1    R2    R3    R4
-			// -vvv-+-vvv-+-vvv-+-vvv-
-			//      |     =     |   
-		    // GND -+-----+-----+- GND
-			float Gtotal = 0;
-			for( Int adjacent_comp : comp_connections[comp_seq] ){
-				size_t R_index = (adjacent_comp > comp_seq) ? adjacent_comp : comp_seq ; // NB: remember how inter_compartment_axial_resistance is structured
-				Real R = inter_compartment_axial_resistance[R_index];
-				Gtotal += 1/R;
-			}
-			
-			float rate = Gtotal / compartment_capacitance[comp_seq] ;
-			rate_total += rate;
-			
-			float tau = RC_scale.ConvertTo( 1/rate, Scales<Time>::native); //TODO check values once more
-			if( config.verbose ){
-			printf(" compartment axial %g %s\n", tau, Scales<Time>::native.name );
-			}
-		}
-		float tau_total = RC_scale.ConvertTo( 1/rate_total, Scales<Time>::native);
-		if(config.verbose) printf(" total axial %g %s\n", tau_total, Scales<Time>::native.name );
-		
-		
-		// Now perform analysis for Backward Euler method
-		printf("\tAnalyzing Bwd Euler...\n");
-		// Gauss elimination of one neuron's conductance matrix for Bwd Euler can be performed as a tree traversal, with the benefit of O(N) run time.
-		// The process followed is thus equivalent to the Hines algorithm (1983).
-		// The particular order of circuit nodes to visit could be tweaked. Here we use a depth-first traversal starting from node 0 (supposed to be the soma), but a BFS order could be used as well to reduce tree depth (and hopefully numerical error).
-		struct BackwardEuler{
-			public:
-			// just a reference to the connection matrix to be traversed
-			// typename could be made implicit with some template magic
-			const std::vector< std::vector<int32_t> > &conn_list;
-			// intermediate result: tha nodes visited by DFS.
-			std::vector< bool > node_gray;
-			// results: the sequence of nodes to visit, and the map of each node to its parent.
-			std::vector< Int > order_list; // per processing step
-			std::vector< Int > order_parent; // per node_seq
-			// Recursivly traverse
-			void DFS(
-				Int i // node being visited
-			){
-				node_gray[i] = true;
-				
-				for( Int j : conn_list[i]){
-					if( node_gray[j] ) continue;
-					
-					// otherwise, explore
-					order_parent[j] = i;
-					node_gray[j] = true;
-					DFS( j );
-				}
-				
-				order_list.push_back(i);
-			}
-			
-			protected:
-			BackwardEuler( const std::vector< std::vector<int32_t> > &_conn ) : conn_list(_conn) {
-				
-				Int nCells = (Int)conn_list.size();
-				
-				node_gray = std::vector< bool >( nCells, false );
-				order_list = std::vector< Int >();
-				order_parent = std::vector< Int >( nCells, -1 );
-				
-			}
-			public:
-			static void GetOrderLists(
-				const std::vector< std::vector<int32_t> >conn_list,
-				std::vector< Int > &order_list,
-				std::vector< Int > &parent_list,
-				Int start_from = 0
-			){
-				BackwardEuler ob(conn_list);
-				
-				ob.DFS( start_from );
-				
-				order_list = ob.order_list;
-				parent_list = ob.order_parent;
-			}
-		};
-		
-		// Fill in the Bwd Euler order for the tree
-		auto &order_list = pig.cable_solver.BwdEuler_OrderList;
-		auto &order_parent = pig.cable_solver.BwdEuler_ParentList;
-		BackwardEuler::GetOrderLists( comp_connections, order_list, order_parent );
-		
-		if( config.verbose ){
-		printf("Order: ");
-		for( Int val : order_list ){
-			printf("%ld ", val);
-		}
-		printf("\n");
-		printf("Parent: ");
-		for( Int val : order_parent ){
-			printf("%ld ", val);
-		}
-		printf("\n");
-		}
-		
-		// Also fill in the part of the diagonal that's axial conductance to other, since it's going to be fixed during the simulation
-		// 	(a made variable LATER)
-		auto &compartment_adjacent_InvRC = pig.cable_solver.BwdEuler_InvRCDiagonal;
-		compartment_adjacent_InvRC = std::vector<Real>(number_of_compartments, 0 );
-		// and get the connectivity diagonals for bwd Euler
-		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
-			for( int adjacent_comp : comp_connections[comp_seq] ){
-				Int idx = std::max( comp_seq, adjacent_comp ); // NB: remember how inter_compartment_axial_resistance is structured
-				auto R = inter_compartment_axial_resistance[ idx ];
-				auto C = compartment_capacitance[ comp_seq ];
-				auto D = ( (Scales<Resistance>::native * Scales<Capacitance>::native)^(-1) ).ConvertTo( 1/(R*C), Scales<Frequency>::native );
-				compartment_adjacent_InvRC[comp_seq] += D;
-			}
-		}
-		
-		if( config.verbose ){
-		printf("Diagonal 1/RC Constant(%s): ", Scales<Frequency>::native.name );
-		for( auto val : compartment_adjacent_InvRC ){
-			printf("%g ", val);
-		}
-		printf("\n");
-		}
-		
-		// initial potential, threshold for every compartment
-		std::vector<float> compartment_V0(number_of_compartments, NAN);
-		std::vector<float> compartment_Vt(number_of_compartments, NAN); // TODO verify it is not NAN when a spiking connection is defined in respective compartment
-		// TODO throw a mighty fit in case V0 is incomplete
-		
-		// the mapping from segments to compartments is not necessarily direct.
-		// 	Produce a list that contains all compartments that overlap with said segments
-		auto SpecToCompList = [](
-			const Morphology &morph, const AcrossSegOrSegGroup &spec, 
-			const CellInternalSignature::PhysicalCell::CompartmentDiscretization &comp_disc
-		){
-			IdListRle comp_list;
-			spec.reduce( morph, [ &comp_disc, &comp_list ]( Int seg_seq ){
-				for( Int comp_seq : comp_disc.segment_to_compartment_seq[seg_seq] ) comp_list.Addd(comp_seq);
-			} );
-			comp_list.Compact();
-			return comp_list;
-		};
-		auto ApplyFixedValue = []( const IdListRle &id_list, const auto &value, auto &array ){
-			id_list.reduce( [&value, &array]( Int comp_seq ){
-				array[comp_seq] = value;
-			} );
-		};
-		
-		for( auto spec : bioph.membraneProperties.initvolt_specs ) ApplyFixedValue(SpecToCompList(morph, spec, comp_disc), spec.value, compartment_V0);
-		for( auto spec : bioph.membraneProperties.threshold_specs ) ApplyFixedValue(SpecToCompList(morph, spec, comp_disc), spec.value, compartment_Vt);
-		
-		// Realize per-compartment signatures
+		PassiveCableProperties cabprops;
+		if(!GetCellPassiveCableProperties(morph, bioph, comp_disc, cabprops, config.verbose, config.debug)) return false;
+		pig.cable_solver.BwdEuler_OrderList     = cabprops.BwdEuler_OrderList    ;
+		pig.cable_solver.BwdEuler_ParentList    = cabprops.BwdEuler_ParentList   ;
+		pig.cable_solver.BwdEuler_InvRCDiagonal = cabprops.BwdEuler_InvRCDiagonal;
 		
 		auto &comp_definitions = pig.comp_definitions;
-		comp_definitions.resize(number_of_compartments);
-		
-		for( int comp_seq = 0; comp_seq < number_of_compartments; comp_seq++ ){
-			auto &comp_def = comp_definitions[comp_seq]; 
-			comp_def.V0 = compartment_V0[comp_seq];
-			comp_def.Vt = compartment_Vt[comp_seq];
-			comp_def.AxialResistance = inter_compartment_axial_resistance[comp_seq];
-			comp_def.Capacitance = compartment_capacitance[comp_seq];
-			
-			comp_def.adjacent_compartments = comp_connections[comp_seq];
+		if(!GetCompartmentDefinitions( morph, bioph, dimensions, comp_disc, cabprops, comp_definitions )) return false;
+		std::vector<Real> compartment_V0(comp_disc.number_of_compartments, NAN);
+		std::vector<Real> compartment_Vt(comp_disc.number_of_compartments, NAN);
+		for(int i = 0; i < (int)compartment_V0.size(); i++){
+			compartment_V0[i] = comp_definitions[i].V0;
+			compartment_Vt[i] = comp_definitions[i].Vt;
 		}
-		
-		// add the ion channel distributions too
-		for(const auto &spec : bioph.membraneProperties.channel_specs){
-			
-			auto comp_arr = SpecToCompList(morph, spec, comp_disc).toArray();
-			
-			// used when the is not uniform uniform per compartment
-			std::vector<Real> inho_parameter_values;
-			
-			if(spec.conductivity.type == ChannelDistribution::Conductivity::NON_UNIFORM){
-				inho_parameter_values.assign(comp_arr.size(), NAN);
-				
-				assert( ((const AcrossSegOrSegGroup &) spec).type == AcrossSegOrSegGroup::Type::GROUP );
-				const auto &seg_group = morph.segment_groups[spec.seqid];
-				
-				const auto &inho = spec.conductivity.inho;
-				assert( inho.parm >= 0 );
-				const auto &inhoparm = seg_group.inhomogeneous_parameters.get(inho.parm);
-				
-				// Fetch the parameter values
-				if( inhoparm.metric == Morphology::InhomogeneousParameter::PATH_LENGTH_FROM_ROOT ){
-					for( int32_t comp_in_spec = 0; comp_in_spec < (int32_t)comp_arr.size(); comp_in_spec++ ){
-						int32_t comp_seq = comp_arr[comp_in_spec];
-						inho_parameter_values[comp_in_spec] = compartment_path_length_from_root[comp_seq];
-					}
-				}
-				else{
-					printf("internal error: unknown inhomogeneous parameter type %d", (int)inhoparm.metric );
-					return false;
-				}
-				
-				// Optionally post-process in the context of this segment group's set of values.
-				// p0 is the minimum value found in the set of samples, and p1 is the maximum found. 
-				// These "guard" values are chosen intentionally, to match NEURON's SubsetDomainIterator behaviour. (Refer to subiter.hoc file)
-				Real p0 = 1e9;
-				Real p1 = 1;
-				for( auto &val : inho_parameter_values ) p0 = std::min(p0, val);
-				for( auto &val : inho_parameter_values ) p1 = std::max(p1, val);
-				
-				if( inhoparm.subtract_the_minimum ){
-					for( auto &val : inho_parameter_values ) val -= p0;
-					p1 -= p0;
-					p0 = 0;
-				}
-				if( inhoparm.divide_by_maximum ){
-					for( auto &val : inho_parameter_values ) val /= p1;
-					p0 /= p1;
-					p1 = 1;
-				}
-				
-				// Also make sure that random() is not used in the arithmetic expression of the distribution
-				for( const auto &term : inho.value.terms ){
-					if( term.type == Term::Type::RANDOM ){
-						printf("inhomogeneous ion channel conductivity involving random() not supported yet\n");
-						return false;
-					}
-				}
-			}
-			
-			for( int32_t comp_in_spec = 0; comp_in_spec < (int32_t)comp_arr.size(); comp_in_spec++ ){
-				int32_t comp_seq = comp_arr[comp_in_spec];
-				
-				CellInternalSignature::IonChannelDistributionInstance instance;
-				
-				instance.ion_species = spec.ion_species;
-				instance.ion_channel = spec.ion_channel;
-				instance.type = spec.type;
-				
-				if(spec.conductivity.type == ChannelDistribution::Conductivity::FIXED){
-					instance.conductivity = spec.conductivity.value;
-				}
-				else if(spec.conductivity.type == ChannelDistribution::Conductivity::NON_UNIFORM){
-					// XXX the inhomogeneous parameters may contain random(). Thus, in the general case, they have to be evaluated separately for each cell, at instantiation time !
-					
-					const auto &inho = spec.conductivity.inho;
-					
-					// the only symbol is the inhomogeneous parameter, and it could be either dimensionless microns or dimensionless pure, 
-					// depending on if inhoparm.divide_by_maximum was used 
-					Real value_context[1] = { inho_parameter_values[comp_in_spec] };
-					const Dimension dimension_context[1] = { Dimension::Unity() };
-					assert( inho.value.symbol_refs.size() <= 1 );
-					
-					Real val = NAN;
-					Dimension dim_unused = Dimension::Unity(); // should be dimensionless SI conductivity when parsed
-					Int random_call_counter = 0; // no other calls to random() that need to be put on a counter
-					EvaluateLemsExpression(
-						inho.value, value_context, dimension_context,
-						dimensions, random_call_counter, val, dim_unused, 
-						[]( Real random_arg, Int random_call_counter ){
-							(void) random_arg; (void) random_call_counter;
-							// random numbers might be used LATER, only if necessary. In this scope, we can't really use a value because Evaluate must be called seperately for each neuron instance, at instantiation stage ... not codegen stage
-							return NAN;
-						}
-					);
-					
-					// val is given in SI value, convert it to engine value
-					const ScaleEntry mhos_per_m2 = {"S_per_m2"  , 0, 1.0};
-					// assume that the returned value is always SI conductivity whether the factor is length or normalised, TODO explain this somewhere!
-					// printf("evall %10g %10g %10g\n",value_context[0],val, mhos_per_m2.ConvertTo( val, Scales<Conductivity>::native) );
-					
-					instance.conductivity = mhos_per_m2.ConvertTo( val, Scales<Conductivity>::native );
-				}
-				else{
-					printf("internal error: unknown inhomogeneous ion channel conductivity type\n");
-					return false;
-				}
-				
-				instance.erev = spec.erev;
-				instance.vshift = spec.vshift;
-				instance.permeability = spec.permeability;
-				instance.number = spec.number;
-				
-				
-				comp_definitions[comp_seq].ionchans.push_back(instance);
-			};
-		}
-		
-		// and the concentration models
-		for(const auto &spec : bioph.intracellularProperties.ion_species_specs){
-			CellInternalSignature::IonSpeciesDistributionInstance instance;
-			
-			//instance.ion_species = spec.species;
-			instance.conc_model_seq = spec.concentrationModel;
-			
-			instance.initialConcentration = spec.initialConcentration;
-			instance.initialExtConcentration = spec.initialExtConcentration;
-			
-			SpecToCompList(morph, spec, comp_disc).reduce([&comp_definitions, &spec, instance]( Int comp_seq ){
-				comp_definitions[comp_seq].ions[spec.species] = instance;
-			});
-		}
-		// what TODO with external concentrations ??
 		
 		// fill in input/synapse occurences to compartment signatures
 		for( const auto &keyval : input_types_per_cell_per_compartment[cell_seq] ){
@@ -4710,10 +4812,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 
 		
 		// constants
-		size_t Index_Capacitance = AppendSingle_CellScope.Constant( compartment_capacitance, "Compartment Capacitance ("+std::string(Scales<Capacitance>::native.name)+")" );
-		size_t Index_AxialResistance = AppendSingle_CellScope.Constant( inter_compartment_axial_resistance, "Axial Resistance ("+std::string(Scales<Resistance>::native.name)+")" );
+		size_t Index_Capacitance = AppendSingle_CellScope.Constant( cabprops.compartment_capacitance, "Compartment Capacitance ("+std::string(Scales<Capacitance>::native.name)+")" );
+		size_t Index_AxialResistance = AppendSingle_CellScope.Constant( cabprops.inter_compartment_axial_resistance, "Axial Resistance ("+std::string(Scales<Resistance>::native.name)+")" );
 		size_t Index_VoltageThreshold = AppendSingle_CellScope.Constant( compartment_Vt, "Spike Threshold ("+std::string(Scales<Voltage>::native.name)+")" );
-		size_t Index_MembraneArea = AppendSingle_CellScope.Constant( compartment_areas, "Membrane Surface Area (microns^2)" );
+		size_t Index_MembraneArea = AppendSingle_CellScope.Constant( cabprops.compartment_areas, "Membrane Surface Area (microns^2)" );
 		size_t Index_Temperature = AppendSingle_CellScope.Constant( net.temperature, "Temperature (K)" ); // TODO move to global
 		// TODO add a static_assert that engine unit for temperature is always kelvins, to omit dancing around the fact
 		// and states
@@ -4792,7 +4894,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			bool  flatten_adjacency,
 			const SimulatorConfig::CableEquationSolver &cell_cable_solver,
 			const BiophysicalProperties &bioph,
-			const CellInternalSignature::PhysicalCell::CompartmentDefinition &comp_def,
+			const CompartmentDefinition &comp_def,
 			CellInternalSignature::PhysicalCell::CompartmentImplementation &comp_impl,
 			Int &random_call_counter,
 			std::string &ccde
@@ -6228,7 +6330,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 			const SignatureAppender_Table &AppendMulti,
 			size_t comp_seq,
 			const std::string &for_what,
-			const CellInternalSignature::PhysicalCell::CompartmentDefinition &comp_def,
+			const CompartmentDefinition &comp_def,
 			CellInternalSignature::PhysicalCell::CompartmentImplementation &comp_impl,
 			std::string &code
 		){
@@ -6337,7 +6439,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				size_t comp_seq,
 				const std::string &for_what,
 				const std::string &tab,
-				const CellInternalSignature::CompartmentDefinition &comp_def,
+				const CompartmentDefinition &comp_def,
 				CellInternalSignature::CompartmentImplementation &comp_impl,
 				CellInternalSignature::WorkItemDataSignature &wig,
 				std::string &intracomp_code, std::string &post_code
@@ -10376,6 +10478,873 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 	return true;
 }
 
+Morphology::Segment::Point3DWithDiam GetPointAlongSeg( const Morphology::Segment &seg, Real fractionAlong ){
+	return LerpPt3d(seg.proximal, seg.distal, fractionAlong);
+}
+struct Vec3{
+	Real x,y,z;
+	Vec3 operator-() const {return Vec3(-x,-y,-z);}
+	Vec3 operator+( Vec3 o ) const {return Vec3(x+o.x, y+o.y, z+o.z);}
+	Vec3 operator-( Vec3 o ) const {return Vec3(x-o.x, y-o.y, z-o.z);}
+	Vec3 operator*( Real s ) const {return Vec3(x*s, y*s, z*s);}
+	Vec3 operator/( Real s ) const {return Vec3(x/s, y/s, z/s);}
+	
+	Real operator*( Vec3 o ) const {return (x*o.x + y*o.y + z*o.z);} // dot product
+	Vec3 operator^( Vec3 o ) const {return Vec3(y*o.z - z*o.y, z*o.x - x*o.z,  x*o.y - y*o.x);} // cross product
+	
+	Real length() const {return std::sqrt(x*x + y*y + z*z);}
+	Vec3 normal() const {auto l = this->length(); if(l == 0) return *this*l; else return *this/l; }
+	
+	
+	Vec3(Real _x, Real _y, Real _z):x(_x),y(_y),z(_z){}
+	Vec3(){}
+};
+Vec3 operator*(Real s, const Vec3 &o){return o*s;}
+
+Vec3 Pt3dToVec3(const Morphology::Segment::Point3DWithDiam &p){ return Vec3(p.x, p.y, p.z); }
+
+// TODO demonstrate some duplication with AnalysisResult_Tree in treemat demo
+struct AnalysisResult_Tree{
+	// NB: These values are all in *output units*, not engine units!
+	// Same for seg_seq, comp_seq.
+	// This is so we won;'t have to resolve them at the output stage.
+	// TODO test the aos magic vector?
+	struct CompInfo{
+		// Units in microns, otherwise noted inline
+		int  comp_parent; // TODO remove _comp
+		Vec3 comp_start_pos, comp_end_pos, comp_midpoint;
+		int  comp_midpoint_segment_id; // NB: not seg_seq, it's in ID space for output
+		Real comp_midpoint_fractionAlong;
+		Real comp_length;
+		Real comp_area;
+		Real comp_volume;
+		Real comp_path_length_from_root;
+		Real comp_capacitance; // in pF
+		Real comp_conductance_to_parent; // in nMho
+		
+		bool is_ball;
+		
+		// int nChans, nHHGates, nKSGates; TODO make eden api example about these
+        // Real total_passive_g, total_active_gbar;
+	};
+	std::vector<CompInfo> comp_info;
+	// TODO maybe export the comp_disc as well i guess
+};
+struct MesherOptions{
+	// how to generate the 3D mesh of the morphologyL
+	enum TreeType{
+		TREE_UNCHOPPED, // use the original morphology, without discretisation info
+		TREE_PERCOMP, // one conical segment per compartment, for less polys (thereby missing tortuosity and thickness in between)
+		TREE_CHOPPED // keep all segmewnts in the morphology, also split them on compartment boundaries (show both the full morphology and its discretisation)
+	} tree_type;
+	
+	int rays_per_prism_number; // the same for all segments for now, until LATER
+	Real max_miter_length_absolute; // only absolute for now
+	Real ball_microns_per_face;
+	Real join_max_distance_microns; // join segs if less, break if more
+	
+	// default settings
+	MesherOptions(){
+		tree_type = TREE_CHOPPED;
+		rays_per_prism_number = 5;
+		max_miter_length_absolute = 5.0;
+		ball_microns_per_face = 10;
+		join_max_distance_microns = 999;
+	}
+};
+struct AnalysisResult_Mesh{
+	std::vector<Vec3> verts; // in microns
+	std::vector< std::array<int, 3> > faces;
+	std::vector<int> label_per_face;
+};
+// TODO name better
+void seg_intersect_3d(Vec3 a1, Vec3 a2, Vec3 b1, Vec3 b2, Real &f1, Real &f2){
+	// Get the vector perpendicular to both a and b
+	auto perp = []( Vec3 &a, Vec3 &b ){ return ((a^b)^a).normal(); };
+	auto da = a2-a1, db = b2-b1, dp = a1-b1;
+	auto dap = perp(da,db), dbp = perp(db,da);
+	Real denom = dap*db + 1e-20; // to avoid division by 0 always *and* keep error negligible
+	Real num = dap*dp;
+	f1 = (num / denom);
+	
+	denom = dbp*da + 1e-20;
+	num = dbp*(-dp);
+	f2 = (num / denom);
+	
+	// printf("%g %g | %f %f %f | %f %f %f\n",f1, f2, da.x, da.y, da.z, db.x, db.y, db.z);
+}
+// could also make it radius neutral but why bother now, since the mesher options should be involved...
+void MakeBallMesh(const MesherOptions &opts, Real radius, std::vector<Vec3> &verts, std::vector< std::array<int, 3> > &faces, Real &max_safe_radius){
+	int subdiv = ceil(M_PI*radius / opts.ball_microns_per_face);
+	if(subdiv < 1) subdiv = 1;
+    const int &N = subdiv;
+	// printf("subdiv %d\n", N);exit(-1);
+	
+	// Use a hashmap to handle verts on the edges
+    typedef std::array<int,3> p3;
+    std::map<p3, int> vertmap;
+    auto GetAxix = [&subdiv](int frac){
+        return 2*((float(frac)/subdiv) - .5f);
+    };
+    auto GetVert = [&GetAxix, &vertmap, &verts, &subdiv](p3 t){
+        if(vertmap.count(t)) return vertmap.at(t);
+        int newv = verts.size();
+        verts.push_back({GetAxix(t[0]), GetAxix(t[1]) ,GetAxix(t[2])});
+        vertmap[t] = newv;
+        return newv;
+    };
+	// Add the faces of a subdivided cube, inscribed in the unit sphere
+    auto AddFace = [&GetVert, &faces](p3 t1, p3 t2, p3 t3){
+        auto v1 = GetVert(t1), v2 = GetVert(t2), v3 = GetVert(t3);
+        faces.push_back({v1, v2, v3});
+    };
+    auto AddQuad = [&AddFace](p3 t0, p3 t1, p3 t2, p3 t3, bool flip){
+        if(flip){ AddFace(t0, t1, t3); AddFace(t3, t2, t0); }
+        else{ AddFace(t0, t1, t2); AddFace(t2, t1, t3); }
+    };
+    for(int i = 0; i < N; i++) for(int j = 0; j < N; j++){
+        bool flip = not( (2*i>=N) xor (2*j>=N));
+        AddQuad({i+0,j+0,N}, {i+1,j+0,N}, {i+0,j+1,N}, {i+1,j+1,N}, flip);
+        AddQuad({i+0,j+0,0}, {i+0,j+1,0}, {i+1,j+0,0}, {i+1,j+1,0}, flip);
+        AddQuad({i+0,N,j+0}, {i+0,N,j+1}, {i+1,N,j+0}, {i+1,N,j+1}, flip);
+        AddQuad({i+0,0,j+0}, {i+1,0,j+0}, {i+0,0,j+1}, {i+1,0,j+1}, flip);
+        AddQuad({N,i+0,j+0}, {N,i+1,j+0}, {N,i+0,j+1}, {N,i+1,j+1}, flip);
+        AddQuad({0,i+0,j+0}, {0,i+0,j+1}, {0,i+1,j+0}, {0,i+1,j+1}, flip);
+    }
+	// Spread the verts of the cube to cover equal arcs on the unit sphere 
+    for(int i = 0; i < (int)verts.size(); i++){
+        auto &v = verts[i];
+        // v = v/v.length(); simple normalization is quite uneven
+        // mad math from https://mathproofs.blogspot.com/2005/07/mapping-cube-to-sphere.html
+        Real x2 = v.x*v.x, y2 = v.y*v.y, z2 = v.z*v.z;
+        v = {
+            v.x*sqrt(1 - (y2 + z2)/2 + (y2 * z2)/3),
+            v.y*sqrt(1 - (x2 + z2)/2 + (x2 * z2)/3),
+            v.z*sqrt(1 - (y2 + x2)/2 + (y2 * x2)/3),
+        };
+    }
+    // the flat faces should have the min radius, thus checking for tri edges only should be fine
+    // could get max distance instead, for less sqrt
+    max_safe_radius = 1;
+    auto GetMinRadius = [](Vec3 v1, Vec3 v2){
+        // assuming points lie on the unit sphere
+        Real ll = (v1 - v2).length();
+        return sqrt(1 - ll*ll/4);
+    };
+    for(int i = 0; i < (int)faces.size(); i++){
+        auto &f = faces[i];
+        max_safe_radius = std::min(max_safe_radius,GetMinRadius(verts[f[0]],verts[f[1]]));
+        max_safe_radius = std::min(max_safe_radius,GetMinRadius(verts[f[2]],verts[f[1]]));
+        max_safe_radius = std::min(max_safe_radius,GetMinRadius(verts[f[0]],verts[f[2]]));
+    }
+	
+	// rescale verts to radius
+	for(auto &v : verts) v = v * radius;
+	max_safe_radius = max_safe_radius*radius*0.9999; // for good measure
+	
+	// done! 
+}
+
+// TODO project proximal with parent fractionAlong between edges, prolly with tangv offsets ... but no max? or limited by parent prox perp tangp plane?
+
+bool MorphologyToMesh(const MesherOptions &opts, const Morphology &morph,
+// const CompartmentDiscretization &comp_disc, // needed for tree types with discretization, otherwise optional
+	const std::vector<int> &label_per_segment, // optional, if used it mush have as one value per segment
+	std::vector<Vec3> &out_vertices,// vertices of the mesh
+	std::vector< std::array<int, 3> > &out_faces,// triengles of the mesh
+	std::vector<int> &out_face_labels // filled in if label_per_segment is used, otherwise cleared
+){
+	// atm we need preallocated verts, bc we need preallocated rays...?
+	// actually a seg may be cut in two or more by comps!!!
+	// thus: as many cones as comp_disc.
+	// rays need to be adjusted only on start and end though i guess
+	// intersection is a seg to seg thing ...
+	// and check if a miter-limit patch AFTER miter extensions for all children !
+	
+	const int n_sides = opts.rays_per_prism_number;
+	const int n_segs = (int) morph.segments.size();
+	
+	std::vector<bool> is_ball(n_segs,false); // TODO
+	std::vector<bool> attached_prox(n_segs,false), attached_dist(n_segs,false);
+	std::vector<int> attached_ring(n_segs,-1); // TODO on a ray by ray basis? keep a tube points that this child thinks i guess! ... won't be enough, check if this ray is max extrusion for this child ... TODO
+	std::vector<Vec3> diffv(n_segs), tangv(n_segs), normv(n_segs), joinv(n_segs);
+	std::vector<Real> scalp(n_segs*n_sides,0),scald(n_segs*n_sides,0);// scales for distal ...
+	// get ray vertices i guess (for comps which are not balls)
+	std::vector<Vec3> tube_verts(n_segs*n_sides*2);
+	std::vector<Vec3> bevel_offs(n_sides);
+	auto GetVertInd = [&](int seg, int ab, int ray){
+		assert(0 <= seg && seg < n_segs && 0 <= ab && ab < 2 && 0 <= ray && ray < n_sides);
+		return seg*n_sides*2 + ab*n_sides + ray;
+	};
+	auto v = [&](int seg, int ab, int ray) -> Vec3 & {
+		int ind = GetVertInd(seg, ab, ray);
+		assert(0 <= ind && ind <= (int)tube_verts.size());
+		return tube_verts[ind];
+	};
+	
+	for(int i = 0; i < n_sides; i++){
+		Real phi = (2*M_PI*i)/n_sides;
+		bevel_offs[i] = {0, std::sin(phi), std::cos(phi)}; // # ccw facing x
+	}
+	const Real EPS_SIN = 0.0001, EPS_NORV = 0.005, EPS_FRAC = 0.0012, EPS_VERT = 0.0005;
+	// assuming x is forward (ie tangent), z is up (ie normal) . z can be replaced in practice with whatever the direction of the (not necessarily regular poly) bevel profile should be.
+	// Ofc if tangent is z, another direction must be chosen (eg another vertex of a regular polygon, or just y ?...). TODO put in settings
+	Vec3 outward = {0,0,1}, outward_alternate = {0,1,0};
+	
+	for(int seg_seq = 0; seg_seq < n_segs; seg_seq++){
+		const Morphology::Segment &seg = morph.segments.atSeq(seg_seq);
+		auto &delta = diffv[seg_seq];
+		delta = (Pt3dToVec3(seg.proximal) - Pt3dToVec3(seg.distal));
+		if(delta.length() < EPS_VERT){
+			if(seg_seq == 0)  tangv[seg_seq] = outward;
+			else tangv[seg_seq] = tangv[seg.parent];
+		}
+		else tangv[seg_seq] = delta.normal();
+		
+		if(seg_seq == 0){
+			if(delta.length() < EPS_VERT) is_ball[seg_seq] = 1;
+			
+			normv[0] = outward;
+			if((tangv[0] ^ normv[0]).length() < EPS_NORV) normv[0] = outward_alternate;
+			joinv[seg_seq] = {0,0,0}; // unused
+		}
+		else{
+			// NB: assume parent tangv exists!!
+			// reflect old norv on the bisecting tangv plane, so that it remains perp and ccw to the new tangv.
+			// See also: XXX add references from Linas GLE and "geometry library" other attempts
+			const auto tannow = tangv[seg_seq], tanpre = tangv[seg.parent];
+			auto &reflex_plane = joinv[seg_seq];
+			reflex_plane = (tannow+tanpre);
+			// in case the tangs are perfectly opposite, or null (the latter should not happen)
+			if(reflex_plane.length() < EPS_NORV){
+				if(tannow.length() > 0) reflex_plane = tannow;
+				else reflex_plane = tanpre;
+			}
+			else reflex_plane = reflex_plane.normal(); // or divide by mag^2
+			const auto norpre = normv[seg.parent];
+			normv[seg_seq] = (norpre - 2*(norpre*reflex_plane)*reflex_plane).normal(); // in theory it should remain an unit anyway
+		}
+		Vec3 binov = normv[seg_seq] ^ tangv[seg_seq];
+		for(int ray_seq = 0; ray_seq < n_sides; ray_seq++){
+			auto offf = normv[seg_seq]*bevel_offs[ray_seq].z + binov*bevel_offs[ray_seq].y;
+			v(seg_seq, 0, ray_seq) = Pt3dToVec3(seg.proximal) + 0.5*seg.proximal.d*offf;
+			v(seg_seq, 1, ray_seq) = Pt3dToVec3(seg.distal  ) + 0.5*seg.distal  .d*offf;
+		}
+		
+		// TODO adjust here
+		// TODO attach even if ball with flag ...?
+		bool join_with_parent = seg.parent >= 0;
+		auto p_would_be = seg.proximal;
+		if(join_with_parent){
+			const Morphology::Segment &par = morph.segments.atSeq(seg.parent);
+			p_would_be = LerpPt3d(par.proximal, par.distal, seg.fractionAlong);
+			if(
+				(Pt3dToVec3(seg.proximal) - Pt3dToVec3(p_would_be)).length() > opts.join_max_distance_microns
+			) join_with_parent = false;
+		}
+		if(seg.parent >= 0 and join_with_parent){
+			const Int par_seq = seg.parent;
+			const Morphology::Segment &par = morph.segments.atSeq(par_seq); 
+			bool just_now_attached = false;
+			attached_prox[seg_seq] = true; // its prox end is stuck in the parent seg, no need to cap
+			
+			int parent_prox_or_dist = -1;
+			if(not is_ball[seg.parent]){
+				// project to the max extent over each child, not to the min, to avoid holes when which the min seg is, changes between rays. (Consider a T section for example)
+				if(seg.fractionAlong < EPS_FRAC){
+					// adjust parent's proximal ends
+					parent_prox_or_dist = 0; // adjust proximal end, keep the min of the prox->dist multiple
+					just_now_attached = !attached_prox[seg.parent];
+					attached_prox[seg.parent] = true;
+				}
+				else if(seg.fractionAlong > 1-EPS_FRAC){
+					// adjust parent's distal   ends
+					parent_prox_or_dist = 1; // adjust distal   end, keep the max of the prox->dist multiple
+					just_now_attached = !attached_dist[seg.parent];
+					attached_dist[seg.parent] = true;
+				}
+				else{
+					// do not adjust parent!
+					// TODO clip the outwardrays to inward parent plane! tangv x tangp x tangp iirc
+					// except it may expamd off the end cap then, clip these as well then?
+				}
+			}
+			for(int ray_seq = 0; ray_seq < n_sides; ray_seq++){
+				Vec3 pp = v(seg.parent,0,ray_seq), pd = v(seg.parent,1,ray_seq);
+				Vec3 sp = v(seg_seq   ,0,ray_seq), sd = v(seg_seq   ,1,ray_seq);
+				Real f0, f1;
+				// if one or the other has zero length, or the lines are parallel (thus they continue the same line), there is no mitering
+				if( ((pd-pp) ^ (sd-sp)).length() < EPS_SIN){
+					f0 = 1; f1 = 0;
+					// NEW f
+					f0 = 0; f1 = 0;
+				}
+				else{
+					seg_intersect_3d(pp,pd,sp,sd,f0,f1);
+					
+					// TODO limit the mitering... by ?
+					// rule: max abs added length = factor~(<1)*radius
+					Real miter_max_radius_ratio = 0.2; // LATER allow customization
+					Real max_f0 = 1 + miter_max_radius_ratio*(par.distal  .d/2)/((pd-pp).length()+1e-20); // TODO harmonize with the SVG definition...?
+					Real min_f1 = 0 - miter_max_radius_ratio*(seg.proximal.d/2)/((sd-sp).length()+1e-20);
+					// max_f0 = -1; max_f1=9999;
+					// TODO revise mitering logic further...
+					if((f0 > 1 and f1 < 0) or (0 < f0 and f0 < 1 and 0 < f1 and f1 < 1)){
+						// miter, yay!
+						// TODO limit miter
+						f0 = std::min(f0,max_f0);
+						f1 = std::max(f1,min_f1);
+					}
+					else{
+						// get one of pd, sp that belongs to the "2d convex hull" set of pp,pd,sp,ad
+						Vec3 crd = binov; //normv ^ tangv
+						Vec3 cro = (pd-pp)^(sp-pp);
+						if(crd*cro < 0){
+							f0 = 1; f1 = 1; // choose pd
+						}
+						else{
+							f0 = 0; f1 = 0; // choose sp
+						}
+					}
+					Real mo = opts.max_miter_length_absolute;
+					Real min_f0 = -(diffv[par_seq].length()+mo); max_f0 = +mo;
+					Real max_f1 = +(diffv[par_seq].length()+mo); min_f1 = -mo;
+					f0 = 1*-((v(par_seq,1,ray_seq) - Pt3dToVec3(par.distal  ))*joinv[seg_seq]) / (tangv[par_seq]*joinv[seg_seq] + 1e-20);
+					f1 = 1*-((v(seg_seq,0,ray_seq) - Pt3dToVec3(seg.proximal))*joinv[seg_seq]) / (tangv[seg_seq]*joinv[seg_seq] + 1e-20);
+					f0 = std::max(std::min(f0,max_f0),min_f0);
+					f1 = std::max(std::min(f1,max_f1),min_f1);
+					// LATER overhaul as: the lines must be on the projected joinps. And limit distance from the tangp planes. If it works it will give correct (ie flat) prism planes !
+				}
+				// regulate by absolute i guess...? or dist from following plane...
+				// printf("adfs %d %d | %d | %g %g\n",(int)seg.parent,seg_seq, parent_prox_or_dist, f0, f1);
+				
+				int scalI = seg.parent*n_sides+ray_seq;
+				int scali = seg_seq*n_sides+ray_seq;
+				
+				// if proximal lies inside the parent ball, don't miter after all, don't miter after all ...?
+				if(not(
+					is_ball[seg.parent] && 1 &&
+					par.distal.d < (Pt3dToVec3(seg.proximal) - Pt3dToVec3(p_would_be)).length() // or pp or pd...
+				)){
+					scalp[scali] = f1;
+				}
+				if(not is_ball[seg.parent]){
+					if(parent_prox_or_dist == 0){
+						if(just_now_attached) scalp[scalI] = f0;
+						else scalp[scalI] = std::min(f0,scalp[scalI]); 
+					}
+					else if(parent_prox_or_dist == 1){
+						if(just_now_attached) scald[scalI] = f0;
+						else scald[scalI] = std::max(f0,scald[scalI]); 
+					}
+				}
+			}
+			
+		}
+	}
+	// now apply the mitering that was calculated for each ray of each seg...
+	for(int seg_seq = 0; seg_seq < n_segs; seg_seq++){
+		for(int ray_seq = 0; ray_seq < n_sides; ray_seq++){
+			int scali = seg_seq*n_sides+ray_seq;
+			const Vec3 p = v(seg_seq,0,ray_seq), d = v(seg_seq,1,ray_seq);
+			// scalp[scali] = 0;
+			// scald[scali] = 1;
+			// if(!(scalp[scali] < scald[scali])) std::swap(scald[scali], scalp[scali]);
+			// printf("afs %d | %g %g\n",seg_seq, scalp[scali], scald[scali]);
+			v(seg_seq,0,ray_seq) = scalp[scali]*d + (1-scalp[scali])*p; // LATER lerp helper
+			v(seg_seq,1,ray_seq) = scald[scali]*d + (1-scald[scali])*p;
+			// NEW f
+			v(seg_seq,0,ray_seq) = p + scalp[scali]*tangv[seg_seq];
+			v(seg_seq,1,ray_seq) = d + scald[scali]*tangv[seg_seq];
+		}
+	}
+	// LATER allow quad and cap faces for nice prismatic wireframe! or just clean up the mesh that way, merging parallel adjacent triangles
+	if(!( label_per_segment.empty() || label_per_segment.size() == morph.segments.size() )){
+		printf("internal error: mesher: there are %zd segments but label per segment has %zd entries\n", morph.segments.size(), label_per_segment.size());
+		return false;
+	}
+	out_vertices.clear();
+	// the final mesh may have both frusta and balls. Add an offset for that
+	std::vector<int> seg_vert_offset = {0};
+	// keep track of how much to correct for the radius of an imperfect ball.
+	std::vector<Real> max_safe_ball_radius(n_segs, 0);
+	
+	for(int seg_seq = 0; seg_seq < n_segs; seg_seq++){
+		const Morphology::Segment &seg = morph.segments.atSeq(seg_seq);
+		int color = -1;
+		if(!label_per_segment.empty()){
+			color = label_per_segment[seg_seq];
+		}
+		
+		int vecoff = seg_vert_offset[seg_seq];
+		if(is_ball[seg_seq]){
+			// add a ball mesh
+			std::vector<Vec3> more_verts;
+			std::vector< std::array<int, 3> > more_faces;
+			MakeBallMesh(opts, seg.distal.d/2, more_verts, more_faces, max_safe_ball_radius[seg_seq]);
+			out_vertices.insert(out_vertices.end(), more_verts.begin(), more_verts.end());
+			   out_faces.insert(   out_faces.end(), more_faces.begin(), more_faces.end());
+			for(int i = 0; i < (int)out_faces.size(); i++) if(!label_per_segment.empty()) out_face_labels.push_back(color);
+		}
+		else{
+			// stitch a tube segment
+			// add verts (possibly more further on though!)
+			for(int i = 0; i < n_sides; i++) out_vertices.push_back(v(seg_seq,0,i));
+			for(int i = 0; i < n_sides; i++) out_vertices.push_back(v(seg_seq,1,i));
+			int usual_tube_verts = (int)out_vertices.size();
+			// add faces and possibly even more verts for them
+			for(int i = 0; i < n_sides; i++){
+				int ii = i+1;
+				int t = i + n_sides;
+				int ti = t + 1;
+				if(ii == n_sides){
+					ii = 0;
+					ti = n_sides;
+				}
+				// int scali = seg_seq*n_sides+i;
+				// if(scald[scali] >= scalp[scali]){ // nah, it would be uglier. Just use meshfix in the end...
+				if(true){
+					// cam right top, top right topright
+					out_faces.push_back({vecoff + i, vecoff + ii, vecoff + t});
+					if(!label_per_segment.empty()) out_face_labels.push_back(color);
+					out_faces.push_back({vecoff + t, vecoff + ii, vecoff + ti});
+					if(!label_per_segment.empty()) out_face_labels.push_back(color);
+				}
+				
+				// check whether to attach the parent ring as well
+				if(seg.parent >= 0 && attached_prox[seg_seq]){
+					int paroff = -1;
+					auto &par = morph.segments.atSeq(seg.parent);
+					if(is_ball[seg.parent]){
+						// because it's a ball we may need to add verts for this orientation...
+						// could also do it outside but it looks cleaner somehow
+						bool perhaps_inside_ball = true; // unless proven otherwise
+						for(int ray_seq = 0; ray_seq < n_sides; ray_seq++){
+							if((v(seg_seq,0,ray_seq) - Pt3dToVec3(par.distal)).length() > max_safe_ball_radius[seg.parent]) perhaps_inside_ball = false; // could add verts selectively?
+						}
+						//if they are all inside, it will look ugly, don't add verts
+						if(not perhaps_inside_ball) if(i == 0) for(int ray_seq = 0; ray_seq < n_sides; ray_seq++){
+							// TODO miter the seg prox in this case as well...
+							Vec3 tanv = (Pt3dToVec3(par.distal) - Pt3dToVec3(seg.proximal)).normal(), norv = normv[seg_seq];
+							if(tanv.length() < EPS_VERT){
+								tanv = tangv[seg_seq];
+								norv = normv[seg_seq];
+								// TODO add as a condition for skipping
+							}
+							else if((norv^tanv).length() < EPS_SIN){
+								norv = tangv[seg_seq];
+							}
+							else{
+								norv = (tanv^(norv^tanv)).normal();
+							}
+							Vec3 binov = norv ^ tanv;
+							auto offf = normv[seg_seq]*bevel_offs[ray_seq].z + binov*bevel_offs[ray_seq].y;
+							Vec3 parext = Pt3dToVec3(par.distal) + offf*max_safe_ball_radius[seg.parent];
+							out_vertices.push_back(parext);
+						}
+						if(not perhaps_inside_ball) paroff = usual_tube_verts;
+						else paroff = -1;
+					}
+					else{
+						paroff = seg_vert_offset[seg.parent] + n_sides; //GetVertInd(seg.parent,0,0);
+					}
+					if(paroff >= 0){
+						if( (out_vertices[vecoff + i] - out_vertices[paroff + i]).length() > EPS_VERT ){
+							out_faces.push_back({paroff + i, paroff + ii, vecoff + i});
+							if(!label_per_segment.empty()) out_face_labels.push_back(color);
+						}
+						if( (out_vertices[vecoff + ii] - out_vertices[paroff + ii]).length() > EPS_VERT ){
+							out_faces.push_back({vecoff + i, paroff + ii, vecoff + ii});
+							if(!label_per_segment.empty()) out_face_labels.push_back(color);
+						}
+					}
+				}
+			}
+			// also add caps where there are. could also use a symmetric scan instead of a fan...
+			for(int i = 2; i < n_sides; i++){
+				int t = i + n_sides;
+				if(not attached_prox[seg_seq]){
+					out_faces.push_back({vecoff + 0, vecoff + i, vecoff + i-1});
+					if(!label_per_segment.empty()) out_face_labels.push_back(color);
+				}
+				if(not attached_dist[seg_seq]){
+					out_faces.push_back({vecoff + n_sides, vecoff + t-1, vecoff + t});
+					if(!label_per_segment.empty()) out_face_labels.push_back(color);
+				}
+			}
+		}
+		seg_vert_offset.push_back(out_vertices.size());
+	}
+	assert(out_faces.size() == out_face_labels.size());
+	return true;
+}
+
+bool MorphologyToMesh(const MesherOptions &opts, const Morphology &morph, const CompartmentDiscretization &comp_disc, AnalysisResult_Mesh &mesh){
+	
+	// Overhaul the segment tree in the morphology, to the selected tree_type
+	// FIXME why not set segment_fractionAlong_end to 1 in the last compartment?
+	Morphology customorph; auto &negs = customorph.segments; const auto &oegs = morph.segments;
+	std::vector<int> label_per_segment;
+	if(opts.tree_type == MesherOptions::TREE_UNCHOPPED){
+		customorph = morph;
+		label_per_segment.clear(); // unavailable hence unused
+	}
+	else if(opts.tree_type == MesherOptions::TREE_PERCOMP){
+		
+		for(int comp_seq = 0; comp_seq < comp_disc.number_of_compartments; comp_seq++){
+			const auto &segs_in_comp = comp_disc.compartment_to_segment_seq[comp_seq];
+			const auto parent_seq = comp_disc.tree_parent_per_compartment[comp_seq];
+			const auto &first_seg = oegs.atSeq(*segs_in_comp.begin()), &last_seg = oegs.atSeq(*segs_in_comp.rbegin());
+			Morphology::Segment new_seg;
+			new_seg.proximal = GetPointAlongSeg(first_seg, comp_disc.compartment_to_first_segment_start_fractionAlong[comp_seq]);
+			new_seg.distal   = GetPointAlongSeg(last_seg, comp_disc.compartment_to_last_segment_end_fractionAlong[comp_seq]);
+			
+			new_seg.parent = parent_seq;
+			// XXX point proportional to path along parent, possibly leave middle as an option !
+			if     (first_seg.fractionAlong == 1) new_seg.fractionAlong = 1;
+			else if(first_seg.fractionAlong == 0) new_seg.fractionAlong = 0;
+			else new_seg.fractionAlong = .5;
+			
+			negs.add(new_seg, comp_seq);
+			label_per_segment.push_back(comp_seq);
+		}
+	}
+	else if(opts.tree_type == MesherOptions::TREE_CHOPPED){
+		
+		std::vector<bool> split_segment(oegs.size(),false); std::vector<Real> split_on_frac(oegs.size(),NAN);
+		// Each of the original segments is converted to one or more new segments, for each oeg is split along discretization borders.
+		std::vector<Real> oeg_to_neg_off;
+		for(int seg_seq = 0; seg_seq < (int)oegs.size(); seg_seq++){
+			const auto &oeg = oegs.atSeq(seg_seq);
+			const auto &oeg_par = oeg.parent;
+			auto noeg_par = oeg_par;
+			Real noeg_fra = NAN;
+			// Search for the most approximate span of the parent oeg to be the parent of this neg
+			
+			// if(true) printf("%f %d %d %d !!\n", oeg.fractionAlong, seg_seq, cidx, (int)comp_disc.segment_to_compartment_fractionAlong[seg_seq].size());
+			if(oeg_par >= 0){
+				auto paroff = oeg_to_neg_off[oeg_par];
+				int pcidx;
+				for(pcidx = 0; pcidx+1 < (int)comp_disc.segment_to_compartment_fractionAlong[oeg_par].size(); pcidx++){
+					if( oeg.fractionAlong <= comp_disc.segment_to_compartment_fractionAlong[oeg_par][pcidx] ) break;
+				}
+				
+				noeg_par = paroff + pcidx;
+				Real prac_beg = (pcidx == 0)?(0):(comp_disc.segment_to_compartment_fractionAlong[oeg_par][pcidx-1]);
+				Real prac_end = comp_disc.segment_to_compartment_fractionAlong[oeg_par][pcidx]; // FIXME explain, it's up to, patch when merging
+				noeg_fra = (oeg.fractionAlong - prac_beg)/(prac_end - prac_beg);
+				// if(noeg_fra == 1 or true) printf("%f %f %f %d %d !!\n", noeg_fra, prac_beg, prac_end, pcidx, (int)comp_disc.segment_to_compartment_fractionAlong[oeg_par].size());
+			}
+			else noeg_par = -1;
+			
+			oeg_to_neg_off.push_back(negs.size());
+			for(int cidx = 0; cidx < (int)comp_disc.segment_to_compartment_seq[seg_seq].size(); cidx++){
+				int comp_seq = comp_disc.segment_to_compartment_seq[seg_seq][cidx];
+				Real frac_beg = (cidx == 0)?(0):(comp_disc.segment_to_compartment_fractionAlong[seg_seq][cidx-1]);
+				Real frac_end = comp_disc.segment_to_compartment_fractionAlong[seg_seq][cidx]; // FIXME explain, it's up to, patch when merging
+				
+				int neg_seq = (int)negs.size();
+				Morphology::Segment new_seg;
+				new_seg.proximal = GetPointAlongSeg(oeg, frac_beg);
+				new_seg.distal   = GetPointAlongSeg(oeg, frac_end);
+				// attach segment fragment ...
+				if(cidx == 0){
+					new_seg.parent        = noeg_par; // to the appropriate fragment of the last segment
+					new_seg.fractionAlong = noeg_fra;
+				}
+				else{
+					new_seg.parent        = neg_seq-1; // to the fragment added in the previous iteration
+					new_seg.fractionAlong = 1;
+				}
+				negs.add(new_seg, neg_seq);
+				label_per_segment.push_back(comp_seq);
+			}
+		}
+	}
+	else{ assert(false); return false; }
+	
+	std::vector<Vec3> verts; std::vector< std::array<int, 3> > triangles;
+	std::vector<int> face_labels;
+	if(!MorphologyToMesh(opts, customorph, label_per_segment, mesh.verts, mesh.faces, mesh.label_per_face)) return false;
+	return true;
+}
+bool MeshToObjFileAndCompanion(const char *filename, const AnalysisResult_Mesh &mesh){
+	FILE *fout = fopen(filename,"wt");
+	for( Int i = 0; i < (Int)mesh.verts.size() ; i++ ){
+		const Vec3 v = mesh.verts[i];
+		fprintf(fout,"v %f %f %f\n", v.x, v.y, v.z);
+	}
+	for( size_t tri = 0; tri < mesh.faces.size(); tri++ ){
+		const auto &t = mesh.faces[tri];
+		fprintf(fout,"f %d %d %d\n", 1+t[0], 1+t[1], 1+t[2]);
+	}
+	fclose(fout); fout = NULL;
+
+	// and compartment for each face
+	fout = fopen((std::string(filename)+".face_compartments.txt").c_str(), "wt");
+	for( size_t tri = 0; tri < mesh.label_per_face.size(); tri++ ){
+		const auto &t = mesh.label_per_face[tri];
+		fprintf(fout,"%d\n", t);
+	}
+	fclose(fout); fout = NULL;
+	return true;
+};
+bool ExplainTree(const Model &model, const cJSON *oArgsRoot){
+	
+    static constexpr ScaleEntry nS   = {"nS", - 9, 1.0}; // output for conductance
+    static constexpr ScaleEntry pF = {"picoFarads", -12, 1.0}; // output for capacitance
+    static constexpr ScaleEntry um = {"um", -6, 1.0}; // In NeuroML, Morphology is given in microns
+	const auto ToUm = [](const auto &length){return (Scales<Length>::native  ).ConvertTo(length,um  );};
+	const auto ToUm2= [](const auto &areaaa){return (Scales<Length>::native^2).ConvertTo(areaaa,um^2);};
+	const auto ToUm3= [](const auto &volume){return (Scales<Length>::native^3).ConvertTo(volume,um^3);};
+	const auto TopF = [](const auto &capaci){return (Scales<Capacitance>::native).ConvertTo(capaci,pF  );};
+	// if using microns internally, hopefully this gets optimized away
+	auto Vec3ToUm = [&ToUm](const Vec3 &v){
+		return Vec3(ToUm(v.x), ToUm(v.y), ToUm(v.z));
+	};
+	
+	// TODO select save location ...
+	
+	// Since this is a limited backend, bother only with the cell, synapse, etc) types that bother this run
+	IdListRle cell_types_to_check;
+	MesherOptions opts; // TODO parse...
+	
+	// this will be the output
+	std::map<Int, AnalysisResult_Tree> cell_type_seq_to_tree;
+	std::map<Int, AnalysisResult_Mesh> cell_type_seq_to_mesh;
+	
+	// so let's open up the sim
+	// TODO from json list
+	cell_types_to_check.Addd(0,(int)model.cell_types.size());
+	
+	// check cells
+	cell_types_to_check.Compact(); // for good measure
+	std::vector<Int> cell_types_as_list = cell_types_to_check.toArray(); // TODO maker 
+	// std::vector<bool> celltypes_checked(model.cell_types.contents.size(), false);
+	
+	auto CellInfoToTree = [&](const Model &model, const Network *net, const Morphology &morph, const BiophysicalProperties &bioph, const CompartmentDiscretization &comp_disc, AnalysisResult_Tree &tree){
+		
+		// Real temperature_kelvins = 37 + 273.15; // LATER from network and allow override !! or warn! in eg python
+		tree.comp_info.resize(comp_disc.number_of_compartments);
+		PassiveCableProperties cabprops;
+		if(!GetCellPassiveCableProperties(morph, bioph, comp_disc, cabprops)) return false;
+		
+		std::vector< CompartmentDefinition > comp_definitions;
+		// todo attachments as well here?
+		if(!GetCompartmentDefinitions(morph, bioph, model.dimensions, comp_disc, cabprops, comp_definitions)) return false;
+		
+		for(int comp_seq = 0; comp_seq < comp_disc.number_of_compartments; comp_seq++){
+			auto &cc = tree.comp_info[comp_seq];
+			
+			// const auto &that_thing = checked_thing;
+			// std::string checked_thing = that_thing + " compartment "+std::to_string(comp_seq);
+			
+			const auto parent_seq = comp_disc.tree_parent_per_compartment[comp_seq];
+			const auto &segs_in_comp = comp_disc.compartment_to_segment_seq[comp_seq];
+			
+			cc.comp_midpoint_segment_id = morph.segments.getId(0); cc.comp_midpoint_fractionAlong = .5;
+			const auto comp_length = cabprops.compartment_lengths[comp_seq];
+			const auto comp_midpoint_length = comp_length / 2;
+			Real running_comp_length = 0;
+			
+			for( int seg_in_comp = 0; seg_in_comp < (int) segs_in_comp.size(); seg_in_comp++ ){
+				Real from_fractionAlong = (seg_in_comp == 0) ? comp_disc.compartment_to_first_segment_start_fractionAlong[comp_seq] : 0;
+				Real   to_fractionAlong = (seg_in_comp+1 == (int) segs_in_comp.size()) ? comp_disc.compartment_to_last_segment_end_fractionAlong[comp_seq] : 1;
+				Int seg_seq = segs_in_comp[seg_in_comp];
+				const Morphology::Segment &seg = morph.segments.atSeq(seg_seq);
+				const Morphology::Segment::Point3DWithDiam seg_from = LerpPt3d(seg.proximal, seg.distal, from_fractionAlong);
+				const Morphology::Segment::Point3DWithDiam seg_to   = LerpPt3d(seg.proximal, seg.distal,   to_fractionAlong);
+				Real comp_fragment_length = DistancePt3d( seg_from, seg_to );
+				
+				if( comp_length == 0 || (
+					running_comp_length < comp_midpoint_length && comp_midpoint_length <= running_comp_length + comp_fragment_length )
+				){
+					// NB: this is the fraction to lerp over the seg fraction, from seg_from to seg_to.
+					// Not over the full extent of the seg, proximal to distal. 
+					Real compartment_midpoint_fragment_fraction = (comp_midpoint_length - running_comp_length) / comp_fragment_length;
+					// prefer NaN values to be mapped to fractionAlong = end, to keep the illusion of zero length segments being processed whole...?
+					if(!( compartment_midpoint_fragment_fraction < 1 )) compartment_midpoint_fragment_fraction = 1;
+					if(!( 0 < compartment_midpoint_fragment_fraction )) compartment_midpoint_fragment_fraction = 0;
+				
+					auto c_midpoint_mid = LerpPt3d(seg_from, seg_to, compartment_midpoint_fragment_fraction);
+					cc.comp_midpoint = Vec3ToUm(Pt3dToVec3(c_midpoint_mid)); // TODO use diameter i guess...
+					cc.comp_midpoint_segment_id = morph.segments.getId(seg_seq);
+					cc.comp_midpoint_fractionAlong = compartment_midpoint_fragment_fraction;
+				}
+				running_comp_length += comp_fragment_length;
+			}
+			
+			// TODO use the full morphology LATER
+			Morphology::Segment::Point3DWithDiam c_from = GetPointAlongSeg(morph.segments.atSeq(*segs_in_comp. begin()), comp_disc.compartment_to_first_segment_start_fractionAlong[comp_seq]);
+			Morphology::Segment::Point3DWithDiam c_to   = GetPointAlongSeg(morph.segments.atSeq(*segs_in_comp.rbegin()), comp_disc.compartment_to_last_segment_end_fractionAlong   [comp_seq]);
+			cc.comp_parent = parent_seq;
+			cc.comp_start_pos = Vec3ToUm(Pt3dToVec3(c_from));
+			cc.comp_end_pos = Vec3ToUm(Pt3dToVec3(c_to));
+			cc.comp_length = ToUm(cabprops.compartment_lengths[comp_seq]);
+			
+			cc.comp_area = ToUm2(cabprops.compartment_areas[comp_seq]);
+			cc.comp_volume = ToUm3(cabprops.compartment_volumes[comp_seq]);
+			cc.comp_path_length_from_root = ToUm(cabprops.compartment_path_length_from_root[comp_seq]);
+	
+			cc.comp_capacitance = TopF(cabprops.compartment_capacitance[comp_seq]);
+			cc.comp_conductance_to_parent = (comp_seq == 0)? 0:
+				(Scales<Resistance>::native^(-1)).ConvertTo(1/cabprops.inter_compartment_axial_resistance[comp_seq], nS);
+			
+			cc.is_ball = false;
+			// TODO move logic to per segment ...
+			// if( parent_seq >= 0 && comp[parent_seq].length > 0.005 ){ // TODO tolerance?
+			// 	c.from = comp[parent_seq].to;
+			// 	// c.dir_to = (ToVec3(c.to) - ToVec3(c.from)).normal();
+			// }
+			
+			if(comp_length == 0 ){
+				if(parent_seq < 0){
+					cc.is_ball = true;
+					// printf("somaball\n");
+				}
+			}
+		}
+		return true;
+	};
+	for( Int cell_type_seq : cell_types_as_list ){
+		// std::string checked_thing = "Cell type "+std::to_string(cell_type_seq); // TODO get name...
+		
+		// but also do the conversion at this spot, why not
+		const auto &cell_type = model.cell_types.contents[cell_type_seq];
+		
+		if( cell_type.type == CellType::PHYSICAL ){
+			const PhysicalCell &cell = cell_type.physical;
+			const Morphology &morph = model.morphologies.get(cell.morphology);
+			
+			CompartmentDiscretization comp_disc;
+			if(!GetCompartmentDiscretizationForCellType(model, cell_type, comp_disc)) return false;
+			// thanks to the hard assumption that compartment i's parent is i-1, we can lay out the cells just like that.
+			// In theory, if the compartment discretisation did not preserve this ordering which holds for segments, the search would be more involved.
+			// printf("compartments: %d\n", comp_disc.number_of_compartments);
+			
+			const BiophysicalProperties &bioph = model.biophysics.at(cell.biophysicalProperties);
+			auto &tree = cell_type_seq_to_tree[cell_type_seq];
+			if(!CellInfoToTree(model, NULL, morph, bioph, comp_disc, tree))	return false;
+			auto &mesh = cell_type_seq_to_mesh[cell_type_seq];
+			if(!MorphologyToMesh(opts, morph, comp_disc, mesh))	return false;
+			// if(!MeshToObjFileAndCompanion((std::string(model.cell_types.getName(cell_type_seq))+".obj").c_str(), mesh)) return false;
+			
+		}
+		else{
+			// what common thing to analyse about point neurons ? skip
+		}
+	}
+	
+	// and generate the output
+	auto VectorToJson = [](const auto &vec, const std::string &vecname, const std::string &tab, std::string &json_out){
+		json_out += std::string(tab)+"\""+vecname+"\": [\n";
+		for( size_t i = 0; i < vec.size(); i++ ){
+			const auto &l = vec[i];
+			json_out += tab+"\t"+accurate_string(l);
+			if(i+1 != vec.size()) json_out += ",\n";
+			else json_out += "\n"; // last element
+		}
+		json_out += tab+"]";
+	};
+	auto VectorElmToJson = [](const auto &vec, const auto member_ptr, const std::string &vecname, const std::string &tab, std::string &json_out){
+		json_out += std::string(tab)+"\""+vecname+"\": [\n";
+		for( size_t i = 0; i < vec.size(); i++ ){
+			const auto &l = vec[i].*member_ptr;
+			json_out += tab+"\t"+accurate_string(l);
+			if(i+1 != vec.size()) json_out += ",\n";
+			else json_out += "\n"; // last element
+		}
+		json_out += tab+"]";
+	};
+	auto VeVec3ElmToJson = [](const auto &vec, const auto member_ptr, const std::string &vecname, const std::string &tab, std::string &json_out){
+		json_out += std::string(tab)+"\""+vecname+"\": [\n";
+		for( size_t i = 0; i < vec.size(); i++ ){
+			const auto &l = vec[i].*member_ptr;
+			json_out += tab+"\t["+accurate_string(l.x)+", "+accurate_string(l.y)+", "+accurate_string(l.z)+"]";
+			if(i+1 != vec.size()) json_out += ",\n";
+			else json_out += "\n"; // last element
+		}
+		json_out += tab+"]";
+	};
+	auto TreeToJson = [&VectorElmToJson,&VeVec3ElmToJson](const AnalysisResult_Tree &tree, const std::string &tab, std::string &json_out){
+		const auto &c = tree.comp_info;
+		typedef AnalysisResult_Tree::CompInfo T;
+		VectorElmToJson(c, &T::comp_parent                , "comp_parent"                , tab, json_out); json_out += ",\n";
+		VeVec3ElmToJson(c, &T::comp_start_pos             , "comp_start_pos"             , tab, json_out); json_out += ",\n";
+		VeVec3ElmToJson(c, &T::comp_end_pos               , "comp_end_pos"               , tab, json_out); json_out += ",\n";
+		VeVec3ElmToJson(c, &T::comp_midpoint              , "comp_midpoint"              , tab, json_out); json_out += ",\n";
+		VectorElmToJson(c, &T::comp_midpoint_segment_id   , "comp_midpoint_segment"      , tab, json_out); json_out += ",\n";
+		VectorElmToJson(c, &T::comp_midpoint_fractionAlong, "comp_midpoint_fractionAlong", tab, json_out); json_out += ",\n";
+		VectorElmToJson(c, &T::comp_length                , "comp_length"                , tab, json_out); json_out += ",\n";
+		VectorElmToJson(c, &T::comp_path_length_from_root , "comp_path_length_from_root" , tab, json_out); json_out += ",\n";
+		VectorElmToJson(c, &T::comp_area                  , "comp_area"                  , tab, json_out); json_out += ",\n";
+		VectorElmToJson(c, &T::comp_volume                , "comp_volume"                , tab, json_out); json_out += ",\n";
+		VectorElmToJson(c, &T::comp_capacitance           , "comp_capacitance"           , tab, json_out); json_out += ",\n";
+		VectorElmToJson(c, &T::comp_conductance_to_parent , "comp_conductance_to_parent" , tab, json_out);
+		return true;
+	};
+	auto MeshToJson = [&VectorToJson](const AnalysisResult_Mesh &mesh, const std::string &tab, std::string &json_out){
+		json_out += std::string(tab)+"\"mesh_vertices\": [\n";
+		json_out.reserve(json_out.size() + (50 * mesh.verts.size()) + ((20 + 6) * mesh.faces.size())); // just to avoid some alloc's
+		for( int i = 0; i < (int)mesh.verts.size(); i++ ){
+			const auto &v = mesh.verts[i];
+			json_out += tab;
+			json_out += "\t"; // one more indent level
+			json_out += "[";
+			json_out += accurate_string(v.x);
+			json_out += ", ";
+			json_out += accurate_string(v.y);
+			json_out += ", ";
+			json_out += accurate_string(v.z);
+			if(i+1 != (int)mesh.verts.size()) json_out += "],\n";
+			else json_out += "]\n"; // last element
+		}
+		json_out += tab+"],\n";
+		json_out += std::string(tab)+"\"mesh_faces\": [\n";
+		for( int i = 0; i < (int)mesh.faces.size(); i++ ){
+			const auto &f = mesh.faces[i];
+			json_out += tab+"\t["+accurate_string(f[0])+", "+accurate_string(f[1])+", "+accurate_string(f[2])+"]";
+			if(i+1 != (int)mesh.faces.size()) json_out += ",\n";
+			else json_out += "\n"; // last element
+		}
+		json_out += tab+"]";
+		if(!mesh.label_per_face.empty()){
+		json_out += ",\n";
+		VectorToJson(mesh.label_per_face, "mesh_comp_per_face", tab, json_out);
+		}
+		json_out += "\n";
+		return true;
+	};
+	std::string json_out;
+	json_out += "{\n";
+	bool first_mentioned = true;
+	for( Int cell_type_seq : cell_types_as_list ){
+		json_out += "\t";
+		if(!first_mentioned) json_out += ",";
+		first_mentioned = false;
+		json_out += "\""+std::string(model.cell_types.getName(cell_type_seq))+"\": {\n";
+		bool has_tree = (cell_type_seq_to_tree.count(cell_type_seq) > 0);
+		bool has_mesh = (cell_type_seq_to_mesh.count(cell_type_seq) > 0);
+		if(has_tree){
+			if(!TreeToJson(cell_type_seq_to_tree[cell_type_seq], "\t\t", json_out)) return false;
+		}
+		if(has_tree and has_mesh) json_out += ",\n";
+		if(has_mesh){
+			if(!MeshToJson(cell_type_seq_to_mesh[cell_type_seq], "\t\t", json_out)) return false;
+		}
+		json_out += "\t}\n";
+	}
+	json_out += "}\n";
+	std::string analysis_filename;
+	if(analysis_filename.empty()) analysis_filename = "explain_cell.json";
+	FILE *fout = fopen(analysis_filename.c_str(), "wt");
+	fputs(json_out.c_str(),fout);
+	fclose(fout); fout = NULL;
+	
+	printf("done!\n");
+	return true;
+}
+
 int main(int argc, char **argv){
 	
 	#ifdef USE_MPI
@@ -10429,6 +11398,7 @@ int main(int argc, char **argv){
 	Model model; // TODO move to SimulatorConfig and allow multiple input files
 	
 	bool model_selected = false;
+	bool action_selected = false; // TODO
 	
 	timeval config_start, config_end;
 	gettimeofday(&config_start, NULL);
@@ -10438,7 +11408,7 @@ int main(int argc, char **argv){
 		
 		// model options
 		if(arg == "nml"){
-			//read JSON
+			//read NeuroML
 			if(i == argc - 1){
 				printf("cmdline: NeuroML filename missing\n");
 				exit(1);
@@ -10448,7 +11418,7 @@ int main(int argc, char **argv){
 			gettimeofday(&nml_start, NULL);
 			{
 			NmlImportContext_Holder new_import_context;
-			if(!( ReadNeuroML( argv[i+1], model, true, new_import_context, config.verbose) )){
+			if(!( ReadNeuroML( argv[i+1], model, new_import_context, config.verbose) )){
 				printf("cmdline: could not make sense of NeuroML file\n");
 				exit(1);
 			}
@@ -10539,13 +11509,65 @@ int main(int argc, char **argv){
 			config.use_icc = false;
 		}
 		
+		// alternative actions!
+		// TODO tiurn the default bechviour into action 'simulate', how to account for time then?
+		else if(arg == "explain"){
+			// handle model missing, TODO deduplicate
+			if(!model_selected){
+				printf("error: NeuroML model not selected (select one with nml <file> in command line)\n");
+				return 2;
+			}
+			if(i == argc - 1){
+				printf( "cmdline: %s type missing\n", arg.c_str() );
+				exit(1);
+			}
+			const std::string sExplain = argv[i+1];
+			i++; // used following token too
+			if(i == argc - 1){
+				printf( "cmdline: %s %s args missing\n", arg.c_str(), sExplain.c_str() );
+				exit(1);
+			}
+			const std::string sExplainArgs = argv[i+1];
+			i++; // used following token too
+			
+			const char *jsondata = sExplainArgs.c_str();
+			cJSON *oRoot = cJSON_Parse(jsondata);
+			if( !oRoot ){
+				printf( "cmdline: %s args must be well-formed JSON\n", arg.c_str() );
+				
+				// TODO better error logging...
+				const char *error_ptr = cJSON_GetErrorPtr();
+				if (error_ptr){
+					size_t bytesfrom = error_ptr - jsondata;
+					fprintf(stderr, "Error in char %zd\n", bytesfrom);
+					fprintf(stderr, "\tbefore: %s\n", error_ptr);
+				}
+				exit(1);
+			}
+			auto Fail = [&](){
+				printf("cmdline: could not make sense of %s %s %s\n", arg.c_str(), sExplain.c_str(), sExplainArgs.c_str());
+			};
+			if(sExplain == "cell"){
+				if(!ExplainTree(model, oRoot)){ Fail(); exit(1); }
+			}
+			else if(sExplain == "mesh"){
+				if(!ExplainTree(model, oRoot)){ Fail(); exit(1); }
+			}
+			else{
+				printf( "cmdline: unknown %s type %s\n", arg.c_str(), sExplain.c_str() );
+				exit(1);
+			}
+			action_selected = true;
+		}
+		
 		else{
 			//unknown, skip it
 			printf("cmdline: skipping unknown token \"%s\"\n", argv[i]);
 		}
 	}
 	gettimeofday(&config_end, NULL);
-	
+	if(action_selected) goto FIN; // TODO
+	{
 	// handle model missing
 	if(!model_selected){
 		printf("error: NeuroML model not selected (select one with nml <file> in command line)\n");
@@ -11699,7 +12721,7 @@ int main(int argc, char **argv){
 				// bool fetched_new_frame = false;
 				bool applied_frame = false;
 				// TODO keep current frame as well, i guess
-				// HERE is a problem, we really should read continuous transitions within the timestep to be run AND allow lockstep opreration... this would work if reads and writes were async...
+				// XXX here is a problem, we really should read continuous transitions within the timestep to be run AND allow lockstep opreration... this would work if reads and writes were async...
 				// how to allow slack while always passing a spike right away? an answer seems to be: log it in the middle of dt...
 				// how to allow slack while always passing a continuous right away then? lockstep is fun...
 				double time_to_read_until = std::max(time-EPS_TIMESTAMP_BEFORE,0.);
@@ -11979,7 +13001,8 @@ int main(int argc, char **argv){
 	printf("Peak: %lld Now: %lld Heap: %lld\n", memResidentPeak, memResidentEnd, memHeap );
 	#endif
 	//-------------------> release sim data structures, though it's not absolutely necessary at this point
-	
+	}
+	FIN: // TODO
 	
 	#ifdef USE_MPI
 	// this is necessary, so stdio files are actually flushed

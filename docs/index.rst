@@ -61,6 +61,7 @@ Table of contents
 	:caption: Contents
 	
 	🚀️ Quickstart <quickstart>
+	📖 Tutorial <tut_net>
 	🐍️ Python API <python_api>
 
 
@@ -71,6 +72,11 @@ Table of contents
 	🌟️ Examples <gallery>
 	💌 Contact us <contact_us>	
 
+.. toctree::
+	:caption: More Examples
+	:maxdepth: 1
+	
+	exa_lfp
 
 Indices and tables
 ==================

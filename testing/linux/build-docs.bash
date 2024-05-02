@@ -6,7 +6,7 @@ set PREVPATH="$PATH"
 LF="
 "
 # set -v
-RUN_DIRECT=1
+# RUN_DIRECT=1
 
 DEBUG_SPHINX= # for debugging
 
@@ -22,7 +22,7 @@ fi
 # https://stackoverflow.com/questions/5265817/how-to-get-full-path-of-a-file
 BUILD_DIR=$(python3 -c "import os; print(os.path.abspath(\"$BUILD_DIR\"))")
 
-mkdir -p "$ARTIFACTS_DIR"
+mkdir -p "$ARTIFACTS_DIR" "$BUILD_DIR"
 
 
 # now set up the config...
@@ -31,7 +31,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/default-repo-path.bash"
 # more elegant LATER
 source "$(dirname "${BASH_SOURCE[0]}")/setup-options.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/get-version.bash"
-
 # Build up the line delimited build env options (LATER use \0 if really needed), to use either with env or with docker:
 # echo $BUILD_DIR
 # exit 0
@@ -44,65 +43,83 @@ ENV+=WHEEL_VERSION="$VERSION"$LF
 ENV+=WHEEL_DONT_REPAIR="true"$LF # instead of qualifying a plat_name
 
 if [ -n "$RUN_DIRECT" ]; then
+	
+	# skip the venv if deep in thought ...
+	if [ -z "$DEEP_IN_THOUGHT" ]; then
 
-# Make the venv for building the wheel AND using it to run the docs notebooks
-PIP_INSTALL_BUILD_EDEN="wheel auditwheel"
-PIP_INSTALL_BUILD_DOCS_EXTRA= # the rest are in requirements.txt
+		# Make the venv for building the wheel AND using it to run the docs notebooks
+		PIP_INSTALL_BUILD_EDEN="wheel auditwheel"
+		PIP_INSTALL_BUILD_DOCS_EXTRA= # the rest are in requirements.txt
 
-TEST_VENV_PATH=$BUILD_DIR/venv-eden-test #TODO rename?
+		TEST_VENV_PATH=$BUILD_DIR/venv-eden-test #TODO rename?
 
-# flag for debugging sphinx...
-if [ -z "$DEBUG_SPHINX" ]; then
-# Use a clean venv
-rm -rf "$TEST_VENV_PATH"
-# TEST_VENV_PATH=$(mktemp -d)
-python3 -m venv "$TEST_VENV_PATH"
-fi
+		# flag for debugging sphinx...
+		if [ -z "$DEBUG_SPHINX" ]; then
+			# Use a clean venv
+			rm -rf "$TEST_VENV_PATH"
+			# TEST_VENV_PATH=$(mktemp -d)
+			python3 -m venv "$TEST_VENV_PATH"
+		fi
 
-source  "$TEST_VENV_PATH/bin/activate"
+		source "$TEST_VENV_PATH/bin/activate"
+		# source "$TEST_VENV_PATH/bin/activate"
+		pip list
+		# bash
+		if [ -z "$DEBUG_SPHINX" ]; then
+			python3 -m pip install -U pip 
+			python3 -m pip install $PIP_INSTALL_BUILD_EDEN
 
-if [ -z "$DEBUG_SPHINX" ]; then
-python3 -m pip install -U pip 
-python3 -m pip install $PIP_INSTALL_BUILD_EDEN
+			# Build for native arch, get wheel, and run docs
+			# source "$(dirname "${BASH_SOURCE[0]}")/build-wheel.bash"
+			# TODO move building the wheels wo docker to RUN_DIRECT=1 build-wheel.bash ...
 
-# Build for native arch, get wheel, and run docs
-# source "$(dirname "${BASH_SOURCE[0]}")/build-wheel.bash"
-# TODO move building the wheels wo docker to RUN_DIRECT=1 build-wheel.bash ...
+			# https://stackoverflow.com/questions/19331497/set-environment-variables-from-file-of-key-value-pairs
+			# echo $(printf '%s' "$ENV" | awk -F= '{printf "%s=\"%s\" ",$1,$2 ;}' | xargs) bash -c "env"
+			# cat <(printf '%s' "$ENV" | awk -F= '{printf "%s=\"%s\" ",$1,$2 ;}')
+			VNE=$(printf '%s' "$ENV" | awk -F= '{printf "%s=\"%s\" ",$1,$2 ;}')
+			# echo $VNE
+			# env -S "$VNE" bash -c "env"
+			(cd "${REPO_DIR}"; env -S "$VNE" bash -c "testing/linux/docker/build_on_docker.bash") #TODO refactor
 
-# https://stackoverflow.com/questions/19331497/set-environment-variables-from-file-of-key-value-pairs
-# echo $(printf '%s' "$ENV" | awk -F= '{printf "%s=\"%s\" ",$1,$2 ;}' | xargs) bash -c "env"
-# cat <(printf '%s' "$ENV" | awk -F= '{printf "%s=\"%s\" ",$1,$2 ;}')
-VNE=$(printf '%s' "$ENV" | awk -F= '{printf "%s=\"%s\" ",$1,$2 ;}')
-# echo $VNE
-# env -S "$VNE" bash -c "env"
-(cd "${REPO_DIR}"; env -S "$VNE" bash -c "testing/linux/docker/build_on_docker.bash") #TODO refactor
+			python3 -m pip uninstall -y eden-simulator
 
-python3 -m pip uninstall -y eden-simulator
+			WHEEL_TO_TEST=$(find "$BUILD_DIR/bin" -type f -name "eden_simulator-$VERSION-py3-none-*.whl")
 
-WHEEL_TO_TEST=$(find "$BUILD_DIR/bin" -type f -name "eden_simulator-$VERSION-py3-none-*.whl")
+			# "$(dirname "${BASH_SOURCE[0]}")/run-docs-with-wheel.bash" "$WHEEL_TO_TEST" TODO
+			python3 -m pip install "$WHEEL_TO_TEST"
+			python3 -m pip install $PIP_INSTALL_BUILD_DOCS_EXTRA -r "$REPO_DIR/docs/requirements.txt" # 
+		fi
+	fi
 
-# "$(dirname "${BASH_SOURCE[0]}")/run-docs-with-wheel.bash" "$WHEEL_TO_TEST" TODO
-python3 -m pip install "$WHEEL_TO_TEST"
-python3 -m pip install $PIP_INSTALL_BUILD_DOCS_EXTRA -r "$REPO_DIR/docs/requirements.txt" # 
-fi
+	# python3 -c "import eden_simulator; print(dir(eden_simulator));"
+	rm -rf "$BUILD_DIR/docs" "$ARTIFACTS_DIR/*"
+	# cp -r "$REPO_DIR/docs" "$BUILD_DIR/docs"
+	cp -r "$REPO_DIR/." "$BUILD_DIR"
 
-# python3 -c "import eden_simulator; print(dir(eden_simulator));"
-rm -rf "$BUILD_DIR/docs" "$ARTIFACTS_DIR"
-# cp -r "$REPO_DIR/docs" "$BUILD_DIR/docs"
-cp -r "$REPO_DIR/." "$BUILD_DIR"
-
-# now build the docs!
-if [ -z "$DONT_RUN_SPHINX" ]; then # TODO a less awkward flag for readthedocs...
-python3 -m sphinx -T -E -W --keep-going -b html -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/html
-fi
+	# now build the docs!
+	if [ -z "$DONT_RUN_SPHINX" ]; then # TODO a less awkward flag for readthedocs...
+		python3 -m sphinx -T -E -W --keep-going -b html -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/html
+	fi
 
 else
 
-source "$(dirname "${BASH_SOURCE[0]}")/docker/setup-options.bash"
-# preferably use --env-file, otherwise: https://unix.stackexchange.com/questions/546053/convert-env-file-into-params-for-docker
-echo "Docker build for docs not supported yet!!"
-exit 1
+	source "$(dirname "${BASH_SOURCE[0]}")/docker/setup-options.bash"
+
+	make -f "${REPO_DIR}/testing/linux/docker/Makefile" docker_build_docs_env
+
+	# preferably use --env-file, otherwise: https://unix.stackexchange.com/questions/546053/convert-env-file-into-params-for-docker
+	# or just run the same script inside docker
+
+	bash "$(dirname "${BASH_SOURCE[0]}")/docker/sudo_docker.bash" \
+		run -it --rm --mount type=bind,source=$(realpath ${REPO_DIR}),destination=/repo \
+		--mount "type=bind,source=$(realpath $BUILD_DIR),destination=/build"  --user $DOCKER_USER_OR_ROOT \
+		--mount "type=bind,source=$(realpath $ARTIFACTS_DIR),destination=/artifacts" \
+		-e DEEP_IN_THOUGHT=1 -e RUN_DIRECT=1 -e BUILD_DIR=/build -e ARTIFACTS_DIR=/artifacts --workdir /build \
+		eden-build-docs bash -c "set -e; bash /repo/testing/linux/build-docs.bash"
 
 fi
 
-echo "Docs ready on $ARTIFACTS_DIR"
+# make this output only on the top level...
+if [ -z "$DEEP_IN_THOUGHT" ]; then
+	echo "Docs ready on $ARTIFACTS_DIR"
+fi
