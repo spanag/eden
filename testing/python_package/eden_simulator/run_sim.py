@@ -223,7 +223,7 @@ def reload_saved_data(
 					sim = comp
 	
 	def FindAllFromMulti(root_tag, tagnames):
-		return sum([ list(root_tag.findall(ns_prefix + x)) for x in tagnames ],start=[])
+		return [ x for tagname in tagnames for x in list(root_tag.findall(ns_prefix + tagname))  ]
 	
 	def GetFileNameLocationFromOutputTag(of):
 		try:

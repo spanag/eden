@@ -102,7 +102,7 @@ if [ -n "$RUN_DIRECT" ]; then
 	fi
 
 else
-
+	echo "Running \"reproducible\" docs on Docker, set RUN_DIRECT env var to override"
 	source "$(dirname "${BASH_SOURCE[0]}")/docker/setup-options.bash"
 
 	make -f "${REPO_DIR}/testing/linux/docker/Makefile" docker_build_docs_env

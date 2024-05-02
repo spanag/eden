@@ -8,7 +8,7 @@ MAINTAINER Sotirios Panagiotou <info@sotiriospanagiotou.com>
 
 # Get the necessary build tools
 # perhaps use a ENV PACKAGES variable LATER
-RUN yum update \
+RUN yum update -y \
 && yum install -y \
 vim-common wget m4
 #&& apt-get clean && rm -rf /var/cache/apt/* && rm -rf /var/lib/apt/lists/* && rm -rf /tmp/* 
@@ -31,12 +31,14 @@ RUN set -e; cd bison-*/; ./configure; make; make install; bison --version
 WORKDIR /
 
 # Decide on a python3 for the following
-ENV python3=python3.6
+ENV python3=python3.9
 RUN mkdir /realpython && ln -sfT "$(which $python3)" /realpython/python3
-ENV PATH=/realpython:$PATH
+ENV PATH="/realpython:$PATH"
 
 # Python is included in order to build wheels
-RUN python3 -m pip install -U pip
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN python3 -m pip install -U pip 
 RUN python3 -m pip install virtualenv setuptools wheel auditwheel
 
 RUN python3 -m auditwheel

@@ -12,4 +12,4 @@ if $SUDO_DOCKER context show >/dev/null 2>&1 && [ "rootless" == $($SUDO_DOCKER c
 fi
 
 # but also allow overriding
-_DOCKER_USER_OR_ROOT=${DOCKER_USER_OR_ROOT:-AUTO_DOCKER_USER_OR_ROOT}
+DOCKER_USER_OR_ROOT=${DOCKER_USER_OR_ROOT:-$AUTO_DOCKER_USER_OR_ROOT}

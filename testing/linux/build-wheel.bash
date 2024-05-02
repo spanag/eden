@@ -28,7 +28,7 @@ else
 	BUILD_ENV_IMAGE=eden-build:latest
 	BUILD_ENV_MAKEFILE_TARGET=docker_build_env
 
-	BUILD_ENVVAR_DOCKER_EXTRA="$BUILD_ENVVAR_DOCKER_EXTRA -e CFLAGS_extra=\"-static\""
+	# BUILD_ENVVAR_DOCKER_EXTRA="$BUILD_ENVVAR_DOCKER_EXTRA -e CFLAGS_extra=\"-static\"" doesn't work for most archs, trust auditwheel
 fi
 
 make -f "${REPO_DIR}/testing/linux/docker/Makefile" $BUILD_ENV_MAKEFILE_TARGET
