@@ -11,6 +11,14 @@ LF="
 DEBUG_SPHINX= # for debugging
 if [ -n "$BUILD_IN_PLACE" ]; then
 	echo "BUILD_IN_PLACE set"
+	if [ -z "$ARTIFACTS_DIR" ]; then
+		ARTIFACTS_DIR=.
+		echo "ARTIFACTS_DIR was not defined, set to \"$ARTIFACTS_DIR\""
+	fi
+	if [ -z "$BUILD_DIR" ]; then
+		BUILD_DIR=.
+		echo "BUILD_DIR was not defined, set to \"$BUILD_DIR\""
+	fi
 else
 	if [ -z "$ARTIFACTS_DIR" ]; then
 		ARTIFACTS_DIR=artifacts_docs
