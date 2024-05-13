@@ -27,7 +27,10 @@ if [ -z $READTHEDOCS ]; then
     unzip  $HOME/chrome.zip -d $HOME
     rm  $HOME/chrome.zip
 	chrome-linux/chrome --version
-	ln -sfT $HOME/chrome-linux/chrome /opt/conda/bin/google-chrome
+	# search for a writable path in $PATH that we can install this in, if necessary make it a loop
+	# https://stackoverflow.com/questions/40917195/how-to-i-get-the-first-directory-from-the-path-environment-variable-in-bash
+	think_of_a_path=`echo "$PATH" | awk -F':' '{ print $1}'`
+	ln -sfT $HOME/chrome-linux/chrome "$think_of_a_path/google-chrome"
 
     # firefox
     # wget -N "http://download-origin.cdn.mozilla.net/pub/firefox/releases/105.0b9/linux-x86_64/en-US/firefox-105.0b9.tar.bz2" -O  $HOME/firefox.tar.bz2
