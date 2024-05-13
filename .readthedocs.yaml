@@ -52,8 +52,11 @@ formats:
 # See https://docs.readthedocs.io/en/stable/guides/reproducible-builds.html
 python:
   install:
-  - requirements: docs/requirements.txt
+  
   # Install our python package before building the docs
   # use a requirements file because it's not easy to get VERSION for the whl file
   # https://stackoverflow.com/questions/48183160/how-to-pip-install-whl-on-windows-using-a-wildcard/52481267#52481267
   - requirements: bin/eden_wheel_requirements.txt
+  # Do this before the less recent eden-simulator fomr pypi is installed by default
+  
+  - requirements: docs/requirements.txt

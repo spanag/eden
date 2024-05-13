@@ -29,7 +29,9 @@ if [ -z $READTHEDOCS ]; then
 	chrome-linux/chrome --version
 	# search for a writable path in $PATH that we can install this in, if necessary make it a loop
 	# https://stackoverflow.com/questions/40917195/how-to-i-get-the-first-directory-from-the-path-environment-variable-in-bash
+	# or hijack the conda path, at any rate...
 	think_of_a_path=`echo "$PATH" | awk -F':' '{ print $1}'`
+	mkdir -p "$think_of_a_path"
 	ln -sfT $HOME/chrome-linux/chrome "$think_of_a_path/google-chrome"
 
     # firefox
