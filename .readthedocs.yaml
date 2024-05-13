@@ -17,6 +17,15 @@ build:
     - xxd
     # Python3 with pip (thus wheel), and presumably python3-venv, are already installed.
     - libosmesa6 # for easier opengl renders
+    # dependencies for browsers https://github.com/Davide-sd/sphinx_k3d_screenshot/blob/main/.readthedocs.yml
+    - bzip2
+    - libxtst6
+    - libgtk-3-0
+    - libx11-xcb-dev
+    - libdbus-glib-1-2
+    - libxt6
+    - libpci-dev
+    - libasound2
   jobs:
     post_create_environment:
       - pip install auditwheel patchelf
@@ -32,15 +41,15 @@ sphinx:
 
 # Optionally build your docs in additional formats such as PDF and ePub
 formats:
-    - pdf
-    - epub
+  - pdf
+  - epub
 
 # Optional but recommended, declare the Python requirements required
 # to build your documentation
 # See https://docs.readthedocs.io/en/stable/guides/reproducible-builds.html
 python:
-   install:
-   - requirements: docs/requirements.txt
-   # Install our python package before building the docs
-   - method: pip
-     path: .
+  install:
+  - requirements: docs/requirements.txt
+  # Install our python package before building the docs
+  - method: pip
+    path: bin/eden_simulator-*.whl

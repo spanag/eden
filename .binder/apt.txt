@@ -4,3 +4,14 @@ libosmesa6
 # flex, bison ... to build the freshest eden.
 flex
 bison
+
+# dependencies for browsers https://github.com/Davide-sd/sphinx_k3d_screenshot/blob/main/.readthedocs.yml
+bzip2
+libxtst6
+libgtk-3-0
+libx11-xcb-dev
+libdbus-glib-1-2
+libxt6
+libpci-dev
+libasound2
+libnss3

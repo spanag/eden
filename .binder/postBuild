@@ -3,26 +3,40 @@ set -ex
 LF="
 "
 DEB_ARCH=$(dpkg --print-architecture)
-
+echo Path: $PATH
 if [ -z $ONLY_BUILD_EDEN ]; then
 if [ -z $READTHEDOCS ]; then
-	apt-get update 
-	# get chrome(ium) from a deb file because Ubuntu only provides them in `snap` format which doesn't work in Docker (namely Colab, Binder, readthedocs &c).
-	# Install Google Chrome™ not Chromium, because sometimes chromium packages are not compatible with ubuntu, and sometimes automation expects the branded, encumbered Google Chrome™
+	# don't get a browser from apt because Ubuntu only provides them in `snap` format which doesn't work in Docker (namely Colab, Binder, readthedocs &c).
+	# don't get chrome(ium) from a deb file, because neither readthedocs not binder allow the root access that's needed to install them explicitly: https://github.com/jupyterhub/repo2docker/issues/1009
+	# (preferably) Install Google Chrome™ not Chromium, because sometimes chromium packages are not compatible with ubuntu, and sometimes automation expects the branded, encumbered Google Chrome™
 	# https://askubuntu.com/questions/79280/how-to-install-chrome-browser-properly-via-command-line
 	# https://unix.stackexchange.com/questions/612981/install-older-versions-of-google-chrome-stable-on-ubuntu-14-10
 	# https://www.ubuntuupdates.org/package/google_chrome/stable/main/base/google-chrome-stable
 	# these may work on ubuntu: http://packages.linuxmint.com/pool/upstream/c/chromium/
-	CHROME_VERSION="121.0.6167.160"
-	CHROME_DEB_FILEPATH=/tmp/chrome.deb
-	wget --no-verbose -O "${CHROME_DEB_FILEPATH}" https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROME_VERSION}-1_${DEB_ARCH}.deb
-	apt-get install -y --fix-broken "${CHROME_DEB_FILEPATH}"
-	rm -f "${CHROME_DEB_FILEPATH}"
-	ls -la /home/jovyan
+	
+	# CHROME_VERSION="121.0.6167.160"
+	# CHROME_DEB_FILEPATH=/tmp/chrome.deb
+	# wget --no-verbose -O "${CHROME_DEB_FILEPATH}" https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROME_VERSION}-1_${DEB_ARCH}.deb
+	# apt-get install -y --fix-broken "${CHROME_DEB_FILEPATH}"
+	# rm -f "${CHROME_DEB_FILEPATH}"
+	
+	# instead, run as user
+	# chrome, TODO automate retrieval based on version
+	# -N doesn't work as expected, and -nc returns 1 of the file is present...
+    test -f chrome.zip || wget https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Linux_x64%2F1047731%2Fchrome-linux.zip\?generation\=1663284576100523\&alt\=media -O  $HOME/chrome.zip
+    unzip  $HOME/chrome.zip -d $HOME
+    rm  $HOME/chrome.zip
+	chrome-linux/chrome --version
+	ln -sfT $HOME/chrome-linux/chrome /opt/conda/bin/google-chrome
+
+    # firefox
+    # wget -N "http://download-origin.cdn.mozilla.net/pub/firefox/releases/105.0b9/linux-x86_64/en-US/firefox-105.0b9.tar.bz2" -O  $HOME/firefox.tar.bz2
+    # tar xfj  $HOME/firefox.tar.bz2 -C  $HOME/.
+    # rm $HOME/firefox.tar.bz2
+	
 	# google-chrome --version touches ~/.local, it should not run as root ! ($HOME may be set to /home/jovyan in jupyter docker images)
-	sudo --user jovyan $(which google-chrome) --version
-	# ls -la /home/jovyan
-	# exit 1
+	$(which google-chrome) --version
+	# ls -la $HOME
 fi
 fi
 echo $PATH
@@ -42,7 +56,7 @@ if [ -z $DONT_BUILD_EDEN ]; then
 	source "testing/linux/setup-options.bash"
 	source "testing/linux/get-version.bash"
 
-	OUT_DIR="$(sudo --user jovyan mktemp -d)"
+	OUT_DIR="$(mktemp -d)"
 	ENV+=OUT_DIR="$OUT_DIR"$LF
 	ENV+=BUILD_STAMP="$VERSION"$LF
 	ENV+=BUILD="release"$LF
@@ -51,13 +65,13 @@ if [ -z $DONT_BUILD_EDEN ]; then
 	ENV+=WHEEL_DONT_REPAIR="true"$LF # instead of qualifying a plat_name
 	ENV+=PATH="$PATH"$LF
 	VNE=$(printf '%s' "$ENV" | awk -F= '{printf "%s=\"%s\" ",$1,$2 ;}')
-	( cd "${REPO_DIR}"; sudo --user jovyan env -S "$VNE" bash -c "testing/linux/docker/build_on_docker.bash") #TODO refactor
+	( cd "${REPO_DIR}"; env -S "$VNE" bash -c "testing/linux/docker/build_on_docker.bash") #TODO refactor
 	# ls -la $OUT_DIR/bin
-	ls -la /home/jovyan
-	sudo --user jovyan $(which pip) uninstall -y eden-simulator
+	ls -la $HOME
+	$(which pip) uninstall -y eden-simulator
 	WHEEL_TO_TEST=$(find "$OUT_DIR/bin" -type f -name "eden_simulator-$VERSION-py3-none-*.whl")
-	sudo --user jovyan $(which pip) install "$WHEEL_TO_TEST"
-	ls -la /home/jovyan
+	$(which pip) install "$WHEEL_TO_TEST"
+	ls -la $HOME
 	# exit 1
 	rm -rf "$OUT_DIR"
 	cd -
