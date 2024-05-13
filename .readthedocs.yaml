@@ -34,6 +34,7 @@ build:
     pre_install:
       - echo "pre install, make it"
       - DONT_RUN_SPHINX=1 RUN_DIRECT=1 BUILD_IN_PLACE=1 bash testing/linux/build-docs.bash
+      - echo "--find-links=bin/ eden-simulator" >  bin/eden_wheel_requirements.txt
 
 # Build documentation in the "docs/" directory with Sphinx
 sphinx:
