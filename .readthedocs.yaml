@@ -28,13 +28,18 @@ build:
     - libasound2
     - libnss3
     - libgbm-dev
+  
   jobs:
     post_create_environment:
       - pip install auditwheel patchelf
     pre_install:
       - echo "pre install, make it"
       - DONT_RUN_SPHINX=1 RUN_DIRECT=1 BUILD_IN_PLACE=1 bash testing/linux/build-docs.bash
-      - echo "--find-links=bin/ eden-simulator" >  bin/eden_wheel_requirements.txt
+      - ls -la bin/
+      - echo $(find ./bin -type f -name "eden_simulator-*.whl") > bin/eden_wheel_requirements.txt
+      # can't install the local wheel without disabling pypi and can't install dependencies without enabling pypi or listing them with a script... just find the wheel's name above
+      # - echo "--find-links=bin/ -I eden-simulator" >  bin/eden_wheel_requirements.txt
+      - pip show eden-simulator
 
 # Build documentation in the "docs/" directory with Sphinx
 sphinx:

@@ -1,9 +1,11 @@
-# for 
-libosmesa6
-
 # flex, bison ... to build the freshest eden.
+build-essential
 flex
 bison
+xxd
+
+# for easier opengl renders
+libosmesa6
 
 # dependencies for browsers https://github.com/Davide-sd/sphinx_k3d_screenshot/blob/main/.readthedocs.yml
 bzip2
