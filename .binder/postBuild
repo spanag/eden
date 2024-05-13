@@ -23,7 +23,7 @@ if [ -z $READTHEDOCS ]; then
 	# instead, run as user
 	# chrome, TODO automate retrieval based on version
 	# -N doesn't work as expected, and -nc returns 1 of the file is present...
-    test -f chrome.zip || wget https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Linux_x64%2F1047731%2Fchrome-linux.zip\?generation\=1663284576100523\&alt\=media -O  $HOME/chrome.zip
+    test -f chrome.zip || wget -q https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Linux_x64%2F1047731%2Fchrome-linux.zip\?generation\=1663284576100523\&alt\=media -O  $HOME/chrome.zip
     unzip  $HOME/chrome.zip -d $HOME
     rm  $HOME/chrome.zip
 	chrome-linux/chrome --version

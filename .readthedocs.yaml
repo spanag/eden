@@ -26,6 +26,8 @@ build:
     - libxt6
     - libpci-dev
     - libasound2
+    - libnss3
+    - libgbm-dev
   jobs:
     post_create_environment:
       - pip install auditwheel patchelf
@@ -51,5 +53,6 @@ python:
   install:
   - requirements: docs/requirements.txt
   # Install our python package before building the docs
-  - method: pip
-    path: bin/eden_simulator-*.whl
+  # use a requirements file because it's not easy to get VERSION for the whl file
+  # https://stackoverflow.com/questions/48183160/how-to-pip-install-whl-on-windows-using-a-wildcard/52481267#52481267
+  - requirements: bin/eden_wheel_requirements.txt

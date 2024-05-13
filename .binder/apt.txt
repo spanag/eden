@@ -15,3 +15,4 @@ libxt6
 libpci-dev
 libasound2
 libnss3
+libgbm-dev

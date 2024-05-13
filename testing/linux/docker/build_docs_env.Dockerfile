@@ -31,18 +31,18 @@ RUN DONT_BUILD_EDEN=1 bash $TEMPREPO/.binder/postBuild && rm -rf /var/cache/apt/
 USER root
 # COPY/ADD are being cute and wil spill contents of folders together, always
 # the only cure is to copy to each tgt folder separately :c
-COPY       eden/ /repo_full/eden
-COPY    testing/ /repo_full/testing/
-COPY thirdparty/ /repo_full/thirdparty/
-COPY    .binder/ /repo_full/.binder/
-COPY    VERSION/ /repo_full/VERSION
-COPY   Makefile/ /repo_full/Makefile
-RUN chmod 777 -R /repo_full
+COPY       eden/ /repo/eden
+COPY    testing/ /repo/testing/
+COPY thirdparty/ /repo/thirdparty/
+COPY    .binder/ /repo/.binder/
+COPY    VERSION/ /repo/VERSION
+COPY   Makefile/ /repo/Makefile
+RUN chmod 777 -R /repo
 # or use buildkit or use .dockerignore
 
 USER jovyan
-RUN ls -la /repo_full
-RUN ONLY_BUILD_EDEN=1 bash /repo_full/.binder/postBuild
+RUN ls -la /repo
+RUN ONLY_BUILD_EDEN=1 bash /repo/.binder/postBuild
 
 # RUN python3 -m pip install -r  $TEMPREPO/.binder/requirements.txt
 # no files to copy from build context

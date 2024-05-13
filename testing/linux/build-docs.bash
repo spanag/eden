@@ -73,7 +73,6 @@ if [ -n "$RUN_DIRECT" ]; then
 		fi
 
 		source "$TEST_VENV_PATH/bin/activate"
-		# source "$TEST_VENV_PATH/bin/activate"
 		pip list
 		# bash
 		if [ -z "$DEBUG_SPHINX" ]; then
@@ -95,7 +94,8 @@ if [ -n "$RUN_DIRECT" ]; then
 			python3 -m pip uninstall -y eden-simulator
 
 			WHEEL_TO_TEST=$(find "$BUILD_DIR/bin" -type f -name "eden_simulator-$VERSION-py3-none-*.whl")
-
+			
+			# TODO if dont run sphinx here...
 			# "$(dirname "${BASH_SOURCE[0]}")/run-docs-with-wheel.bash" "$WHEEL_TO_TEST" TODO
 			python3 -m pip install "$WHEEL_TO_TEST"
 			python3 -m pip install $PIP_INSTALL_BUILD_DOCS_EXTRA -r "$REPO_DIR/docs/requirements.txt" # 
