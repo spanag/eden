@@ -1,4 +1,3 @@
-%%writefile .binder/install_livenb.py
 import os, subprocess
 from subprocess import STDOUT,PIPE
 # basedir = '.'
