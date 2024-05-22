@@ -41,6 +41,9 @@ if [ -z $ONLY_BUILD_EDEN ]; then
     test -f chrome.zip || wget -q https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Linux_x64%2F1047731%2Fchrome-linux.zip\?generation\=1663284576100523\&alt\=media -O  $HOME/chrome.zip
     unzip  $HOME/chrome.zip -d $HOME
     rm  $HOME/chrome.zip
+	ls -la chrome-linux/
+	ldd chrome-linux/chrome
+	chmod +x chrome-linux/chrome
 	chrome-linux/chrome --version
 	
 	ln -sfT $HOME/chrome-linux/chrome "$think_of_a_path/google-chrome"
