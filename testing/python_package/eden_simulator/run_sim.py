@@ -40,6 +40,8 @@ def _autodetect_threads():
 	# TODO auto-detect the situation and handle in Eden proper.
 	if 'BINDER_LAUNCH_HOST' in os.environ:
 		threads = 1
+	if 'READTHEDOCS' in os.environ:
+		threads = 1 # just in case
 	if 'DEEPNOTE_CPU_COUNT' in os.environ:
 		deepcpus = os.environ['DEEPNOTE_CPU_COUNT']
 		if deepcpus.isdigit(): threads = int(deepcpus)

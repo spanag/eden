@@ -56,8 +56,8 @@ sphinx:
 
 # Optionally build your docs in additional formats such as PDF and ePub
 formats:
-  - pdf
   - epub
+  # - pdf
 
 # Optional but recommended, declare the Python requirements required
 # to build your documentation
