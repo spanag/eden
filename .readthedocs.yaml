@@ -36,9 +36,12 @@ build:
       - echo "pre install, make it"
       - DONT_RUN_SPHINX=1 RUN_DIRECT=1 BUILD_IN_PLACE=1 bash testing/linux/build-docs.bash
       - ls -la bin/
-      - echo $(find ./bin -type f -name "eden_simulator-*.whl") > bin/eden_wheel_requirements.txt
+      - pip install bin/eden_simulator-*.whl
+      # - echo $(find ./bin -type f -name "eden_simulator-*.whl") > bin/eden_wheel_requirements.txt
       # can't install the local wheel without disabling pypi and can't install dependencies without enabling pypi or listing them with a script... just find the wheel's name above
       # - echo "--find-links=bin/ -I eden-simulator" >  bin/eden_wheel_requirements.txt
+      
+    post_install:
       - pip show eden-simulator
 
 # Build documentation in the "docs/" directory with Sphinx
@@ -61,7 +64,8 @@ python:
   # Install our python package before building the docs
   # use a requirements file because it's not easy to get VERSION for the whl file
   # https://stackoverflow.com/questions/48183160/how-to-pip-install-whl-on-windows-using-a-wildcard/52481267#52481267
-  - requirements: bin/eden_wheel_requirements.txt
+  # - requirements: bin/eden_wheel_requirements.txt
   # Do this before the less recent eden-simulator fomr pypi is installed by default
+  # ... actually do it in pre_install for more robustness i guess
   
   - requirements: docs/requirements.txt

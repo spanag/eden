@@ -3,7 +3,22 @@ set -ex
 LF="
 "
 DEB_ARCH=$(dpkg --print-architecture)
+
+# search for a writable path in $PATH that we can arbitrarily install stuff in, make it a loop.  If there is a venv set under unix there should be one for site-packages scripts
 echo Path: $PATH
+GetFirstWritablePath(){
+    IFS=: read -ra paths <<< $PATH
+    for apath in "${paths[@]}"; do
+        if mkdir -p "$apath" && [ -w  "$apath" ]; then # >/dev/null 2>&1
+            # one does not simply return a string without trampling the global namespace, is this DOS (it could be done with enough effort though)
+            # https://stackoverflow.com/questions/3236871/how-to-return-a-string-value-from-a-bash-function
+            echo $apath; return
+        fi
+    done
+}
+think_of_a_path=$(GetFirstWritablePath)
+mkdir -p "$think_of_a_path"
+
 if [ -z $ONLY_BUILD_EDEN ]; then
 if [ -z $READTHEDOCS ]; then
 	# don't get a browser from apt because Ubuntu only provides them in `snap` format which doesn't work in Docker (namely Colab, Binder, readthedocs &c).
@@ -27,11 +42,7 @@ if [ -z $READTHEDOCS ]; then
     unzip  $HOME/chrome.zip -d $HOME
     rm  $HOME/chrome.zip
 	chrome-linux/chrome --version
-	# search for a writable path in $PATH that we can install this in, if necessary make it a loop
-	# https://stackoverflow.com/questions/40917195/how-to-i-get-the-first-directory-from-the-path-environment-variable-in-bash
-	# or hijack the conda path, at any rate...
-	think_of_a_path=`echo "$PATH" | awk -F':' '{ print $1}'`
-	mkdir -p "$think_of_a_path"
+	
 	ln -sfT $HOME/chrome-linux/chrome "$think_of_a_path/google-chrome"
 
     # firefox
@@ -52,7 +63,7 @@ echo $PATH
 # TODO build and install the freshest eden in the repo instead! But only if not on main i guess?
 if [ -z $DONT_BUILD_EDEN ]; then
 	# now set up the config...
-	REPO_DIR="$(dirname "${BASH_SOURCE[0]}")/../"
+	REPO_DIR=$(builtin cd $(dirname "${BASH_SOURCE[0]}")/../; pwd)
 	cd $REPO_DIR
 	ls -l
 	source "testing/linux/default-repo-path.bash"
@@ -62,6 +73,7 @@ if [ -z $DONT_BUILD_EDEN ]; then
 	source "testing/linux/get-version.bash"
 
 	OUT_DIR="$(mktemp -d)"
+	ENV=
 	ENV+=OUT_DIR="$OUT_DIR"$LF
 	ENV+=BUILD_STAMP="$VERSION"$LF
 	ENV+=BUILD="release"$LF
@@ -70,7 +82,8 @@ if [ -z $DONT_BUILD_EDEN ]; then
 	ENV+=WHEEL_DONT_REPAIR="true"$LF # instead of qualifying a plat_name
 	ENV+=PATH="$PATH"$LF
 	VNE=$(printf '%s' "$ENV" | awk -F= '{printf "%s=\"%s\" ",$1,$2 ;}')
-	( cd "${REPO_DIR}"; env -S "$VNE" bash -c "testing/linux/docker/build_on_docker.bash") #TODO refactor
+	# some environments clone the repo without setting +x anywhere...
+	( cd "${REPO_DIR}"; env -S "$VNE" bash testing/linux/docker/build_on_docker.bash) #TODO refactor
 	# ls -la $OUT_DIR/bin
 	ls -la $HOME
 	$(which pip) uninstall -y eden-simulator

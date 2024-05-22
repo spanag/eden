@@ -35,6 +35,12 @@ def _autodetect_threads():
 		threads = 1
 	# more places to check: https://github.com/PyTables/PyTables/blob/v3.8.0/tables/utils.py#L402 
 	
+	# binder and other environments may allocate 1 thread or less out of the many in the visible cpu: https://discourse.jupyter.org/t/mybinder-and-multiprocessing/3238
+	# Trying to multi-thread in each step thus becomes near unusable.
+	# TODO auto-detect the situation and handle in Eden proper.
+	if 'BINDER_LAUNCH_HOST' in os.environ:
+		threads = 1
+	
 	if threads > 8:
 		# some setups, some times, have horrible slowdown when OMP_NUM_THREADS == logical cores, go figure
 		# excluding one logical core shouldn't impact performance much due to the memory wall

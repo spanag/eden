@@ -26,6 +26,7 @@ scipy>=1.12 # for an evenly spread, *quasi* pseudo random distribution
 eden-simulator
 pandas
 matplotlib
+ipympl
 si-prefix # for human readable sizes
 pint>=0.23 # for physical quantity math
 pyoxipng # for compressing figures

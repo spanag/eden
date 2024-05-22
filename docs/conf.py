@@ -117,12 +117,12 @@ nbsphinx_prolog = r"""
       This page was generated from
       <a class="reference external" href="{{ v.repo_url_prefix|e }}/blob/{{ v.repo_tag|e }}/{{ docname|e }}">{{ docname|e }}</a>.
       <span style="white-space: nowrap;">Interactive online version:</span>
-      
-	  <span style="white-space: nowrap;"><a href="https://mybinder.org/v2/gl/{{ v.repo_gitlab_user_binder|e }}%2F{{ v.repo_name }}/{{ v.repo_tag|e }}?filepath={{ docname|e }}"><img alt="Binder badge" src="https://mybinder.org/badge_logo.svg" style="vertical-align:text-bottom"></a></span>
 	  
 	  <span style="white-space: nowrap;"><a href="https://colab.research.google.com/github/{{ v.repo_github_user }}/{{ v.repo_name }}/blob/{{ v.repo_tag|e }}/{{ docname|e }}"><img alt="Colab badge" src="https://colab.research.google.com/assets/colab-badge.svg" style="vertical-align:text-bottom"></a></span>
 	  
 	  <span style="white-space: nowrap;"><a href="https://deepnote.com/launch?url={{ v.repo_url_prefix_github|e }}/blob/{{ v.repo_tag|e }}/{{ docname|e }}"><img alt="Deepnote badge" src="https://img.shields.io/badge/launch-deepnote-3793EF?logo=Deepnote" style="vertical-align:text-bottom"></a>.</span>
+	  
+	  <span style="white-space: nowrap;"><a href="https://mybinder.org/v2/gl/{{ v.repo_gitlab_user_binder|e }}%2F{{ v.repo_name }}/{{ v.repo_tag|e }}?filepath={{ docname|e }}"><img alt="Binder badge" src="https://mybinder.org/badge_logo.svg" style="vertical-align:text-bottom"></a></span>
 	  
       <span style="white-space: nowrap;"><a href="{{ env.docname.split('/')|last|e + '.ipynb' }}" class="reference download internal" download>Download notebook</a>.</span>
     </div>
