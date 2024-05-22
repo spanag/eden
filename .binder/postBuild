@@ -20,7 +20,7 @@ think_of_a_path=$(GetFirstWritablePath)
 mkdir -p "$think_of_a_path"
 
 if [ -z $ONLY_BUILD_EDEN ]; then
-if [ -z $READTHEDOCS ]; then
+# if [ -z $READTHEDOCS ]; then
 	# don't get a browser from apt because Ubuntu only provides them in `snap` format which doesn't work in Docker (namely Colab, Binder, readthedocs &c).
 	# don't get chrome(ium) from a deb file, because neither readthedocs not binder allow the root access that's needed to install them explicitly: https://github.com/jupyterhub/repo2docker/issues/1009
 	# (preferably) Install Google Chrome™ not Chromium, because sometimes chromium packages are not compatible with ubuntu, and sometimes automation expects the branded, encumbered Google Chrome™
@@ -53,7 +53,7 @@ if [ -z $READTHEDOCS ]; then
 	# google-chrome --version touches ~/.local, it should not run as root ! ($HOME may be set to /home/jovyan in jupyter docker images)
 	$(which google-chrome) --version
 	# ls -la $HOME
-fi
+# fi
 fi
 echo $PATH
 # why are pip and python not found, and why does python3 say it doesn't have pip ?  the answer, my friend, is ...
