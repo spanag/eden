@@ -1,5 +1,5 @@
 # Core Libraries
-from collections import OrderedDict
+import sys
 
 # System libraries
 import subprocess
@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 
 # Own files
 from . import embeden
+
+ordict = dict
+if sys.version_info < (3,8): # how to compare python versions: https://www.xanthir.com/b5HL0
+	from collections import OrderedDict
+	ordict = OrderedDict
 
 def _autodetect_threads():
 	try: 
@@ -160,10 +165,9 @@ def runEden( example_lems_file, *,
 	Notes
 	-----
 	
-	All values are returned in `fundamental` units or derived thereof.  
-	These are not always SI units!
+	All values are returned in SI units, or derived thereof.  
 	
-	- e.g. molarity is in `mol/m3`, not `mol/L` !
+	- e.g. concentration is in `mol/m³`, not `mol/L` !
 		
 	Refer to https://en.wikipedia.org/wiki/SI_derived_unit for a list of such units.
 	'''
@@ -176,10 +180,11 @@ def runEden( example_lems_file, *,
 	results = reload_saved_data(example_lems_file, reload_events=reload_events, t_run=t_run)
 	if reload_events: traje, event = results # decompose tuple
 	else: traje, event = (results, None)
+	
 	if reload_events:
-		return OrderedDict(sorted(traje.items())), OrderedDict(sorted(event.items()))
+		return ordict(sorted(traje.items())), ordict(sorted(event.items()))
 	else:
-		return OrderedDict(sorted(traje.items()))
+		return ordict(sorted(traje.items()))
 
 
 # Adapted from pynml.reload_saved_data: https://github.com/NeuroML/pyNeuroML/blob/v0.7.5/pyneuroml/pynml.py
@@ -214,9 +219,8 @@ def reload_saved_data(
 		% (lems_file_name, real_lems_file, base_dir, os.getcwd())
 	)
 	# Could use pylems to parse all this...
-	from collections import OrderedDict
-	traces = OrderedDict()
-	events = OrderedDict()
+	traces = ordict()
+	events = ordict()
 
 	base_lems_file_path = os.path.dirname(os.path.realpath(lems_file_name))
 	from lxml import etree

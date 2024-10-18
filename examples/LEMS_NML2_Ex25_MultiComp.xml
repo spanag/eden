@@ -26,7 +26,7 @@
     <!-- End of NeuroML2 content -->
 
 
-    <Simulation id="sim1" length="0.09ms" step="0.05ms" target="MultiCompCellNetwork">
+    <Simulation id="sim1" length="1s" step="0.05ms" target="MultiCompCellNetwork">
 
         <Display id="d1" title="Ex25: MultiCompCellNetwork: cells pre" timeScale="1ms" xmin="0" xmax="140" ymin="-75" ymax="52">
             <Line id ="cell 0: soma" quantity="pop0/0/MultiCompCell/v" scale="1mV"  color="#ee0555" timeScale="1ms"/>

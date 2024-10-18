@@ -1,5 +1,5 @@
 # Sphinx stuff
-sphinx==7.1.2
+sphinx==7.4.1
 pydata-sphinx-theme==0.14.4
 
 pandoc==2.0.1
@@ -10,6 +10,7 @@ sphinx-last-updated-by-git
 sphinx-codeautolink
 
 sphinx-design
+sphinx-copybutton
 
 # Sphinx + Jupyter stuff
 nbsphinx
@@ -31,10 +32,13 @@ si-prefix # for human readable sizes
 pint>=0.23 # for physical quantity math
 pyoxipng # for compressing figures
 
+trimesh
+
 k3d[dev, examples]
+
 ipyvolume
 
-trimesh
+pyvista[all]<0.43 # due to old numpy failing to import
 
 pyrender @ git+https://github.com/mmatl/pyrender@master
 # a newer version of pyopengl is needed: https://github.com/EvelynFan/FaceFormer/issues/7#issuecomment-1092615864

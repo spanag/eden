@@ -13,6 +13,17 @@ nav .hidden {
     display: unset;
 }
 
+.prompt{
+	display: none !important;
+}
+
 .sidenote {
     font-size: 0.8em;
+}
+
+/* https://stackoverflow.com/a/36757755 
+or maybe https://stackoverflow.com/questions/28424339/how-to-vertically-align-an-image-inside-a-div#comment136077298_28424339 */
+.nbsphinx-gallery > a > div:first-child {
+    display: flex;
+    align-items: center;
 }

@@ -683,7 +683,7 @@
 
 	<DerivedParameter name="averageIsi" dimension="time" value="1 / averageRate"/>
 
-	<Constant name="LONG_TIME" dimension="time" value="1e9hour"/>
+	<Constant name="LONG_TIME" dimension="time" value="1e6sec"/> <!-- Note: mitigate overflow to inf -->
 
 	<!-- <ComponentReference name="synapse" type="baseSynapse"/> -->
 
@@ -1951,7 +1951,7 @@
 	
 	<DerivedParameter name="end" dimension="time" value="start + duration"/>
 	
-	<Constant name="LONG_TIME" dimension="time" value="1e9hour"/>
+	<Constant name="LONG_TIME" dimension="time" value="1e6sec"/> <!-- Note: mitigate overflow to inf -->
 	<Constant name="SMALL_TIME" dimension="time" value="1e-9ms"/> <!-- See below for usage -->
 		
 	<!-- See spikeGeneratorPoisson for full description of tnextIdeal/tnextUsed etc. -->

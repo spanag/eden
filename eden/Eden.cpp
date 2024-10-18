@@ -343,7 +343,7 @@ bool GetCellLocationFromPath( const Network &net, const Simulation::LemsEventPat
 	}
 	return loca.ok();
 }
-
+// TODO move to neuroml api, also a dimension checker...
 auto EvaluateLemsExpression = []( 
 	const TermTable &expression, const auto &symbol_values, const auto &symbol_dimensions, 
 	const DimensionSet &dimensions, Int &random_call_counter, 
@@ -457,7 +457,7 @@ auto EvaluateLemsExpression = [](
 				Dimension dim_r;
 				Evaluate(Evaluate, expression, term.right, symbol_values, symbol_dimensions, dimensions, random_call_counter, val_r, dim_r, call_random );
 				
-						if(term.type == Term::ABS   ){ val_out = std::abs  ( val_r ); }
+					 if(term.type == Term::ABS   ){ val_out = std::abs  ( val_r ); } // XXX preserve dimension !
 				else if(term.type == Term::SQRT  ){ val_out = std::sqrt ( val_r ); }
 				else if(term.type == Term::SIN   ){ val_out = std::sin  ( val_r ); }
 				else if(term.type == Term::COS   ){ val_out = std::cos  ( val_r ); }
@@ -1489,7 +1489,14 @@ bool GetCellPassiveCableProperties(
 	return true;
 };
 
-
+struct SegToCompListFunctor{
+	const CompartmentDiscretization &comp_disc;
+	IdListRle &comp_list;
+	// SegToCompListFunctor(): {}
+	void operator()( Int seg_seq ) const {
+		for( Int comp_seq : comp_disc.segment_to_compartment_seq[seg_seq] ) comp_list.Addd(comp_seq);
+	}
+};
 // the mapping from segments to compartments is not necessarily direct.
 // 	Produce a list that contains all compartments that overlap with said segments
 IdListRle SpecToCompList(
@@ -1497,9 +1504,7 @@ IdListRle SpecToCompList(
 	const CompartmentDiscretization &comp_disc
 ){
 	IdListRle comp_list;
-	spec.reduce( morph, [ &comp_disc, &comp_list ]( Int seg_seq ){
-		for( Int comp_seq : comp_disc.segment_to_compartment_seq[seg_seq] ) comp_list.Addd(comp_seq);
-	} );
+	spec.reduce( morph, SegToCompListFunctor{comp_disc, comp_list} );
 	comp_list.Compact();
 	return comp_list;
 };
@@ -3126,7 +3131,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							{ Term::DIVIDE, "/" },
 							{ Term::POWER ,  "powf" },
 							
-							{ Term::ABS   ,     "fabs" },
+							{ Term::ABS   ,     "fabs" }, // XXX preserve dimension!
 							{ Term::SQRT  , "sqrtf" },
 							{ Term::SIN   ,  "sinf" },
 							{ Term::COS   ,  "cosf" },
@@ -3489,7 +3494,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 					ret += tab+tmps+expression_string+";\n";
 				}
 				else if(dervar.type == ComponentType::DerivedVariable::CONDITIONAL){
-					sprintf(tmps, "Lems_derived_%ld = 0;", seq); ret += tab + tmps;
+					sprintf(tmps, "Lems_derived_%ld = 0;", seq); ret += tab + tmps; // sadly i can't set it to NAN because some components rely on jlems ie java's implicit initialisation to 0, TODO discuss it
 					
 					ret += tab + "if( 0 );\n"; // to avoid extra logic for the first 'if' and the case only 'default' case exists
 					// conditional cases
@@ -3912,6 +3917,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 		// code += "#include <stdatomic.h>\n";
 		code += "#define M_PI       3.14159265358979323846\n";
 		code += "#include <math.h>\n";
+		code += "#define inf INFINITY\n#define nan NAN\n"; // because accurate_string may emit them eg in case of 9999 hour overflow...
 		if(config.debug){
 			code += "#include <stdio.h>\n";
 		}
@@ -5340,17 +5346,17 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 							char tmps[1000];
 							
 							tauinf_code +=   tab+"if(initial_state){\n";
-							sprintf(tmps, "	local_stateNext[%ld] = inf;\n", Index_Q); tauinf_code += tab+tmps;
+							sprintf(tmps, "	local_stateNext[%ld] = soo;\n", Index_Q); tauinf_code += tab+tmps;
 							tauinf_code +=   tab+"}else{\n";
 							//sprintf(tmps, "	local_stateNext[%zd] = %s + dt * ( alpha * ( 1 - %s ) - beta * (%s) ) * q10 %s;\n", Index_Q, fana, fana, fana, Rate_suffix.c_str() ); ccde += tab+tmps;
-							// sprintf(tmps, "	local_stateNext[%ld] = local_state[%ld] + dt * ( ( inf - local_state[%ld] ) / tau ) * q10 %s;\n", Index_Q, Index_Q, Index_Q, TauInf_suffix.c_str() ); tauinf_code += tab+tmps;
+							// sprintf(tmps, "	local_stateNext[%ld] = local_state[%ld] + dt * ( ( soo - local_state[%ld] ) / tau ) * q10 %s;\n", Index_Q, Index_Q, Index_Q, TauInf_suffix.c_str() ); tauinf_code += tab+tmps;
 							
 							// how many tau's does the timestep advance by?
 							sprintf(tmps, "	float tau_factor = (( dt * q10)/ tau) %s;\n", TauInf_suffix.c_str() ); tauinf_code += tab+tmps;
 							// blend current and inf values, bu a factor decaying from 1(now) to 0 (steady state)
 							// tauinf_code +="	float blend_factor = 1/( 1 + tau_factor );\n"; // Bwd Euler (assuming dynamics to be fixed during dt)
 							tauinf_code +="	float blend_factor = expf( -tau_factor );\n"; // Exp Euler (assuming dynamics to be fixed during dt). A.k.a. "cnexp"
-							sprintf(tmps, "	local_stateNext[%ld] = (blend_factor) * local_state[%ld] + (1-blend_factor) * inf;\n", Index_Q, Index_Q ); tauinf_code += tab+tmps;
+							sprintf(tmps, "	local_stateNext[%ld] = (blend_factor) * local_state[%ld] + (1-blend_factor) * soo;\n", Index_Q, Index_Q ); tauinf_code += tab+tmps;
 							// TODO in the case of nan's, prefer clipping to 0 or to 1 ?
 							sprintf(tmps, "	if(!( local_stateNext[%ld] > (float)(1e-6) )) local_stateNext[%ld] = 1e-6;\n", Index_Q, Index_Q ); tauinf_code += tab+tmps;
 							sprintf(tmps, "	if(!( local_stateNext[%ld] < (float)(1-1e-6) )) local_stateNext[%ld] = 1-1e-6;\n", Index_Q, Index_Q ); tauinf_code += tab+tmps;
@@ -5464,15 +5470,15 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 								ccde +=   "		tau = 1 / ( alpha + beta );\n";
 							}
 							
-							ccde +=   "		float inf;\n";
+							ccde +=   "		float soo;\n";
 							if( has_inf ){
 								ccde +=   "		{\n";
 								ccde +=   		DescribeRate_Variable(gaga.steadyState, "\t\t", inst_seq, gate_seq, pergate.inf_component); 
-								sprintf(tmps, "		inf = x;\n"); ccde += tmps;
+								sprintf(tmps, "		soo = x;\n"); ccde += tmps;
 								ccde +=   "		}\n";
 							}
 							else{
-								ccde +=   "		inf = alpha / ( alpha + beta );\n";
+								ccde +=   "		soo = alpha / ( alpha + beta );\n";
 							}
 							
 							
@@ -5527,10 +5533,10 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 								sprintf(tmps, "		tau = t;\n"); ccde += tmps;
 								ccde +=   "		}\n";
 								
-								ccde +=   "		float inf;\n";
+								ccde +=   "		float soo;\n";
 								ccde +=   "		{\n";
 								ccde +=   		DescribeRate_Variable(sga.steadyState, "\t\t", inst_seq, gate_seq, persub.inf_component); 
-								sprintf(tmps, "		inf = x;\n"); ccde += tmps;
+								sprintf(tmps, "		soo = x;\n"); ccde += tmps;
 								ccde +=   "		}\n";
 								
 								
@@ -5615,14 +5621,14 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 									sprintf(tmps, "		tau = t;\n"); ratecode += tmps;
 									ratecode +=   "		}\n";
 									
-									ratecode +=   "		float inf;\n";
+									ratecode +=   "		float soo;\n"; // not inf because it may be output? oh well? TODO perhaps censor printf string to identifier instead
 									ratecode +=   "		{\n";
 									ratecode +=   		DescribeRate_Variable(tauinf.steadyState, "\t\t", inst_seq, gate_seq, pertran.inf_component); 
-									sprintf(tmps, "		inf = x;\n"); ratecode += tmps;
+									sprintf(tmps, "		soo = x;\n"); ratecode += tmps;
 									ratecode +=   "		}\n";
 									
-									ratecode +=   "		alpha = inf / tau;\n";
-									ratecode +=   "		beta  = ( 1 - inf ) / tau;\n";
+									ratecode +=   "		alpha = soo / tau;\n";
+									ratecode +=   "		beta  = ( 1 - soo ) / tau;\n";
 									
 								}
 								else{
@@ -10507,14 +10513,14 @@ Vec3 Pt3dToVec3(const Morphology::Segment::Point3DWithDiam &p){ return Vec3(p.x,
 struct AnalysisResult_Tree{
 	// NB: These values are all in *output units*, not engine units!
 	// Same for seg_seq, comp_seq.
-	// This is so we won;'t have to resolve them at the output stage.
+	// This is so we won't have to resolve them at the output stage.
 	// TODO test the aos magic vector?
 	struct CompInfo{
 		// Units in microns, otherwise noted inline
 		int  comp_parent; // TODO remove _comp
 		Vec3 comp_start_pos, comp_end_pos, comp_midpoint;
 		int  comp_midpoint_segment_id; // NB: not seg_seq, it's in ID space for output
-		Real comp_midpoint_fractionAlong;
+		double comp_midpoint_fractionAlong;
 		Real comp_length;
 		Real comp_area;
 		Real comp_volume;
@@ -10529,6 +10535,12 @@ struct AnalysisResult_Tree{
 	};
 	std::vector<CompInfo> comp_info;
 	// TODO maybe export the comp_disc as well i guess
+	
+	struct GroupInfo{
+		std::string name;
+		std::vector<Int> comps;
+	};
+	std::vector<GroupInfo> group_info;
 };
 struct MesherOptions{
 	// how to generate the 3D mesh of the morphologyL
@@ -10574,7 +10586,7 @@ void seg_intersect_3d(Vec3 a1, Vec3 a2, Vec3 b1, Vec3 b2, Real &f1, Real &f2){
 	// printf("%g %g | %f %f %f | %f %f %f\n",f1, f2, da.x, da.y, da.z, db.x, db.y, db.z);
 }
 // could also make it radius neutral but why bother now, since the mesher options should be involved...
-void MakeBallMesh(const MesherOptions &opts, Real radius, std::vector<Vec3> &verts, std::vector< std::array<int, 3> > &faces, Real &max_safe_radius){
+void MakeBallMesh(const MesherOptions &opts, Real radius, std::vector<Vec3> &verts, std::vector< std::array<int, 3> > &faces, Real &max_safe_radius, const Vec3 &offset = {0,0,0}){
 	int subdiv = ceil(M_PI*radius / opts.ball_microns_per_face);
 	if(subdiv < 1) subdiv = 1;
     const int &N = subdiv;
@@ -10639,7 +10651,7 @@ void MakeBallMesh(const MesherOptions &opts, Real radius, std::vector<Vec3> &ver
     }
 	
 	// rescale verts to radius
-	for(auto &v : verts) v = v * radius;
+	for(auto &v : verts) v = v * radius + offset;
 	max_safe_radius = max_safe_radius*radius*0.9999; // for good measure
 	
 	// done! 
@@ -10881,7 +10893,7 @@ bool MorphologyToMesh(const MesherOptions &opts, const Morphology &morph,
 			// add a ball mesh
 			std::vector<Vec3> more_verts;
 			std::vector< std::array<int, 3> > more_faces;
-			MakeBallMesh(opts, seg.distal.d/2, more_verts, more_faces, max_safe_ball_radius[seg_seq]);
+			MakeBallMesh(opts, seg.distal.d/2, more_verts, more_faces, max_safe_ball_radius[seg_seq], Pt3dToVec3(seg.proximal));
 			out_vertices.insert(out_vertices.end(), more_verts.begin(), more_verts.end());
 			   out_faces.insert(   out_faces.end(), more_faces.begin(), more_faces.end());
 			for(int i = 0; i < (int)out_faces.size(); i++) if(!label_per_segment.empty()) out_face_labels.push_back(color);
@@ -11146,7 +11158,6 @@ bool ExplainTree(const Model &model, const cJSON *oArgsRoot){
 			const auto comp_length = cabprops.compartment_lengths[comp_seq];
 			const auto comp_midpoint_length = comp_length / 2;
 			Real running_comp_length = 0;
-			
 			for( int seg_in_comp = 0; seg_in_comp < (int) segs_in_comp.size(); seg_in_comp++ ){
 				Real from_fractionAlong = (seg_in_comp == 0) ? comp_disc.compartment_to_first_segment_start_fractionAlong[comp_seq] : 0;
 				Real   to_fractionAlong = (seg_in_comp+1 == (int) segs_in_comp.size()) ? comp_disc.compartment_to_last_segment_end_fractionAlong[comp_seq] : 1;
@@ -11155,13 +11166,12 @@ bool ExplainTree(const Model &model, const cJSON *oArgsRoot){
 				const Morphology::Segment::Point3DWithDiam seg_from = LerpPt3d(seg.proximal, seg.distal, from_fractionAlong);
 				const Morphology::Segment::Point3DWithDiam seg_to   = LerpPt3d(seg.proximal, seg.distal,   to_fractionAlong);
 				Real comp_fragment_length = DistancePt3d( seg_from, seg_to );
-				
 				if( comp_length == 0 || (
 					running_comp_length < comp_midpoint_length && comp_midpoint_length <= running_comp_length + comp_fragment_length )
 				){
 					// NB: this is the fraction to lerp over the seg fraction, from seg_from to seg_to.
 					// Not over the full extent of the seg, proximal to distal. 
-					Real compartment_midpoint_fragment_fraction = (comp_midpoint_length - running_comp_length) / comp_fragment_length;
+					double compartment_midpoint_fragment_fraction = (comp_midpoint_length - running_comp_length) / comp_fragment_length;
 					// prefer NaN values to be mapped to fractionAlong = end, to keep the illusion of zero length segments being processed whole...?
 					if(!( compartment_midpoint_fragment_fraction < 1 )) compartment_midpoint_fragment_fraction = 1;
 					if(!( 0 < compartment_midpoint_fragment_fraction )) compartment_midpoint_fragment_fraction = 0;
@@ -11169,7 +11179,7 @@ bool ExplainTree(const Model &model, const cJSON *oArgsRoot){
 					auto c_midpoint_mid = LerpPt3d(seg_from, seg_to, compartment_midpoint_fragment_fraction);
 					cc.comp_midpoint = Vec3ToUm(Pt3dToVec3(c_midpoint_mid)); // TODO use diameter i guess...
 					cc.comp_midpoint_segment_id = morph.segments.getId(seg_seq);
-					cc.comp_midpoint_fractionAlong = compartment_midpoint_fragment_fraction;
+					cc.comp_midpoint_fractionAlong = compartment_midpoint_fragment_fraction*(to_fractionAlong-from_fractionAlong) + from_fractionAlong;
 				}
 				running_comp_length += comp_fragment_length;
 			}
@@ -11204,6 +11214,17 @@ bool ExplainTree(const Model &model, const cJSON *oArgsRoot){
 				}
 			}
 		}
+		
+		// also get information about groups
+		for( Int group_seq = 0; group_seq < (Int) morph.segment_groups.size(); group_seq++){
+			const auto &group = morph.segment_groups[group_seq];
+			AnalysisResult_Tree::GroupInfo g;
+			g.name = morph.segment_groups.getName(group_seq);
+			IdListRle comp_list;
+			group.list.reduce( SegToCompListFunctor{comp_disc, comp_list} );
+			g.comps = comp_list.toArray();
+			tree.group_info.push_back(g);
+		}
 		return true;
 	};
 	for( Int cell_type_seq : cell_types_as_list ){
@@ -11237,7 +11258,7 @@ bool ExplainTree(const Model &model, const cJSON *oArgsRoot){
 	
 	// and generate the output
 	auto VectorToJson = [](const auto &vec, const std::string &vecname, const std::string &tab, std::string &json_out){
-		json_out += std::string(tab)+"\""+vecname+"\": [\n";
+		json_out += tab+"\""+vecname+"\": [\n";
 		for( size_t i = 0; i < vec.size(); i++ ){
 			const auto &l = vec[i];
 			json_out += tab+"\t"+accurate_string(l);
@@ -11247,7 +11268,7 @@ bool ExplainTree(const Model &model, const cJSON *oArgsRoot){
 		json_out += tab+"]";
 	};
 	auto VectorElmToJson = [](const auto &vec, const auto member_ptr, const std::string &vecname, const std::string &tab, std::string &json_out){
-		json_out += std::string(tab)+"\""+vecname+"\": [\n";
+		json_out += tab+"\""+vecname+"\": [\n";
 		for( size_t i = 0; i < vec.size(); i++ ){
 			const auto &l = vec[i].*member_ptr;
 			json_out += tab+"\t"+accurate_string(l);
@@ -11266,7 +11287,9 @@ bool ExplainTree(const Model &model, const cJSON *oArgsRoot){
 		}
 		json_out += tab+"]";
 	};
-	auto TreeToJson = [&VectorElmToJson,&VeVec3ElmToJson](const AnalysisResult_Tree &tree, const std::string &tab, std::string &json_out){
+	auto TreeToJson = [&VectorToJson,&VectorElmToJson,&VeVec3ElmToJson](
+		const AnalysisResult_Tree &tree, const std::string &tab, std::string &json_out
+	){
 		const auto &c = tree.comp_info;
 		typedef AnalysisResult_Tree::CompInfo T;
 		VectorElmToJson(c, &T::comp_parent                , "comp_parent"                , tab, json_out); json_out += ",\n";
@@ -11280,7 +11303,18 @@ bool ExplainTree(const Model &model, const cJSON *oArgsRoot){
 		VectorElmToJson(c, &T::comp_area                  , "comp_area"                  , tab, json_out); json_out += ",\n";
 		VectorElmToJson(c, &T::comp_volume                , "comp_volume"                , tab, json_out); json_out += ",\n";
 		VectorElmToJson(c, &T::comp_capacitance           , "comp_capacitance"           , tab, json_out); json_out += ",\n";
-		VectorElmToJson(c, &T::comp_conductance_to_parent , "comp_conductance_to_parent" , tab, json_out);
+		VectorElmToJson(c, &T::comp_conductance_to_parent , "comp_conductance_to_parent" , tab, json_out); json_out += ",\n";
+		json_out += tab+"\"segment_groups\": {\n";
+		for( size_t i = 0; i < tree.group_info.size(); i++){
+			const auto &g = tree.group_info[i];
+			json_out += tab+"\t"+"\""+g.name+"\": {\n";
+			VectorToJson(g.comps , "comps" , tab+"\t\t", json_out);json_out += "\n";
+			
+			json_out += tab+"\t"+"}";
+			if(i+1 != tree.group_info.size()) json_out += ",\n";
+			else json_out += "\n"; // last element
+		}
+		json_out += tab+"}";
 		return true;
 	};
 	auto MeshToJson = [&VectorToJson](const AnalysisResult_Mesh &mesh, const std::string &tab, std::string &json_out){
@@ -12500,9 +12534,9 @@ int main(int argc, char **argv){
 	// TODO allow for diagnostic override, and amore flexibility since multithreading can slao be used for logging etc.
 	// (how much time does it take to change the number of threads?)
 	// NB: omp_get_max_threads actually refers to the very real nthreads-var that is also picked through the OMP_NUM_THREADS envvar.
-	// That avriable is actually set through omp_set_num_threads
+	// That variable is actually set through omp_set_num_threads
 	if( engine_config.work_items < omp_get_max_threads() ){
-		omp_set_num_threads( (int)engine_config.work_items );
+		omp_set_num_threads( std::max( (int)engine_config.work_items, (int)1 ) );
 	}
 	
 	// perform the crunching

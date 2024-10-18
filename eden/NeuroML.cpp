@@ -779,6 +779,7 @@ bool CellType::HasSpikeOut( const CollectionWithNames<ComponentType> &component_
 }
 
 const NameMap< Int ComponentType::CommonRequirements::* > ComponentType::CommonRequirements::names = {
+	{"t"				, &ComponentType::CommonRequirements::time }, 
 	{"time"				, &ComponentType::CommonRequirements::time }, 
 	{"temperature"		, &ComponentType::CommonRequirements::temperature }, 
 	{"v"				, &ComponentType::CommonRequirements::membrane_voltage }, // typically physical
@@ -1955,7 +1956,7 @@ bool Model::ParseLemsQuantityPath_CellProperty(const ILogProxy &log, const CellT
 						return false;
 					}
 				}
-				// FIXME access all ion pools this way
+				// TODO access all ion pools this way
 				
 				//otherwise
 				{
@@ -2725,7 +2726,7 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 				log.error(eGroup, "group has no name");
 				return false;
 			}
-			if(morph.segment_groups_by_name.count(group_name)){
+			if(morph.segment_groups.has(group_name)){
 				log.error(eGroup, "group %s already defined", group_name);
 				return false;
 			}
@@ -2771,11 +2772,11 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 						log.error(eGroupEl, "included segment group has no name");
 						return false;
 					}
-					if(!morph.segment_groups_by_name.count(memgroup)){
+					if(!morph.segment_groups.has(memgroup)){
 						log.error(eGroup, "included segment group %s not already defined", memgroup);
 						return false;
 					}
-					Int memid = morph.segment_groups_by_name[memgroup];
+					Int memid = morph.segment_groups.get_id(memgroup);
 					// printf("add seggroup %s to %s \n", memgroup, group_name);
 					const auto &addgroup = morph.segment_groups[memid];
 					group.add( addgroup );
@@ -2800,31 +2801,22 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 					
 					Morphology::InhomogeneousParameter inhoparm;
 					
-					auto name = eInhoParm.attribute("id").value();
-					if( !*name ){
-						log.error(eInhoParm, "id attribute missing");
-						return false;
-					}
+					auto name = RequiredAttribute(log, eInhoParm, "id");
+					if(!name) return false;
 					if( group.inhomogeneous_parameters.has(name) ){
 						log.error(eInhoParm, "id %s already defined in segment group", name);
 						return false;
 					}
 					
-					auto variable = eInhoParm.attribute("variable").value();
-					if( !*variable ){
-						log.error(eInhoParm, "variable attribute missing");
-						return false;
-					}
+					auto variable = RequiredAttribute(log, eInhoParm, "variable");
+					if(!variable) return false;
 					// could also verify that it doesn't have the same 'variable name' as another variable, that is best handled in the specific case that might bring two variables together in the future
 					inhoparm.variable = variable;
 					
-					auto metric = eInhoParm.attribute("metric").value();
-					if( !*metric ){
-						log.error(eInhoParm, "metric attribute missing");
-						return false;
-					}
+					auto metric = RequiredAttribute(log, eInhoParm, "metric");
+					if(!metric) return false;
 					if( stricmp(metric, "Path Length from root") != 0 ){
-						log.error(eInhoParm, "unknown metric %s", metric);
+						log.error(eInhoParm, "unknown metric \"%s\"", metric);
 						return false;
 					}
 					inhoparm.metric = Morphology::InhomogeneousParameter::PATH_LENGTH_FROM_ROOT;
@@ -2940,7 +2932,7 @@ bool ParseMorphology(const ImportLogger &log, const pugi::xml_node &eMorph, Morp
 	} //end morph children
 	
 	//if there is no "all" group, add one so it will be available for future reference
-	if(!morph.segment_groups_by_name.count("all")){
+	if(!morph.segment_groups.has("all")){
 		Morphology::SegmentGroup group;
 		group.list = morph.getFullList();
 		morph.add(group, "all");
@@ -3004,12 +2996,12 @@ bool ParseAcrossSegGroup( const ImportLogger &log, const char *sGroupName, const
 		sGroupName = "all";
 	}
 	//check if it exists in morphology
-	if(!morph.segment_groups_by_name.count(sGroupName)){
+	if(!morph.segment_groups.has(sGroupName)){
 		log.error(eAppliedOn, "group %s does not exist in associated Morphology", sGroupName);
 		return false;
 	}
 	
-	applied_on.Group(morph.segment_groups_by_name.at(sGroupName));
+	applied_on.Group(morph.segment_groups.get_id(sGroupName));
 	return true;
 }
 bool ParseAcrossSegOrSegGroup(const ImportLogger &log, const pugi::xml_node &eAppliedOn, const Morphology &morph, AcrossSegOrSegGroup &applied_on){
@@ -3353,7 +3345,7 @@ bool ParseBiophysicalProperties(
 				log.warning(eDistr, "ion type of ion channel distribution %s does not match ion type of ion channel %s", ion_name, channel_name);
 				
 				// it happens all the time, like when calcium channnels are renamed in distributions,
-				// to not affect calcuim-controlled mechanisms
+				// to not affect calcium-controlled mechanisms
 				// proceed 
 			}
 			
@@ -3813,7 +3805,6 @@ bool ParseInlineComponentInstance(
 }
 
 
-std::map< std::string, ComponentType::EventPortOut > required_event_outputs;
 // helpers for HH ?
 static void CoverCommonRequirement(const char *req_name, Dimension req_dimension, std::map< std::string, ComponentType::Requirement > &provided_requirements){
 	ComponentType::Requirement v; v.dimension = req_dimension  ; provided_requirements.insert( std::make_pair(req_name, v) );
@@ -3829,6 +3820,7 @@ static void CoverCommonTemperature(std::map< std::string, ComponentType::Require
 }
 static void CoverCommonTime(std::map< std::string, ComponentType::Requirement > &provided_requirements){
 	CoverCommonRequirement( "t", LEMS_Time, provided_requirements );
+	CoverCommonRequirement( "time", LEMS_Time, provided_requirements ); // why not
 }
 static void CoverCommonVoltage(std::map< std::string, ComponentType::Requirement > &provided_requirements){
 	CoverCommonRequirement( "v", LEMS_Voltage, provided_requirements );
@@ -3856,7 +3848,7 @@ static void CoverCommonIntraCompartmentStuff( std::map< std::string, ComponentTy
 static void CoverCommonRateThingStuff( const IonChannel::Gate::Type gatetype, std::map< std::string, ComponentType::Requirement > &provided_requirements ){
 	
 	CoverCommonIntraCompartmentStuff( provided_requirements );
-	
+	// XXX reconsider exposing those, where are they used??
 	if(
 		gatetype == IonChannel::Gate::RATES
 		|| gatetype == IonChannel::Gate::RATESTAU
@@ -3878,17 +3870,6 @@ bool ParseComponentInstanceHHRate(const ImportLogger &log, const pugi::xml_node 
 	ComponentType::Requirement r; r.dimension = LEMS_Frequency; required_exposures   .insert( std::make_pair("r", r) );
 	
 	if( !ParseInlineComponentInstance(log, eRate, component_types, dimensions, type, provided_requirements, required_exposures, instance) ) return false;
-	
-	//ComponentType::CommonRequirements gatetime_reqs; // satisfied by core NeuroML
-	//gatetime_reqs.membrane_voltage = 1;
-	
-	/*
-	if(!( gatetime_reqs.Superset(comp.common_requirements) )){
-		log.error(eRate, "component %s has a requirement not satisfied by this component", type);
-		// TODO be more specific
-		return false;
-	}
-	*/
 	
 	return true;
 }
@@ -3948,7 +3929,7 @@ bool ParseComponentInstanceIonChannel(const ImportLogger &log, const pugi::xml_n
 	CoverCommonIntraCompartmentStuff( provided_requirements );
 	
 	std::map< std::string, ComponentType::Requirement > required_exposures   ;
-	// ComponentType::Requirement g; g.dimension = LEMS_Conductance ; required_exposures.insert( std::make_pair("g", g) ); LATER as needed
+	// ComponentType::Requirement g; g.dimension = LEMS_Conductance ; required_exposures.insert( std::make_pair("g", g) ); LATER as needed, also provide area and specified gbar like with concnetration model...
 	ComponentType::Requirement fopen; fopen.dimension = Dimension::Unity() ; required_exposures   .insert( std::make_pair("fopen", fopen) );
 	
 	if( !ParseInlineComponentInstance(log, eThing, component_types, dimensions, type, provided_requirements, required_exposures, instance) ) return false;
@@ -4058,14 +4039,14 @@ bool parseHHVariable(const ImportLogger &log, const pugi::xml_node &eRate, const
 		return false;
 	}
 	
-	const static NameMap<IonChannel::Rate::Type> gate_types = {
+	const static NameMap<IonChannel::Rate::Type> rate_types = {
 		{"HHExpVariable"		, IonChannel::Rate::EXPONENTIAL	},
 		{"HHExpLinearVariable"	, IonChannel::Rate::EXPLINEAR	},
 		{"HHSigmoidVariable"	, IonChannel::Rate::SIGMOID		},
 	};
-	auto it = gate_types.find(type);
+	auto it = rate_types.find(type);
 	
-	if(it == gate_types.end()){
+	if(it == rate_types.end()){
 		rate.type = IonChannel::Rate::COMPONENT;
 		
 		return ParseComponentInstanceHHVariable(log, eRate, component_types, dimensions, gatetype, type, rate.component);
@@ -4087,14 +4068,14 @@ bool parseHHRate(const ImportLogger &log, const pugi::xml_node &eRate, const Col
 		return false;
 	}
 	
-	const static NameMap<IonChannel::Rate::Type> gate_types = {
+	const static NameMap<IonChannel::Rate::Type> rate_types = {
 		{"HHExpRate"		, IonChannel::Rate::EXPONENTIAL	},
 		{"HHExpLinearRate"	, IonChannel::Rate::EXPLINEAR		},
 		{"HHSigmoidRate"	, IonChannel::Rate::SIGMOID		},
 	};
-	auto it = gate_types.find(type);
+	auto it = rate_types.find(type);
 	
-	if(it == gate_types.end()){
+	if(it == rate_types.end()){
 		rate.type = IonChannel::Rate::COMPONENT;
 		
 		return ParseComponentInstanceHHRate(log, eRate, component_types, dimensions, gatetype, type, rate.component);
@@ -4117,12 +4098,12 @@ bool parseHHTime(const ImportLogger &log, const pugi::xml_node &eRate, const Col
 		return false;
 	}
 	
-	const static NameMap<IonChannel::Rate::Type> gate_types = {
+	const static NameMap<IonChannel::Rate::Type> rate_types = {
 		{"fixedTimeCourse"	, IonChannel::Rate::FIXED	},
 	};
-	auto it = gate_types.find(type);
+	auto it = rate_types.find(type);
 	
-	if(it == gate_types.end()){
+	if(it == rate_types.end()){
 		rate.type = IonChannel::Rate::COMPONENT;
 		
 		return ParseComponentInstanceHHTime(log, eRate, component_types, dimensions, gatetype, type, rate.component);
@@ -4844,7 +4825,7 @@ bool ParseConnectionPre_EventSeries(const ImportLogger &log, const pugi::xml_nod
 			// done in "if"
 		}
 		else{
-			log.error(eConn, "attribute %s is needed, since the event reader has multiple ports but none of them is 'spike'", cell_attr, (long) evr.instances);
+			log.error(eConn, "attribute %s is needed, since the event reader has multiple ports but none of them is 'spike'", sPort, (long) evr.instances);
 			return false;
 		}
 	}
@@ -6096,18 +6077,23 @@ struct ImportState{
 				if(!ParseProjectionPrePost(log, eProj, net, proj)) return false;
 				
 				Int default_synapse_type = -1;
-				if(is_spiking){
-					// may be present for all projections LATER
+				if(is_spiking || 1){
+					// may be present for all projections, why not
 					auto synName = eProj.attribute("synapse").value();
-					if( !*synName ){
-						log.error(eProj, "projection requires synapse type", synName);
-						return false;
+					if( *synName ){
+						default_synapse_type = synaptic_components.get_id(synName);
+						if(default_synapse_type < 0){
+							log.error(eProj, "projection synapse type %s not found", synName);
+							return false;
+						}
 					}
-					default_synapse_type = synaptic_components.get_id(synName);
-					if(default_synapse_type < 0){
-						log.error(eProj, "projection synapse type %s not found", synName);
-						return false;
+					else{
+						if( is_spiking ){
+							log.error(eProj, "projection requires synapse type", synName);
+							return false;
+						}
 					}
+					
 				}
 				// XXX allow single "synapse" or whine, for non classic projections as well !!
 				
@@ -6209,7 +6195,8 @@ struct ImportState{
 							if(synapse_type < 0){
 								
 								// find synapse type here
-								auto synName = eConn.attribute("synapse").value();
+								auto synName = RequiredAttribute(log, eConn, "synapse");
+								if(!synName) return false;
 								synapse_type = synaptic_components.get_id(synName);
 								if(synapse_type < 0){
 									log.error(eConn, "connection synapse type %s not found", synName);
@@ -6245,7 +6232,7 @@ struct ImportState{
 							}
 							if( conn.type == Network::Projection::Connection::SPIKING ){
 								if( !syncomp.HasSpikeIn(component_types) ){
-									log.error(eConn, "connection should use a synapstic component with a spike in port");
+									log.error(eConn, "connection should use a synaptic component with a spike in port");
 									return false;
 								}
 								
@@ -6296,6 +6283,7 @@ struct ImportState{
 							
 						}
 						// now parse some more, mostly common, attributes
+						// LATER be smart enough to warn when the wrong set is being used
 						{
 						const char *preCell = "preCell";
 						const char *preSegment = "preSegment";
@@ -7555,7 +7543,7 @@ struct ImportState{
 				if(set.items_seq.empty()) items_to_read = all_instances_count;
 				else items_to_read = (Int) set.items_seq.size();
 			}
-			
+			// XXX multiseg mode also...
 			Int lines_to_read = 0, columns_to_read = -1;
 			if(set.cable_mode){
 				columns_to_read = -1;
@@ -7698,8 +7686,8 @@ struct ImportState{
 					if(segments_list == "all"){
 						// special case, NOTE assume that "all" has not been defined as a segment group that is less than *all* segments.
 					}
-					else if( cell.type == CellType::PHYSICAL && morphologies.get(cell.physical.morphology).segment_groups_by_name.count(segments_list.c_str()) > 0 ){
-						set.seggroup_seq = morphologies.get(cell.physical.morphology).segment_groups_by_name.at(segments_list.c_str());
+					else if( cell.type == CellType::PHYSICAL && morphologies.get(cell.physical.morphology).segment_groups.has(segments_list.c_str()) > 0 ){
+						set.seggroup_seq = morphologies.get(cell.physical.morphology).segment_groups.get_id(segments_list.c_str());
 					}
 					else{
 						if( cell.type != CellType::PHYSICAL ){
@@ -7707,7 +7695,7 @@ struct ImportState{
 							return false;
 						}
 						
-						// list of segment ids
+						// list of segment ids FIXME
 						if(!( IdListToSeqList(lineno, 3, segments_list, pop.instances, "segment", (std::string("cell type ")+ cell_types.getName(pop.component_cell)).c_str(), items_seq) )) {
 							log.error(lineno, 4, "segment specifier \"%s\" could not be resolved to a list of segment ID's or a known segment group", segments_list);
 							return false;
@@ -7729,7 +7717,7 @@ struct ImportState{
 					LogInsideToken log_proxy = {log, lineno, 5};
 					if(!model.ParseLemsQuantityPath_CellProperty(log_proxy, cell, tokens, path, tokens_consumed )) return false;
 					}
-					// check that the specified segments match the specified distribution; if not, abort. do not restrict 'set' to segments under the selected distribution, because this could become ambiguous futher on (for example, with cable mode).
+					// check that the specified segments match the specified distribution; if not, abort. do not? restrict 'set' to segments under the selected distribution, because this could become ambiguous further on (for example, with cable mode).
 					// XXX allow segments either standalone or cables, but not both on the same statement!
 					// TODO allow fractionAlong in segments for finer control and less indirection than cable ...?
 					if(path.type == Simulation::LemsQuantityPath::CHANNEL
@@ -7741,7 +7729,7 @@ struct ImportState{
 							
 							IdListRle line_segs;
 							if(set.seggroup_seq >= 0){
-								line_segs = morph.segment_groups.at(set.seggroup_seq).list;
+								line_segs = morph.segment_groups.get(set.seggroup_seq).list;
 							}
 							else{
 								line_segs = IdListRle(set.segments_seq);
@@ -7765,7 +7753,7 @@ struct ImportState{
 							
 							IdListRle segs_outside_distribution = dist_segs.Minus(line_segs);
 							if(!( segs_outside_distribution.Count() == 0 )){
-								log.warning(lineno, 5, "the specified distribution is not present in these specified segments: %s", segs_outside_distribution.Stringify().c_str());
+								log.error(lineno, 5, "the specified distribution is not present in these specified segments: %s", segs_outside_distribution.Stringify().c_str());
 								return false;
 							}
 						}
@@ -7791,7 +7779,7 @@ struct ImportState{
 							log.error(lineno, tokens_consumed_this_far, "value specifier %s must be used for physical cells, not %s", line[tokens_consumed_this_far].c_str(), cell_types.getName(pop.component_cell));
 							return false;
 						}
-						else if(!( morphologies.get(cell.physical.morphology).segment_groups.at(set.seggroup_seq).is_cable)){
+						else if(!( morphologies.get(cell.physical.morphology).segment_groups.get(set.seggroup_seq).is_cable)){
 							log.error(lineno, tokens_consumed_this_far, "value specifier %s must be used for a segment group that is a cable; instead it refers to \"%s\"", line[tokens_consumed_this_far].c_str(), segments_list.c_str());
 							return false;
 						}
@@ -7874,7 +7862,7 @@ struct ImportState{
 					}
 					
 					if(!ParseSetData(log, lineno, (Int)list.input_instances_seq.size(), value, path_value, real_value_units, dimension, is_ref, set, lines_to_advance)) return false;
-					printf("data!\n");
+					// printf("data!\n");
 				}
 				else if(itemtype == "synapse"){
 					set.type = Simulation::CustomSetup::Statement::PROJECTION;
@@ -8161,7 +8149,7 @@ struct ImportState{
 							log.error(eSim, "%s can't be negative", sSamplInterval);
 							return false;
 						}
-						// TODO check if an integral mEdenOutputFileltiple of dt, otherwise warn and round/ceil...
+						// TODO check if an integral multiple of dt, otherwise warn and round/ceil...
 						
 					}
 					
@@ -8582,7 +8570,7 @@ struct ImportState{
 		){
 			new_type.extends = ComponentType::GATE;
 			
-			AddMagicParameter( new_type, "instances"   , Dimension::Unity() );
+			AddMagicParameter( new_type, "instances"   , Dimension::Unity() ); // TODO why add this as a requirement? also expose alpha, beta etc LATER...
 			
 			// needs voltage and calcium?
 			AddVoltageRequirement( new_type );
@@ -8650,10 +8638,10 @@ struct ImportState{
 			new_type.extends = ComponentType::SYNAPTIC_COMPONENT;
 			
 			AddVoltageRequirement( new_type ); // for my compartment
-			AddMagicRequirement( new_type, "vpeer", LEMS_Voltage, new_type.common_requirements.peer_voltage ); // for poeetr
+			AddMagicRequirement( new_type, "vpeer", LEMS_Voltage, new_type.common_requirements.peer_voltage ); // for that of the peer
 			
 			AddMagicParameter( new_type, "conductance", LEMS_Conductance );
-		}
+		}// TODO is volt dep necessary  for baser synapses?
 		else if(
 			strcmp(extends, "baseSynapse") == 0
 			|| strcmp(extends, "baseCurrentBasedSynapse") == 0
@@ -8664,7 +8652,7 @@ struct ImportState{
 			AddVoltageRequirement( new_type );
 			AddSpikeIn( new_type );
 		}
-		// TODO baseSynapseDL !
+		// TODO baseSynapseDL ! see also https://github.com/NeuroML/NeuroML2/issues/157
 		else if( strcmp(extends, "baseConductanceBasedSynapse") == 0 ){
 			new_type.extends = ComponentType::SYNAPTIC_COMPONENT;
 			
@@ -9126,7 +9114,8 @@ struct ImportState{
 							// set this as the default case
 							new_dervar.default_case = new_dervar.cases.size();
 						}
-						
+						// TODO consider whining on no default case (though there's no general way to autodetect fully covering cases that could be supplied)
+						// TODO reject on no Case being there...
 						if( !ParseDerivedValue( log, eCase, "value", new_case.value ) ) return false;
 						
 						new_dervar.cases.push_back(new_case);
@@ -9466,11 +9455,9 @@ struct ImportState{
 		// check for possible requirement native names, too! (such as iCa which is not defined in concentrationModel)
 		// add some type-based requirements here to avoid resolving them in the backend engine
 		for(const auto &keyval : new_type.requirements.names){
-			
 			auto exptype_it = ComponentType::CommonRequirements::names.find(keyval.first);
 			if(exptype_it != ComponentType::CommonRequirements::names.end()){
 				auto editme = exptype_it->second;
-				
 				new_type.common_requirements.*editme = keyval.second;
 			}
 			

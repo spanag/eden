@@ -33,7 +33,9 @@ fi
 # https://stackoverflow.com/questions/5265817/how-to-get-full-path-of-a-file
 BUILD_DIR=$(python3 -c "import os; print(os.path.abspath(\"$BUILD_DIR\"))")
 
-mkdir -p "$ARTIFACTS_DIR" "$BUILD_DIR"
+if [ -n "${ARTIFACTS_DIR}" ]; then mkdir -p "$ARTIFACTS_DIR"; fi
+if [ -n "${BUILD_DIR}"     ]; then mkdir -p "$BUILD_DIR"    ; fi
+
 
 
 # now set up the config...
@@ -111,7 +113,10 @@ if [ -n "$RUN_DIRECT" ]; then
 	
 	# now build the docs!
 	if [ -z "$DONT_RUN_SPHINX" ]; then # TODO a less awkward flag for readthedocs...
+		# python3 -m sphinx -T -E -W --keep-going -b linkcheck -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/linkcheck
 		python3 -m sphinx -T -E -W --keep-going -b html -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/html
+		# python3 -m sphinx -T --keep-going -b latex -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/pdf
+		# cd "$ARTIFACTS_DIR/pdf" && latexmk -r latexmkrc -pdf -f -dvi- -ps- -jobname=eden-simulator -interaction=nonstopmode
 	fi
 
 else

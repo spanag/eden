@@ -341,12 +341,10 @@ struct CollectionWithNames{
 		else return -1;
 	}
 	// FIXME rename to "at" to avoid confusion with seq <-> id mappers
-	const Content & get(Int id) const{
-		return contents.at(id);
-	}
-	Content & get(Int id){
-		return contents.at(id);
-	}
+	const Content &get(Int id) const { return contents.at(id); }
+	      Content &get(Int id)       { return contents.at(id); }
+	const Content &operator[](Int id) const { return get(id); }
+	      Content &operator[](Int id)       { return get(id); }
 	const Content & get(const char *name) const{
 		return get(get_id(name));
 	}
@@ -771,7 +769,7 @@ struct ComponentType{
 		INPUT,
 		
 		CELL // an "artificial" cell, since "biophysical" ones cannot be fully captured in LEMS
-	};
+	}; // TODO abolish this and check each comp type for each role at reference time, not declaration time.
 	
 	struct EventPortIn{
 		// whatever, if there is any difference between them
@@ -973,7 +971,7 @@ struct ComponentType{
 		Int temperature;
 		
 		Int membrane_voltage; // for most compartment-associated components. NB only one dimensionality can be exposed !
-		Int membrane_surface_area; // for childern of <Segment>: ConcentrationModels and IonChannels
+		Int membrane_surface_area; // for children of <Segment>: ConcentrationModels and IonChannels
 		
 		Int external_current; // for artificial cells. NB only one dimensionality can be exposed !
 		
@@ -1046,7 +1044,7 @@ struct ComponentType{
 		Int concentration_intra;
 		Int concentration_extra;
 		
-		// for scaling fctors (such as ion channel conductance)
+		// for scaling factors (such as ion channel conductance)
 		Int scaling_factor;
 		
 		// for block mechanisms in blocking/plastic synapses
@@ -1132,7 +1130,7 @@ struct ComponentType{
 	CommonRequirements common_requirements;
 	CollectionWithNames<Exposure> exposures;
 	CommonExposures common_exposures;
-	// FIXME forbid input ant output ports from having the same name!
+	// FIXME forbid input and output ports from having the same name!
 	CollectionWithNames<EventPortIn> event_inputs;
 	CommonEventInputs common_event_inputs;
 	CollectionWithNames<EventPortOut> event_outputs;
@@ -1535,8 +1533,7 @@ struct Morphology{
 			cable_nseg = -1;			
 		}
 	};
-	std::vector<SegmentGroup> segment_groups;
-	NameIndexer segment_groups_by_name; // TODO combine into CollectionWithNames
+	CollectionWithNames<SegmentGroup> segment_groups;
 	
 	//Get internal position in the segments array, from NeuroML id
 	Int lookupSegId(Int nml_id) const{
@@ -1557,10 +1554,9 @@ struct Morphology{
 	}
 	
 	bool add(const SegmentGroup &new_group, const char *new_name){
-		if(segment_groups_by_name.count(new_name)) return false;
+		if(segment_groups.has(new_name)) return false;
 			
-		segment_groups.push_back(new_group);
-		segment_groups_by_name.insert(std::make_pair(new_name, segment_groups.size()-1));
+		segment_groups.add(new_group, new_name);
 		return true;
 	}
 	std::string Stringify_SegSeq_List(const IdListRle &seg_seq_list) const{
@@ -1587,7 +1583,7 @@ struct Morphology{
 			
 			printf("\n");
 		}
-		for(std::pair<const char *, Int> keyval : segment_groups_by_name){
+		for(std::pair<const char *, Int> keyval : segment_groups.names){
 			printf("Segment group %s: %s\n", keyval.first, Stringify(segment_groups[keyval.second]).c_str() );
 		}
 	}
@@ -2110,7 +2106,7 @@ struct Network{
 		CollectionWithIds<Connection> connections;
 		
 		// extensions!
-		// for spike connections, use EventSetReaders instead of, as spike sources.
+		// for spike connections, use EventSetReaders instead of populations, as spike sources.
 		// To keep things quick and dirty for now, reinterpret population, cell, segment as eventset, instance, port instead.
 		enum PresynType{
 			CELL,
@@ -2520,13 +2516,13 @@ struct Simulation{
 		std::vector<double> sampling_points; // alternative to implicit. If used, it must have at least one element.
 		
 	};
-	// An EventWriter is a stream of pikes or other discrete events, coming from various EventPaths in the model.
+	// An EventWriter is a stream of spikes or other discrete events, coming from various EventPaths in the model.
 	struct EventWriter : public LoggerBase{
 		struct EventSelection{
 			LemsEventPath selection; // the component's port, 
 		};
 		
-		// for classic event writers, acceptable formats are "TIME_ID" and "ID_TIME";  see also https://github.com/LEMS/jLEMS/blob/development/src/main/java/org/lemsml/jlems/core/type/simulation/EventWriter.java#L18
+		// format is inherited from LoggerBase.  For classic event writers, acceptable formats are "TIME_ID" and "ID_TIME";  see also https://github.com/LEMS/jLEMS/blob/development/src/main/java/org/lemsml/jlems/core/type/simulation/EventWriter.java#L18
 		
 		// same for both classic and eden types
 		CollectionWithIds<EventSelection> outputs;

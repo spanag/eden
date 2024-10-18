@@ -10,16 +10,16 @@ Welcome to EDEN's documentation!
 
 **EDEN** (*E*\ xtensible *D*\ ynamics *E*\ ngine for *N*\ etworks) is a simulation program for `spiking neural networks <https://en.wikipedia.org/wiki/Spiking_neural_network>`_ that takes models described in `NeuroML <https://docs.neuroml.org/>`_ and generates the simulated behaviour of these networks.
 
-..  TODO link TODO rate based?
+..  LATER rate based?
 
 It is best used as part of a neural modelling workflow, between the stage of *generating* the model to simulate, and *analysis* of the simulation's results.
 	
-To learn how to use EDEN, check out the `Quickstart <quickstart.ipynb>`_ with a classic Hodgkin-Huxley neuron, and the chapters of this guide for more about modelling and usage (coming soon).
+To learn how to use EDEN, check out the `Quickstart <quickstart.ipynb>`_ with a classic Hodgkin-Huxley neuron, and browse the `user's guide <user_guide.rst>`__ for more about modelling and usage (starting with :doc:`intro_neuroml`).
 
-.. ..., and the tutorials and our showcase of full-featured models with publication-ready figures.
+.. and the tutorials and our showcase of full-featured models with publication-ready figures.
 
-Installing
-**********
+.. rubric:: Installing
+	:heading-level: 2
 
 EDEN is most easily installed via :code:`pip`:
 
@@ -43,25 +43,24 @@ For more installation options, refer to the README `here <https://gitlab.com/c78
 .. Contact us 
 .. .. include contact_us.rst
 
-.. 
-	code_cell
-	usage
 	
-.. TODO use hidden toctree instead? who knows
+.. NEXT use hidden toctree instead? who knows
 
 
 	📽 Animations <anim>
 	🎨 Render 3D <pyrender>
 
-Table of contents
-*****************
+.. rubric:: Table of contents
+	:name: indextoc
+	:heading-level: 2
 
 .. toctree::
 	:maxdepth: 2
 	:caption: Contents
+	:titlesonly:
 	
 	🚀️ Quickstart <quickstart>
-	📖 Tutorial <tut_net>
+	📖 User's Guide <user_guide>
 	🐍️ Python API <python_api>
 
 
@@ -70,17 +69,35 @@ Table of contents
 	:maxdepth: 1
 	
 	🌟️ Examples <gallery>
+	 ❓ FAQ <faq>
 	💌 Contact us <contact_us>	
 
-.. toctree::
-	:caption: More Examples
-	:maxdepth: 1
+..
+	Intro
+		Installing, Contact us, Credits
 	
-	exa_lfp
+	Part A - User's Guide
+		Intro to NeuroML
+		More than NeuroML
+		Modelling examples
+		Reference? thips and tricks?
+			rendering, animation?
+	
+	Part B: Hacker's guide
+		Theory
+		Maintenance?
+		Examples
+	
+	appendix - Reference
+		FAQ
+		Python API
+		C++ API?
 
-Indices and tables
-==================
+.. rubric:: Indices and tables
+	:heading-level: 3
 
 * :ref:`genindex`
-* :ref:`modindex`
 * :ref:`search`
+
+.. 
+	* :ref:`modindex`

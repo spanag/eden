@@ -28,6 +28,9 @@ build:
     - libasound2
     - libnss3
     - libgbm-dev
+    - librsvg2-bin
+    - texlive-latex-recommended
+    - texlive-science
   
   jobs:
     post_create_environment:
@@ -47,6 +50,9 @@ build:
       - DONT_BUILD_EDEN=1 bash .binder/postBuild
       - pip show eden-simulator
       - google-chrome --version
+    
+    post_build:
+      - ls -la
 
 # Build documentation in the "docs/" directory with Sphinx
 sphinx:
@@ -55,9 +61,8 @@ sphinx:
   
 
 # Optionally build your docs in additional formats such as PDF and ePub
-formats:
-  - epub
-  # - pdf
+# formats:
+  # - pdf NEXT
 
 # Optional but recommended, declare the Python requirements required
 # to build your documentation

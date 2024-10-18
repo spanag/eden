@@ -1,5 +1,5 @@
 '''
-Addidtional facilities to use EDEN's experimental fetures from within Python.
+Additional facilities to use EDEN's experimental features from within Python.
 
 **NOTE:** As the experimental features are still in design, parts of this API may change between versions!
 '''
@@ -13,7 +13,7 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 	**kwargs
 ):
 	'''
-	Get more nformation about the structure and properties of physically-modelled cells.
+	Get more information about the structure and properties of physically-modelled cells.
 	
 	
 	Parameters
@@ -27,6 +27,10 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 		
 	threads : int, optional
 		The number of threads to run processing with, or `None` for automatic selection. (Does not have an effect in this case yet.)
+		
+		⠀
+		
+		*The following parameters are less commonly used*:
 	
 	
 	Returns
@@ -39,7 +43,6 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 	Other Parameters
 	----------------
 	
-	*(The following parameters are less commonly used)*
 	
 	extra_cmdline_args : list[str], optional
 		Additional command line arguments to pass to EDEN.  
@@ -98,6 +101,12 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 	``'comp_conductance_to_parent'``: ndarray[(n_comps), float]
 		The electrical cytosolic conductance betwen each comparent and its tree parent, in `nS`. The first value for the tree root is zero (not applicable).
 	
+	``'segment_groups'``: dict[str, dict]
+		Details about each NeuroML segment group, keyed by name.
+		
+		Each keyed entry of `segment_groups` may have the following dict entries\: 
+		
+		* ``'comps'``: The numbered compartments included in the segment group.
 	
 	``'mesh_vertices'``: ndarray[(n_verts, 3), float]
 		The vertex coordinates of the 3-D mesh representing the neuron, in microns.
@@ -107,7 +116,9 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 		
 	``'mesh_comp_per_face'``: ndarray[n_faces, int] (optional)
 		The neuron compartment that each triangle of the mesh maps to.  
+		
 		Useful for selectively colouring relevant regions of the neuron, and displaying the neuron in false colour.
+		
 		*NB:* It is present when discretisation is available for the selected mesh generation method.  
 	
 	
@@ -117,7 +128,7 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 	For thinking of the neuron as a "tree" data structure, refer to:
 	
 	- the *Book of Genesis*, chapter 5, section 5: http://www.genesis-sim.org/GENESIS/iBoG/iBoGpdf/chapt5.pdf 
-	- the TREES toolbox for analysing the structure of neurons: https://doi.org/10.1371/journal.pcbi.100087
+	- the TREES toolbox for analysing the structure of neurons: https://doi.org/10.1371/journal.pcbi.1000877
 	- and the related literature.
 	
 	'''
@@ -136,8 +147,38 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 	# convert most lists to numpy nd_arrays
 	for _, cell_info in out_dict.items():
 		for key, val in cell_info.items(): # LATER for selected keys...
-			if key in cell_info:
+			if key in cell_info and key not in ['segment_groups']:
 				cell_info[key] = np.array(val)
 	
 	return out_dict
+
+def GetLemsLocatorsForCell(cell_info, compartment_ids=None):
+	'''
+	Generate a list of (extended) LEMS locators to access a property all over a cell.
+
+	Parameters
+	-----
+	cell_info: dict
+
+		The discretisation information about the cell, as returned from `eden_simulator.experimental.explain_cell`.
 	
+	compartment_ids: iterable
+	
+		A specific list of compartments to access (by default all over the cell)
+	
+	Returns
+	-------
+	l : list(str)
+
+		The list of locators, to be used in extended LEMS paths capturing the cell property.
+	
+	See Also
+	---
+	:py:mod:`eden_simulator.experimental.explain_cell`: For obtaining ``cell_info``.
+	`LEMS paths for cell locations <cell_locators>`__ : For LEMS segment locators including `fractionAlong`.
+	:doc:`intro_spatial`: To lean more about spatially detailed cells.
+	
+	'''
+	comp_mid_seg, comp_mid_fra = (cell_info[x] for x in ('comp_midpoint_segment', 'comp_midpoint_fractionAlong'))
+	if compartment_ids is None: compartment_ids = range(len(comp_mid_seg))
+	return [str(comp_mid_seg[i])+('%.9f'%comp_mid_fra[i])[1:] for i in compartment_ids]

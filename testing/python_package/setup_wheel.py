@@ -224,6 +224,11 @@ else:
     zip_safe = False
     package_data_locations = [exe_files_location+'/*']
 
+# And some more 
+# NOTE: inclusion can't be fully automatic because of source control and ignore files! https://setuptools.pypa.io/en/stable/userguide/datafiles.html
+package_data_locations += ['display/spatial/*'] # for whatever reason subfolders are NOT included by wildcard!!
+# print(package_data_locations)
+
 setuptools.setup(
     name=package_name,
     version=config_options.package_version,
@@ -232,7 +237,7 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     author="Sotirios Panagotou",
     author_email="s.panagiotou@erasmusmc.nl",
-    url='https://gitlab.com/neurocomputing-lab/Inferior_OliveEMC/eden',
+    url='https://eden-simulator.org',
     download_url='https://gitlab.com/neurocomputing-lab/Inferior_OliveEMC/eden/-/archive/main/eden-main.zip',
     classifiers=[
         "Intended Audience :: Science/Research",
@@ -248,15 +253,14 @@ setuptools.setup(
     ],
     keywords=['simulator','simulation','HPC','neuroscience','NeuroML'],
     # project_urls
-    packages=[package_name],
     # for future reference: whether binaries are included or silently dropped is up to the python packaging system's whims, the whims of the day were last tracked here https://github.com/pypa/setuptools/issues/3340#issuecomment-1219383976
-    # packages=setuptools.find_namespace_packages(where=package_dir),
-    # packages=setuptools.find_namespace_packages(where="."),
+    packages=setuptools.find_namespace_packages(where="."),
+    # packages=[package_name],
     # package_dir={"":package_dir},
     # package_dir={"":'.'},
     # package_dir={package_dir:package_dir},
     package_data={package_name: package_data_locations},
-    include_package_data=False,
+    include_package_data=True,#?
     # scripts 
     scripts=scripts_list,  
     entry_points=entry_points,

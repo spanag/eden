@@ -8,8 +8,8 @@ If you are interested in EDEN, we'll be delighted to hear from you:
 
 .. table...
 
-.. TODO forum
-.. TODO substitute chatroom
+.. LATER forum
+.. NEXT substitute chatroom
 
 .. grid:: 1 1 2 2
 
@@ -40,7 +40,7 @@ If you are interested in EDEN, we'll be delighted to hear from you:
 :hidden:`Email us`
 ******************
 
-.. todo invisible header here?
+.. LATER invisible header here?
 
 And more generally, feel free to send e-mail to the developers anytime:
 
@@ -90,7 +90,7 @@ Neural simulation is a topic of active scientific research.  More than a product
 We do have several cutting-edge research questions on simulation technology; if a prospective student (or intern) has some relevant knowledge, and support from an academic institution or an intense personal interest, we can provide specific research topics to work on, and additional guidance.
 
 .. See also the :ref:`hackers_guide` to understand the program's internals.
-.. TODO add topics for the general modelling workflow: model generation, results analysis...
+.. NEXT add topics for the general modelling workflow: model generation, results analysis...
 
 Here are a few challenges, to explain our kind of work to prospective students:
 
@@ -99,6 +99,6 @@ Here are a few challenges, to explain our kind of work to prospective students:
 
 If you have pulled off one of these, or have another research project to propose, |contact us|; see also our `Msc thesis vacancies <https://neurocomputinglab.com/jobs/?job__type_spec=student-thesis>`_ (theme "BrainFrame"). 
 
-.. TODO add extnesions and backends...
-.. TODO add refs to individual thesis topics?
+.. NEXT add extensions? and backends... and benchmarks.
+.. NEXT add refs to individual thesis topics?
 

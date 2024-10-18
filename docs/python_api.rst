@@ -2,12 +2,41 @@
 Python API
 ==========
 
+.. contents::
+    :local:
+
 ``eden-simulator``
 ******************
 
 .. automodule:: eden_simulator
     :members:
 
+Display API
+***********
+
+``eden_simulator.display.animation``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: eden_simulator.display.animation
+    :members:
+
+``eden_simulator.display.spatial``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: eden_simulator.display.spatial
+    :members:
+
+``eden_simulator.display.spatial.k3d``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: eden_simulator.display.spatial.k3d
+    :members:
+    
+``eden_simulator.display.spatial.pyvista``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: eden_simulator.display.spatial.pyvista
+    :members:
 
 Experimental API
 ****************
