@@ -175,7 +175,7 @@ def GetLemsLocatorsForCell(cell_info, compartment_ids=None):
 	See Also
 	---
 	:py:mod:`eden_simulator.experimental.explain_cell`: For obtaining ``cell_info``.
-	`LEMS paths for cell locations <cell_locators>`__ : For LEMS segment locators including `fractionAlong`.
+	`LEMS paths for cell locations <extension_paths.rst#lems-paths-for-cell-locations>`__ : For LEMS segment locators including `fractionAlong`.
 	:doc:`intro_spatial`: To lean more about spatially detailed cells.
 	
 	'''

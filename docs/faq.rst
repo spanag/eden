@@ -80,7 +80,7 @@ Terminology dictionary
         - ``linked``
         - An continuous-time dependency of a variable on *any* other variable. 
     *   - Aggregate flux
-        - `Multiflux <extension_multiflux>`__
+        - `Multiflux <extension_multiflux.ipynb>`__
         - ``WRITE``
         - ``addmsg``
         - ``WRITE``
@@ -95,7 +95,7 @@ Terminology dictionary
         - A disembodied source of spikes
     *   - Time series
         - `\<EdenTimeSeriesReader\> <extension_io.ipynb#Time-series-with-EdenTimeSeriesReader>`__ 
-        - `Vector.play() <neuron:how-do-i-simulate-a-current-clamp-with-non-pulse-behavior>`__
+        - :any:`Vector.play() <neuron:/guide/bio_faq.rst#how-do-i-simulate-a-current-clamp-with-non-pulse-behavior>`
         - TBD
         - 
         - ``value_name(x,t)``
@@ -232,12 +232,12 @@ With a custom `LEMS component <intro_lems.ipynb#Example:-Ornstein-Uhlenbeck-nois
 How do i add *other ion*-modulated ion channels or other mechanisms (modulated by possibly other quantities)?
 -------------------------------------------------------------------------------------------------------------
 
-With EDEN's LEMS extension `\<𝚅𝚊𝚛𝚒𝚊𝚋𝚕𝚎𝚁𝚎𝚏𝚎𝚛𝚎𝚗𝚌𝚎\> <example_pointers.ipynb>`__.
+With EDEN's LEMS extension `\<𝚅𝚊𝚛𝚒𝚊𝚋𝚕𝚎𝚁𝚎𝚏𝚎𝚛𝚎𝚗𝚌𝚎\> <extension_pointers.ipynb>`__.
 
 How do I control mechanisms with a single "global" variable?
 ------------------------------------------------------------
 
-With `<𝚅𝚊𝚛𝚒𝚊𝚋𝚕𝚎𝚁𝚎𝚏𝚎𝚛𝚎𝚗𝚌𝚎> <extension_pointers.ipynb>`__ s that point to the same single quantity (that can be on an abstract cell or wherever).
+With `<𝚅𝚊𝚛𝚒𝚊𝚋𝚕𝚎𝚁𝚎𝚏𝚎𝚛𝚎𝚗𝚌𝚎>s <extension_pointers.ipynb>`__ that point to the same single quantity (that can be on an abstract cell or wherever).
 
 .. 
     LATER network element?

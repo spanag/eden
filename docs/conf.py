@@ -12,7 +12,7 @@ from pathlib import Path
 repo_local_path = '..'
 repo_local_path = os.path.abspath(repo_local_path)
 
-project = 'EDEN'
+project = "EDEN user's guide"
 copyright = ' 2019– , EDEN authors and contributors'
 author = 'EDEN authors and contributors'
 
@@ -98,7 +98,7 @@ extensions = [
 	'sphinx.ext.autodoc',
 	'sphinx.ext.autosummary',
 	'sphinx.ext.napoleon',
-    'sphinx_codeautolink',  # automatic links from code to documentation NEXT
+    #'sphinx_codeautolink',  # automatic links from code to documentation, breaks because of cmocean? NEXT
 	
 	'sphinx.ext.intersphinx',
 	# "sphinx.ext.autosectionlabel", # more trouble than it's worth, for multiple chapters
@@ -308,7 +308,7 @@ rst_prolog = r"""
     :class: hidden
 
 """
-
+# LATER refactor the whole file ...
 def setup(app):
 	import os
 	os.makedirs("docs/_images", exist_ok=True)
@@ -317,7 +317,20 @@ def setup(app):
 	app.connect("autodoc-skip-member", autodoc_skip_member)
 	def builder_inited(app):
 		env = app.env
+		conf = env.config
 		env.settings['line_length_limit'] = 10_000_000_000 # NB: there's not much use making files bigger than the default 100M though
+		
+		# print(dir(app.config))
+		
+		if app.builder.format == 'latex':
+			conf.exclude_patterns += ['index.rst']
+			conf.master_doc = 'index_latex'
+		else:
+			conf.exclude_patterns += ['*_latex.rst']
+			
+		if app.builder.name == 'linkcheck':
+			conf.nbsphinx_execute = 'never'
+			
 		get_more_assets(app)
 	
 	app.connect('builder-inited', builder_inited)
@@ -331,6 +344,18 @@ def setup(app):
 				shutil.copytree(srcdir+'/_static', outdir+'/_static', dirs_exist_ok=True)
 				# And delete this annoying log file for some reason, ir overwriting the out dir
 				# shutil.rmtree(outdir+'/'+'eden-simulator'+'.ilg', ignore_errors=True)
+				
+				# And also fiddle with the tex file so as to move the foreword!
+				main_tex_filename = outdir+'/edenusersguide.tex' # LATER autodetect!
+				
+				with open(main_tex_filename,'rb') as f: s = f.read()
+				fw_start = s.index(b'\sphinxAtStartPar') # the very first... or alternatively after \pagestyle{normal}
+				fw_end = s.index(b'% FOREWORD END')
+				sfw = s[fw_start:fw_end]
+				ss = s[:fw_start]+s[fw_end:]
+				ss = ss.replace(b'\sphinxtableofcontents', sfw+b'\n%\clearpage\n'+b'\sphinxtableofcontents')
+				with open(main_tex_filename, 'wb') as f: f.write(ss)
+				
 			
 	app.connect('build-finished', build_finished)
 		
@@ -345,6 +370,7 @@ suppress_warnings += ['epub.unknown_project_files']
 # -- Options for HTML output --
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
+# html_baseurl later?
 html_static_path = ['_static']
 html_theme = 'alabaster'
 # html_css_files = ['_static/custom.css'] # HOTE: this does not seem to work, the css file is not even copied. But at least custom.css works for alabaster and pydata theme
@@ -375,7 +401,7 @@ pygments_latex_defs = STYLE_TEMPLATE % {'cp': 'PY', 'styles': ''}
 # still doesn't look good, oh well, send a report to nbsphinx LATER
 
 latex_elements = {
-    'papersize': 'b5paper',
+    'papersize': 'a4paper',
     # 'printindex': '',
 #     'sphinxsetup': r"""
 # HeaderFamily=\rmfamily\bfseries,
@@ -423,6 +449,18 @@ latex_elements = {
 \renewcommand{\sphinxcrossref}[1]{#1}
 \renewcommand{\sphinxtermref}[1]{#1}
 
+\usepackage{titletoc}% http://ctan.org/pkg/titletoc
+% this doesn't follow sphinx's formatting somehow
+%\titlecontents{chapter}
+%[0.0cm]             % left margin
+%{\vspace{.1cm}}                  % above code
+%{%                  % numbered format
+%{ Chapter \thecontentslabel}%
+%}%
+%{}         % unnumbered format
+%{}         % filler-page-format, e.g dots
+
+
 """ # + pygments_latex_defs
 }
 '''
@@ -438,7 +476,7 @@ Hellɔ woϱld.
 \end{document}
 '''
 latex_toplevel_sectioning = 'part'
-
+# latex_appendices = ['gallery', 'faq', 'python_api']
 # LATER consider svg figures in pdf and even everywhere
 # 	what about gouraud https://nbsphinx.readthedocs.io/en/0.9.5/code-cells.html#Plots
 # 	and conf.py backends for mpl? or simply crank up the dpi?
@@ -459,12 +497,16 @@ linkcheck_ignore = [
 	# JS based anchors
 	'https://eden-simulator.org/repo#',
 	'https://gitlab.com/c7859/neurocomputing-lab/Inferior_OliveEMC/eden/#',
-	r'https://github.com\.*#L\.*',
-	r'https://gitlab.com\.*#L\.*',
-	# Flaky websites
+	r'https://github.com.*#L.*',
+	r'https://gitlab.com.*#L.*',
+	
+	# Flaky and/or robophobic websites
 	'https://v1.opensourcebrain.org/projects',
 	'http://neuroml-db.org','https://neuroml-db.org',
-	'https://onlinelibrary.wiley.com',
+	r'https://www.researchgate.net/.*/links/.*',
+	# Flaky but redirected ... https://github.com/sphinx-doc/sphinx/issues/11233
+	r'https://onlinelibrary.wiley.com/.*', r'https://doi.org/10.1016/s0248-4900\(02\)00022-9',
+	r'https://rupress.org', 'https://doi.org/10.1085/jgp.111.4.565',
 	
 ]
 linkcheck_allowed_redirects = {
@@ -472,11 +514,17 @@ linkcheck_allowed_redirects = {
     # the canonical URI will be treated as "working".
     r'https://sphinx-doc\.org/.*': r'https://sphinx-doc\.org/en/master/.*',
     r'https://doi.org/.*': r'.*',
+    r'https://github\.com/NeuroML/.*/issues/new': r'.*',
+	
     r'https://brian2\.readthedocs\.io/.*': r'https://brian2\.readthedocs\.io/en/stable/.*',
     r'https://nrn\.readthedocs\.io/.*': r'https://nrn\.readthedocs\.io/en/.*',
     r'https://docs\.pyvista\.org/api/core/_autosummary/pyvista\..*': r'https://docs\.pyvista\.org/api/core/_autosummary/pyvista\..*',
     r'https://gitlab\.com': r'https://about\.gitlab\.com',
+	r'http://hdl\.handle\.net/11299/199178': r'https://conservancy\.umn\.edu/items/c6457e17-3327-4673-afc5-28a00e40b904',
+	
 }
+linkcheck_timeout = 45
+linkcheck_retries = 3
 
 # NEXT organise the structure better, with less inline toc and more intro pages...
 # structure should be: intro (+ about i think!), user's guide, hacker's guide, python ref either at the end of the whole or at the end of the user's guide.

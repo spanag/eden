@@ -1,6 +1,7 @@
 /* https://stackoverflow.com/questions/19686897/how-can-i-link-to-a-page-section-in-a-sphinx-toctree 
 + https://stackoverflow.com/questions/1014958/is-there-a-css-parent-selector just arrived but will do
 */
+h1:has(> span.hidden) ,
 h2:has(> span.hidden) , /* :( */
 h3:has(> span.hidden) { 
     display: none;

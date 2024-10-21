@@ -113,6 +113,7 @@ if [ -n "$RUN_DIRECT" ]; then
 	
 	# now build the docs!
 	if [ -z "$DONT_RUN_SPHINX" ]; then # TODO a less awkward flag for readthedocs...
+		pip freeze > "$ARTIFACTS_DIR/pip.txt"
 		# python3 -m sphinx -T -E -W --keep-going -b linkcheck -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/linkcheck
 		python3 -m sphinx -T -E -W --keep-going -b html -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/html
 		# python3 -m sphinx -T --keep-going -b latex -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/pdf

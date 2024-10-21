@@ -50,6 +50,7 @@ build:
       - DONT_BUILD_EDEN=1 bash .binder/postBuild
       - pip show eden-simulator
       - google-chrome --version
+      - pip freeze
     
     post_build:
       - ls -la

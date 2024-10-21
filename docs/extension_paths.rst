@@ -57,7 +57,7 @@ Instead of the LEMS form which may assign serial number in unpredictable ways, E
 	projection/0/(pre or post)/variable_name
 	projection[0]/(pre or post)/...
 
-Using these forms, one can record or `otherwise access <extensions_pointers>`__ the variables of individual synapses or input sources, in the consistent order that they had in their respective ``<projection>``\ s or ``<inputList>``\ s.
+Using these forms, one can record or `otherwise access <extension_pointers.ipynb>`__ the variables of individual synapses or input sources, in the consistent order that they had in their respective ``<projection>``\ s or ``<inputList>``\ s.
 
 LEMS paths for input streams
 ****************************
