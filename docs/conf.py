@@ -23,8 +23,12 @@ print(release)
 
 # get a version tag or branch, for cross references to the git repo
 ver_tag = 'v'+release
-if ver_tag in os.listdir(repo_local_path+'/.git/refs/tags'): repo_tag = ver_tag
-else: repo_tag = 'development'
+if ver_tag in os.listdir(repo_local_path+'/.git/refs/tags'):
+	repo_tag = ver_tag
+	rtd_tag = 'stable' # most likely
+else:
+	repo_tag = 'development'
+	rtd_tag = 'latest'
 
 # https://stackoverflow.com/questions/27381997/get-variables-in-sphinx-templates
 html_context = {}
@@ -45,10 +49,26 @@ print(html_context)
 import os
 confdir = os.getcwd()
 
-# get binary assets from static store like html_logo, favicon, LATER put somewhere appropriate
-def get_more_assets(app):
-	import urllib3
+# get binary assets from static store like html_logo, favicon, LATER put somewhere appropriate\
+def get_assets(eden_assets_files):
+	
 	eden_assets_prefix = 'https://eden-simulator.org/assets/docs/'
+	import urllib3
+	target_prefix = confdir+'/_static/'
+	urls_files = [ (eden_assets_prefix+x, target_prefix+x) for x in eden_assets_files ]
+
+	http = urllib3.PoolManager()
+	# https://www.owenrumney.co.uk/retry-urllib3-requests/
+	retry = urllib3.util.Retry(3, redirect=20, raise_on_status=True, status_forcelist=range(400, 600))
+	for url, filename in urls_files:
+		print(url)
+		data = http.request('GET', url, retries=retry, timeout=60).data
+		# print('%r page is %d bytes' % (url, len(data)))
+		with open(filename, "wb") as f: f.write(data) 
+		
+get_assets(['favicon.png']) # because sphinx complains too early
+
+def get_more_assets(app):
 	eden_assets_files = [
 		'eden_logo_white_bg.png',
 		'thumb_intro_neuroml.png',
@@ -69,18 +89,8 @@ def get_more_assets(app):
 			'example_lfp_3d_full.png',
 			'extension_customsetup_balls.png',
 		]
-
-	target_prefix = confdir+'/_static/'
-	urls_files = [ (eden_assets_prefix+x, target_prefix+x) for x in eden_assets_files ]
-
-	http = urllib3.PoolManager()
-	# https://www.owenrumney.co.uk/retry-urllib3-requests/
-	retry = urllib3.util.Retry(3, redirect=20, raise_on_status=True, status_forcelist=range(400, 600))
-	for url, filename in urls_files:
-		print(url)
-		data = http.request('GET', url, retries=retry, timeout=60).data
-		# print('%r page is %d bytes' % (url, len(data)))
-		with open(filename, "wb") as f: f.write(data) 
+		
+	get_assets(eden_assets_files)
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -292,8 +302,8 @@ nbsphinx_input_prompt = '%.0s'
 nbsphinx_output_prompt = '%.0s'
 
 # Allow funny content in %writefile cells
-# see also https://github.com/spatialaudio/nbsphinx/issues/670, tried to override language_info.pygments_lexer but it didn't work
-suppress_warnings += ['misc.highlighting_failure']
+# see also https://github.com/spatialaudio/nbsphinx/issues/670, use the undocumented magics_language metadata
+# suppress_warnings += ['misc.highlighting_failure']
 
 # common
 
@@ -372,13 +382,22 @@ suppress_warnings += ['epub.unknown_project_files']
 
 # html_baseurl later?
 html_static_path = ['_static']
-html_theme = 'alabaster'
+html_theme = 'alabaster' #NEXT move to pydata
+
 # html_css_files = ['_static/custom.css'] # HOTE: this does not seem to work, the css file is not even copied. But at least custom.css works for alabaster and pydata theme
 
 # html_logo = "_static/eden_logo_white_bg.png"
-# html_favicon = '_static/favicon.png' # NEXT https://sphinx-favicon.readthedocs.io/en/latest/quickstart.html#quickstart
+html_favicon = '_static/favicon.png' # NEXT https://sphinx-favicon.readthedocs.io/en/latest/quickstart.html#quickstart
 html_theme_options = {
 	'logo': 'eden_logo_white_bg.png', # _static is implicit?
+	'extra_nav_links': {
+		'📄 PDF version': f'/_/downloads/{rtd_tag}/pdf/',
+	},
+	'fixed_sidebar': True,
+	# 'show_related': True,
+	'show_relbars': True,
+	# 'description': '',
+	# 'flyout_display': 'attached', # readthedocs https://sphinx-rtd-theme.readthedocs.io/en/latest/configuring.html#confval-flyout_display
 }
 
 
@@ -475,6 +494,8 @@ latex_elements = {
 Hellɔ woϱld.
 \end{document}
 '''
+# NB: $$ should never be used (though it was needed for some formulae to render right last time) https://github.com/spatialaudio/nbsphinx/issues/357 Equation autonumbering failed with cases environment
+
 latex_toplevel_sectioning = 'part'
 # latex_appendices = ['gallery', 'faq', 'python_api']
 # LATER consider svg figures in pdf and even everywhere
@@ -487,7 +508,7 @@ latex_toplevel_sectioning = 'part'
 latex_engine = 'lualatex'
 latex_use_xindy = False
 
-latex_show_urls = 'footnote'
+latex_show_urls = 'footnote' #LATER for digital vs print
 latex_show_pagerefs = True # needed for print but just annoying for ebook ! LATER
 
 latex_logo = '_static/eden_logo_white_bg.png'

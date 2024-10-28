@@ -13,6 +13,14 @@ Welcome to EDEN's documentation!
 .. include:: installing.rst
 
 ..
+	This chapter introduces how to use EDEN, its modelling language and simulation capabilities, and it shows how each feature can be used to build many types of neural models.
+
+.. can't put comments on toc links, thus we'll write this note here https://stackoverflow.com/questions/38836458/annotated-sphinx-toctree
+
+..
+	:ref:`/quickstart.ipynb` shows how to run EDEN with ready-made files; to learn modelling in NeuroML, start from :ref:`/intro_neuroml.ipynb`.
+
+..
 	.. code::
 	
 
@@ -20,7 +28,7 @@ Welcome to EDEN's documentation!
 
 .. NEXT use hidden toctree instead? who knows
 
-
+	🗺️⚗️
 	📽 Animations <anim>
 	🎨 Render 3D <pyrender>
 
@@ -29,12 +37,16 @@ Welcome to EDEN's documentation!
 	:heading-level: 2
 
 .. toctree::
-	:maxdepth: 2
-	:caption: Contents
-	:titlesonly:
+	:maxdepth: 1
 	
 	🚀️ Quickstart <quickstart>
-	📖 User's Guide <user_guide>
+
+.. toctree::
+	:maxdepth: 2
+	
+	🎓 NeuroML basics <neuroml_basics>
+	✨ Beyond NeuroML <eden_extensions>
+	🗺️ Usage examples <examples>
 	🐍️ Python API <python_api>
 
 .. toctree::

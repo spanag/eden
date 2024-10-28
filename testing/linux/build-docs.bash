@@ -116,8 +116,8 @@ if [ -n "$RUN_DIRECT" ]; then
 		pip freeze > "$ARTIFACTS_DIR/pip.txt"
 		# python3 -m sphinx -T -E -W --keep-going -b linkcheck -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/linkcheck
 		python3 -m sphinx -T -E -W --keep-going -b html -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/html
-		# python3 -m sphinx -T --keep-going -b latex -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/pdf
-		# cd "$ARTIFACTS_DIR/pdf" && latexmk -r latexmkrc -pdf -f -dvi- -ps- -jobname=eden-simulator -interaction=nonstopmode
+		python3 -m sphinx -T --keep-going -b latex -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/pdf
+		cd "$ARTIFACTS_DIR/pdf" && latexmk -r latexmkrc -pdf -f -dvi- -ps- -jobname=eden-simulator -interaction=nonstopmode
 	fi
 
 else

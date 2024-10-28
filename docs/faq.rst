@@ -115,7 +115,7 @@ Using the simulator
 What units are simulation results recorded in?
 ----------------------------------------------
 
-The unspoken NeuroML convention is to use `SI-derived units <https://en.wikipedia.org/wiki/Fundamental_unit>`_ that are products of the seven base SI units.  Keep in mind that that the typical real-life unit for concentration is :math:`mol/L` whereas the SI unit is :math:`mol/m^3`!
+The unspoken NeuroML convention is to use `SI-derived units <https://en.wikipedia.org/wiki/Fundamental_unit>`_ that are products of the seven base SI units.  Keep in mind that that the typical real-life unit for concentration is :math:`{mol}/L` whereas the SI unit is :math:`{mol}/{m^3}`!
 
 If you prefer quantities to be recorded in specific units, refer to :doc:`extension_io`.
 

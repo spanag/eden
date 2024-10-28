@@ -53,7 +53,9 @@ Welcome to EDEN's documentation!
 
 .. toctree::
 
-	user_guide_toctree
+	neuroml_basics
+	eden_extensions
+	examples
 
 .. raw:: latex
 	

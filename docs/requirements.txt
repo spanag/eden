@@ -37,8 +37,8 @@ trimesh
 k3d[dev, examples]
 
 ipyvolume
-
-pyvista[all]<0.43 # due to old numpy failing to import
+#numpy > 2
+pyvista[all]<0.43 # due to old numpy failing to import??
 
 pyrender @ git+https://github.com/mmatl/pyrender@master
 # a newer version of pyopengl is needed: https://github.com/EvelynFan/FaceFormer/issues/7#issuecomment-1092615864
