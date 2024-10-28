@@ -54,6 +54,12 @@ build:
     
     post_build:
       - ls -la
+      # Zip up the whole html tree in one downloadable file. Said file will be autodetected and exposed to the users as if the (singlehtml) htmlzip was built.
+      # Refer to https://github.com/readthedocs/readthedocs.org/issues/3242#issuecomment-1410321534 and https://github.com/readthedocs/test-builds/blob/sphinx-multipage-html/.readthedocs.yaml
+      - mkdir --parents _readthedocs/htmlzip
+      - cp --recursive _readthedocs/html _readthedocs/$READTHEDOCS_PROJECT
+      - cd _readthedocs ; zip -9 --recurse-path --symlinks htmlzip/$READTHEDOCS_PROJECT.zip $READTHEDOCS_PROJECT
+
 
 # Build documentation in the "docs/" directory with Sphinx
 sphinx:
@@ -64,7 +70,7 @@ sphinx:
 # Optionally build your docs in additional formats such as PDF and ePub
 formats:
   - pdf
-  - htmlzip
+  # - htmlzip NOT used because the singlehtml builder trips on something.  See post_build for the correct multipage procedure.
 
 # Optional but recommended, declare the Python requirements required
 # to build your documentation

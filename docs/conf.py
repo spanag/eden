@@ -391,7 +391,7 @@ html_favicon = '_static/favicon.png' # NEXT https://sphinx-favicon.readthedocs.i
 html_theme_options = {
 	'logo': 'eden_logo_white_bg.png', # _static is implicit?
 	'extra_nav_links': {
-		'📄 PDF version': f'/_/downloads/{rtd_tag}/pdf/',
+		'📄 PDF version': f'/_/downloads/pdf/', #{rtd_tag}/
 	},
 	'fixed_sidebar': True,
 	# 'show_related': True,
