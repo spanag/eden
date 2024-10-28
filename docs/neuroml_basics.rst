@@ -1,5 +1,5 @@
-NeuroML basics
-______________
+Introduction to NeuroML
+_______________________
 
 NeuroML is (as of this writing) the most extensive data format to describe models of spiking neural networks (SNN's) (and generally dynamic neural networks), outside the context of a specific simulation system.  NeuroML version 2 (i.e. the latest one) relies on the LEMS language for defining new (ODE and event-based) dynamics for the various parts that constitute a neural network.  EDEN runs models thet are described in this NeuroML-v.2 (plus LEMS) data format.
 

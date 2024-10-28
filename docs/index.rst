@@ -44,7 +44,7 @@ Welcome to EDEN's documentation!
 .. toctree::
 	:maxdepth: 2
 	
-	🎓 NeuroML basics <neuroml_basics>
+	🎓 NeuroML primer <neuroml_basics>
 	✨ Beyond NeuroML <eden_extensions>
 	🗺️ Usage examples <examples>
 	🐍️ Python API <python_api>

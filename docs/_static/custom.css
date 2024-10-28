@@ -28,6 +28,12 @@ or maybe https://stackoverflow.com/questions/28424339/how-to-vertically-align-an
     align-items: center;
 }
 
+div.document{
+    width:90%;
+}
+div.body{
+    max-width:100%;
+}
 .sphinxsidebar {
     scrollbar-width: thin;
 }

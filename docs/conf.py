@@ -391,7 +391,7 @@ html_favicon = '_static/favicon.png' # NEXT https://sphinx-favicon.readthedocs.i
 html_theme_options = {
 	'logo': 'eden_logo_white_bg.png', # _static is implicit?
 	'extra_nav_links': {
-		'📄 PDF version': f'/_/downloads/pdf/', #{rtd_tag}/
+		'📄 PDF version': f'/_/downloads/en/{rtd_tag}/pdf/',
 	},
 	'fixed_sidebar': True,
 	# 'show_related': True,
@@ -405,6 +405,18 @@ html_theme_options = {
 
 # Don't add .txt suffix to source files:
 html_sourcelink_suffix = ''
+
+# https://stackoverflow.com/questions/79065247/how-to-include-mathjax-in-local-sphinx-build-without-cdn
+# https://docs.mathjax.org/en/latest/input/tex/extensions/mathtools.html
+mathjax3_config = {
+	'tex': {
+		'packages': {'[+]': ['mathtools']},
+	},
+	'loader': {
+		'load': ['[tex]/mathtools'],
+	},
+}
+# or katex LATER?
 
 # -- Options for LaTeX output --
 
@@ -459,8 +471,29 @@ latex_elements = {
     \textup{#2}{#1{#2}}%
 }
 
-\newunicodechar{❗}{!} % LATER find a font for emojis
+\newunicodechar{❗}{!} % needed because it's on monospace italic font
 \newunicodechar{⠀}{ }
+\newunicodechar{🡒}{→} % replace with one in the BMP
+% replace the old heart + variation selector: handle the two unicode chars separately.
+% If it's necessary to discriminate color and black later, pre-process the tex source and use explicit emoji descriptions or sth.
+\newunicodechar{❤}{{\emojifont❤️}}
+\newunicodechar{️}{} % FE0F variation selector for emoji
+
+
+\newfontface\emojifont{Noto Color Emoji}[Renderer=Harfbuzz]
+
+% it works!!! https://tex.stackexchange.com/questions/572212/substituting-fonts-for-emojis-in-lualatex
+\directlua{ luaotfload.add_fallback("fallbacks", { "Noto Color Emoji:mode=harf;", "Latin Modern Math:style=Regular;" }) }
+
+% grabbed from the sphinx theme
+\setmainfont{FreeSerif}[
+  Extension      = .otf,
+  UprightFont    = *,
+  ItalicFont     = *Italic,
+  BoldFont       = *Bold,
+  BoldItalicFont = *BoldItalic,
+  RawFeature={fallback=fallbacks}
+]
 
 % \fallupchar{𝚛} LATER? missing \begin document?
 
@@ -468,7 +501,7 @@ latex_elements = {
 \renewcommand{\sphinxcrossref}[1]{#1}
 \renewcommand{\sphinxtermref}[1]{#1}
 
-\usepackage{titletoc}% http://ctan.org/pkg/titletoc
+%\usepackage{titletoc}% http://ctan.org/pkg/titletoc
 % this doesn't follow sphinx's formatting somehow
 %\titlecontents{chapter}
 %[0.0cm]             % left margin
