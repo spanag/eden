@@ -53,7 +53,7 @@ Welcome to EDEN's documentation!
 	:caption: ⠀
 	:maxdepth: 1
 	
-	🌟️ Examples <gallery>
+	🌟️ Gallery <gallery>
 	 ❓ FAQ <faq>
 	💌 Contact us <contact_us>	
 

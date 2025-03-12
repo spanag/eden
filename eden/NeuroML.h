@@ -2014,7 +2014,7 @@ struct ArtificialCell{
 	// for Pinsky-Rinzel CA3 cells (why is this a core component?)
 	Real iSoma, iDend, gNmda, gAmpa, gc, gLs, gLd, gNa, gKdr, gCa, gKahp, gKC, eNa, eCa, eK, eL, qd0, pp, alphac, betac, cm;
 	
-	// for PyNN cells
+	// for PyNN cells -- note that quantities are specified in dimensionless, but actually real units!
 	Real v_init, v_rest, v_spike, tau_m, tau_w, i_offset, tau_syn_E, tau_syn_I, e_rev_E, e_rev_I ;
 	Real v_offset, e_rev_K, e_rev_Na, e_rev_leak, g_leak, gbar_K, gbar_Na;
 	

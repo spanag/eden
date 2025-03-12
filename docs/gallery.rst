@@ -11,7 +11,7 @@ Examples gallery
 	tut_net
 	exa_lfp
 	example_pong
-	example_spatial_customsetup
+	Variable parameters on detailed cells <example_spatial_customsetup>
 
 ..
 	example_imposed_field
@@ -39,3 +39,7 @@ Examples gallery
 	:caption: Hacker's guide
 	:name: rst-link-hacking
 	tall
+
+.. raw:: latex
+	
+	% NEXT repeat the tables for latex

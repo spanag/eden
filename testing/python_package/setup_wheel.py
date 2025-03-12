@@ -239,6 +239,13 @@ setuptools.setup(
     author_email="s.panagiotou@erasmusmc.nl",
     url='https://eden-simulator.org',
     download_url='https://gitlab.com/neurocomputing-lab/Inferior_OliveEMC/eden/-/archive/main/eden-main.zip',
+	project_urls = {
+		'Documentation'    : 'https://docs-eden-simulator.org',
+		'Code'             : 'https://gitlab.com/c7859/neurocomputing-lab/Inferior_OliveEMC/eden',
+		'Issue tracker'    : 'https://gitlab.com/c7859/neurocomputing-lab/Inferior_OliveEMC/eden/-/issues',
+		'Changelog'        : 'https://gitlab.com/c7859/neurocomputing-lab/Inferior_OliveEMC/eden/-/blob/development/CHANGELOG.txt'
+	}
+
     classifiers=[
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Bio-Informatics",
@@ -252,7 +259,6 @@ setuptools.setup(
         "Programming Language :: Python :: 3",
     ],
     keywords=['simulator','simulation','HPC','neuroscience','NeuroML'],
-    # project_urls
     # for future reference: whether binaries are included or silently dropped is up to the python packaging system's whims, the whims of the day were last tracked here https://github.com/pypa/setuptools/issues/3340#issuecomment-1219383976
     packages=setuptools.find_namespace_packages(where="."),
     # packages=[package_name],

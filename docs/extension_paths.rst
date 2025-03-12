@@ -64,6 +64,6 @@ LEMS paths for input streams
 
 The same form can be further used to point to elements of `<𝙴𝚍𝚎𝚗𝚃𝚒𝚖𝚎𝚜𝚎𝚛𝚒𝚎𝚜𝚁𝚎𝚊𝚍𝚎𝚛> <extension_io.ipynb#Time-series-with-EdenTimeSeriesReader>`__\ s and `<𝙴𝚍𝚎𝚗𝙴𝚟𝚎𝚗𝚝𝚂𝚎𝚝𝚁𝚎𝚊𝚍𝚎𝚛> <extension_io.ipynb#Event-series-with-EdenEventSetReader>`__\ s and their properties, for `<𝚅𝚊𝚛𝚒𝚊𝚋𝚕𝚎𝚁𝚎𝚏𝚎𝚛𝚎𝚗𝚌𝚎> <extension_pointers.ipynb>`__\ s to point at or for recording:
 
-* ``time series/instance[/column]`` (``column`` can be ignored if elements have just one)
-* ``event  set/instance[/port]`` (``port`` can be ignored if elements have just one)
+* ``time series/instance[/column]`` (``column`` can be omitted if elements have just one)
+* ``event  set/instance[/port]`` (``port`` can be omitted if elements have just one)
 * And the ``group[instance]/...`` form can also be used as usual.

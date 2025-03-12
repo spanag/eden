@@ -3,7 +3,10 @@ ______________
 
 The existing features of NeuroML, also combined with EDEN's extensions, allow users to set up *many* and *diverse* in-silico experiments.
 
-This part walks the reader through several popular use cases for models, introducing additional versatile techniques and ideas along the way. The reader is encouraged to repurpose parts of these examples (also together with examples from the previous parts) to construct and explore their own model ideas. 
+Knowing what's been laid out in the previous chapters, one can proceed with conducting an *in silico neuroscience* project between *model conception* and *results collection*. (Some knowledge of systems neurosicence, and the functioning of the model-related parts, is also still needed for before and after these points.)
+
+This part walks the reader through various tutorials and popular modelling use cases, introducing additional versatile techniques and ideas along the way.  The reader is encouraged to repurpose parts of these examples (also together with examples from the previous parts, and their natural curiosity) and use this guide as a springboard to set up and explore their own models using EDEN (and NeuroML in general, as applicable).
+
 
 .. toctree::
 	:caption: Model Examples

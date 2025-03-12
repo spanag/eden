@@ -73,7 +73,7 @@ Terminology dictionary
         - section
         - A *distinct* unbranched section of neuritic cable.
     *   - Arbitrary dependence
-        - ``<VariableReference>``
+        - :ref:`\<VariableReference\> <extension_pointers.ipynb>`
         - ``POINTER``
         - ``addmsg``
         - 
@@ -229,7 +229,7 @@ With a custom `LEMS component <intro_lems.ipynb#Example:-Ornstein-Uhlenbeck-nois
     With a custom `LEMS component <example_stdp.ipynb>`__. NEXT
 
 
-How do i add *other ion*-modulated ion channels or other mechanisms (modulated by possibly other quantities)?
+How do I add *other ion*-modulated ion channels or other mechanisms (modulated by possibly other quantities)?
 -------------------------------------------------------------------------------------------------------------
 
 With EDEN's LEMS extension `\<𝚅𝚊𝚛𝚒𝚊𝚋𝚕𝚎𝚁𝚎𝚏𝚎𝚛𝚎𝚗𝚌𝚎\> <extension_pointers.ipynb>`__.
@@ -258,8 +258,6 @@ See also the the `OU noise example <intro_lems.ipynb#Example:-Ornstein-Uhlenbeck
 
 EDEN and many other NeuroML-capable simulators also run ``<OnCondition test="(something unconditional)">`` on every timestep which saves one state variable, but it's not part of the specification.  Expect discrete updates to become part of the specification some day.
 
-
-Where can I lean more about 
 
 
 Writing LEMS equations

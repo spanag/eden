@@ -28,8 +28,9 @@ or maybe https://stackoverflow.com/questions/28424339/how-to-vertically-align-an
     align-items: center;
 }
 
+/* NEXT decide, or let the user toggle */
 div.document{
-    width:90%;
+    min-width:90%;
 }
 div.body{
     max-width:100%;

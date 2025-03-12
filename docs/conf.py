@@ -337,7 +337,8 @@ def setup(app):
 			conf.master_doc = 'index_latex'
 		else:
 			conf.exclude_patterns += ['*_latex.rst']
-			
+		
+		# Skip executing the notebooks just for linkcheck, assuming all hyperlinks exist in its text cells
 		if app.builder.name == 'linkcheck':
 			conf.nbsphinx_execute = 'never'
 			
@@ -384,7 +385,7 @@ suppress_warnings += ['epub.unknown_project_files']
 html_static_path = ['_static']
 html_theme = 'alabaster' #NEXT move to pydata
 
-# html_css_files = ['_static/custom.css'] # HOTE: this does not seem to work, the css file is not even copied. But at least custom.css works for alabaster and pydata theme
+# html_css_files = ['custom.css'] # HOTE: this does not seem to work locally, the css file is not even copied. But at least custom.css works for alabaster and pydata theme. Does it work for readthedocs though? https://docs.readthedocs.io/en/stable/guides/adding-custom-css.html
 
 # html_logo = "_static/eden_logo_white_bg.png"
 html_favicon = '_static/favicon.png' # NEXT https://sphinx-favicon.readthedocs.io/en/latest/quickstart.html#quickstart
@@ -395,7 +396,9 @@ html_theme_options = {
 	},
 	'fixed_sidebar': True,
 	# 'show_related': True,
-	'show_relbars': True,
+	# 'show_relbars': True,
+	'show_relbar_top': False, # Alabaster related options
+	'show_relbar_bottom': True,
 	# 'description': '',
 	# 'flyout_display': 'attached', # readthedocs https://sphinx-rtd-theme.readthedocs.io/en/latest/configuring.html#confval-flyout_display
 }
