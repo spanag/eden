@@ -43,6 +43,9 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 	Other Parameters
 	----------------
 	
+	mesh_prism_sides_count : int, optional
+		A fixed number of sides for the meses of the tubular sections comprising the enurons' morphologies. Must be 3 or more.
+		Defaults to ``5``.
 	
 	extra_cmdline_args : list[str], optional
 		Additional command line arguments to pass to EDEN.  
@@ -61,10 +64,10 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 	
 	*For physical (i.e. not artificial) cells:*
 	
-	Each keyed entry of `info` may have the following dict entries\: 
+	Each keyed entry of `info` may have the following ``dict`` entries\: 
 	
 	``'comp_parent'``: ndarray[(n_comps), int]
-		The tree parent of each comparent. The first value, that represents the `root` (as modelled) of the neuron, is -1.
+		The tree parent of each compartment. The first value, that represents the `root` (as modelled) of the neuron, is -1.
 	
 	``'comp_start_pos'``: ndarray[(n_comps, 3), float]
 		The position of the most ``proximal`` end of each compartment.
@@ -87,7 +90,7 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 		*NB:* Due to curvature and explicit discontinuities this may be more or less than the straight-line distance between `comp_start_pos` and `comp_end_pos`.
 	
 	``'comp_path_length_from_root'``: ndarray[(n_comps), float]
-		The distance from the neuron's root tracing back the anatomical path, in microns.  Some biophysical attribute track this distance.
+		The distance from the neuron's root tracing back the anatomical path, in microns.  Some biophysical attributes track this distance.
 	
 	``'comp_area'``: ndarray[(n_comps), float]
 		The total membrane area per compartment, in `μm²`.
@@ -99,7 +102,7 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 		The total membrane capacitance per compartment, in `pF`.
 	
 	``'comp_conductance_to_parent'``: ndarray[(n_comps), float]
-		The electrical cytosolic conductance betwen each comparent and its tree parent, in `nS`. The first value for the tree root is zero (not applicable).
+		The electrical cytosolic conductance between each comparment and its tree parent, in `nS`. The first value for the tree root is zero (not applicable).
 	
 	``'segment_groups'``: dict[str, dict]
 		Details about each NeuroML segment group, keyed by name.
@@ -107,6 +110,8 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 		Each keyed entry of `segment_groups` may have the following dict entries\: 
 		
 		* ``'comps'``: The numbered compartments included in the segment group.
+		* ``'cable_compartments'``: Same as above but in guaranteed parent-to-child order, for ["unbranched cable" groups]( intro_spatial.ipynb#The-unbranched-section-directive ).
+		* ``'cable_comps_fraction_along'``: The position along the *entire cable* for the corresponding ``cable_compartments``, where 0 represents the start and 1 the end of the cell. Useful for porting NEURON models with variability over cell "sections".
 	
 	``'mesh_vertices'``: ndarray[(n_verts, 3), float]
 		The vertex coordinates of the 3-D mesh representing the neuron, in microns.
@@ -132,6 +137,11 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 	- and the related literature.
 	
 	'''
+	# merge defaultdict for additional passthrough kwargs like matplotlib does
+	default_kwargs = dict(
+		mesh_prism_sides_count = 5,
+	)
+	kwargs = {**default_kwargs, **kwargs} # ( default_kwargs | kwargs ) for python 3.9+ https://peps.python.org/pep-0584/
 	
 	# TODO kwargs like selected cell names!
 	# LATER allow exporting each cell type as an json and obj file ... or not?

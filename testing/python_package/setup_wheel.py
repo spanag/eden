@@ -244,7 +244,7 @@ setuptools.setup(
 		'Code'             : 'https://gitlab.com/c7859/neurocomputing-lab/Inferior_OliveEMC/eden',
 		'Issue tracker'    : 'https://gitlab.com/c7859/neurocomputing-lab/Inferior_OliveEMC/eden/-/issues',
 		'Changelog'        : 'https://gitlab.com/c7859/neurocomputing-lab/Inferior_OliveEMC/eden/-/blob/development/CHANGELOG.txt'
-	}
+	},
 
     classifiers=[
         "Intended Audience :: Science/Research",

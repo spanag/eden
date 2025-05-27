@@ -542,6 +542,10 @@ struct CompartmentDiscretization{
 	// Also keep the tree-parent relationships, for they are not immediately clear without re-analysing cables
 	std::vector<int32_t>tree_parent_per_compartment; //-1 for root
 	
+	// Moreover keep track of the stated cables and their associasted compartments with representative lengths along
+	std::map<Int, std::vector<int32_t> > cable_to_compartments_id; // by cable group_seq
+	std::map<Int, std::vector<Real> > cable_to_compartments_fraction_along; // NB: along the cable, not the segment or compartment
+		
 	// Note that every cell could be unique, and perhaps 16 bits are enough to describe neurons...
 	// LATER efficiency trick: keep the above lists empty, non existent or something, for cases where the mapping is 1 to 1
 	
@@ -744,12 +748,15 @@ bool GetCompartmentDiscretizationForCellType(const Morphology &morph, Compartmen
 		// current implementation will simply not account for the segment as it has zero length
 		for(Int comp_in_cable = 0; comp_in_cable < cable_nseg; comp_in_cable++){
 			
+			Int comp_seq = cable_to_compartment_offset[group_seq] + comp_in_cable;
+			
 			// The borders of path_length that this compartment covers
 			// The mapping is fixed and linear over path_length, for now
 			Real start_compartment_path_length = ((comp_in_cable+0)/Real(cable_nseg)) * total_cable_length; // Divide by nseg before multiplying other factors, to get a perfect 1.0 for the last seg
 			Real end_compartment_path_length = ((comp_in_cable+1)/Real(cable_nseg)) * total_cable_length;
-			
-			Int comp_seq = cable_to_compartment_offset[group_seq] + comp_in_cable;
+			// Likewise the mapping of compartment midpoint to fraction along the cable is also uniform (for now)
+			comp_disc.cable_to_compartments_id[group_seq].push_back(comp_seq);
+			comp_disc.cable_to_compartments_fraction_along[group_seq].push_back((comp_in_cable+0.5)/Real(cable_nseg));
 			
 			if(debug_log_discretisation) printf("cable group_seq %d comp %d, comp_seq %d begin\n", (int) group_seq, (int)comp_in_cable, (int) comp_seq);
 			
@@ -10539,6 +10546,9 @@ struct AnalysisResult_Tree{
 	struct GroupInfo{
 		std::string name;
 		std::vector<Int> comps;
+		
+		std::vector<int32_t> cable_to_compartments_id; // empty if it isn't a cable
+		std::vector<Real> cable_to_compartments_fraction_along; // empty if it isn't a cable
 	};
 	std::vector<GroupInfo> group_info;
 };
@@ -11119,7 +11129,35 @@ bool ExplainTree(const Model &model, const cJSON *oArgsRoot){
 	
 	// Since this is a limited backend, bother only with the cell, synapse, etc) types that bother this run
 	IdListRle cell_types_to_check;
-	MesherOptions opts; // TODO parse...
+	MesherOptions opts; 
+	// parse JSON options into the structs
+	auto log = printf_stderr;
+	auto JsonRequiredNaturalInt = [](const ILogSimpleProxy &log, const char *what, cJSON *oJson, int &value){
+		if(cJSON_IsNumber(oJson) && oJson->valueint == oJson->valuedouble && oJson->valueint > 0){
+			value = oJson->valueint;
+			return true;
+		}
+		else{
+			log.error("%s must be a positive integer",what);
+			return false;
+		}
+	};
+	
+	cJSON *oMeshPrismSidesCount = cJSON_GetObjectItemCaseSensitive(oArgsRoot, "mesh_prism_sides_count");
+	if(oMeshPrismSidesCount){
+		int value;
+		const char *what = "mesh_prism_sides_count";
+		if(!JsonRequiredNaturalInt(log, what, oMeshPrismSidesCount, value)) return false;
+		if(!(value >= 3)){
+			log.error("%s must be 3 or more for a prism",what);
+			return false;
+		}
+		opts.rays_per_prism_number = value;
+	}
+	// TODO add similar step parameter for meshing of soma spheres. 
+	
+	// LATER allow only a recognisable set of options, this is laborious until the options settle down
+	// LATER more options also for the compartment breakdown itself
 	
 	// this will be the output
 	std::map<Int, AnalysisResult_Tree> cell_type_seq_to_tree;
@@ -11223,6 +11261,10 @@ bool ExplainTree(const Model &model, const cJSON *oArgsRoot){
 			IdListRle comp_list;
 			group.list.reduce( SegToCompListFunctor{comp_disc, comp_list} );
 			g.comps = comp_list.toArray();
+			if(group.is_cable){
+				g.cable_to_compartments_id = comp_disc.cable_to_compartments_id.at(group_seq);
+				g.cable_to_compartments_fraction_along = comp_disc.cable_to_compartments_fraction_along.at(group_seq);
+			}
 			tree.group_info.push_back(g);
 		}
 		return true;
@@ -11308,8 +11350,13 @@ bool ExplainTree(const Model &model, const cJSON *oArgsRoot){
 		for( size_t i = 0; i < tree.group_info.size(); i++){
 			const auto &g = tree.group_info[i];
 			json_out += tab+"\t"+"\""+g.name+"\": {\n";
-			VectorToJson(g.comps , "comps" , tab+"\t\t", json_out);json_out += "\n";
-			
+			VectorToJson(g.comps , "comps" , tab+"\t\t", json_out);
+			if(!g.cable_to_compartments_id.empty()){
+				json_out += ",\n";
+				VectorToJson(g.cable_to_compartments_id , "cable_comps" , tab+"\t\t", json_out);json_out += ",\n";
+				VectorToJson(g.cable_to_compartments_fraction_along , "cable_comps_fraction_along" , tab+"\t\t", json_out);
+			}
+			json_out += "\n";
 			json_out += tab+"\t"+"}";
 			if(i+1 != tree.group_info.size()) json_out += ",\n";
 			else json_out += "\n"; // last element
@@ -11584,9 +11631,9 @@ int main(int argc, char **argv){
 			if(sExplain == "cell"){
 				if(!ExplainTree(model, oRoot)){ Fail(); exit(1); }
 			}
-			else if(sExplain == "mesh"){
-				if(!ExplainTree(model, oRoot)){ Fail(); exit(1); }
-			}
+			// else if(sExplain == "mesh"){ LATER
+			// 	if(!ExplainTree(model, oRoot)){ Fail(); exit(1); }
+			// }
 			else{
 				printf( "cmdline: unknown %s type %s\n", arg.c_str(), sExplain.c_str() );
 				exit(1);
