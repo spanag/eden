@@ -85,6 +85,7 @@ RUN ONLY_BUILD_EDEN=1 bash /repo/.binder/postBuild
 USER root 
 RUN apt-get -y install librsvg2-bin
 RUN apt-get -y install texlive-latex-recommended texlive-science
+RUN apt-get -y install enchant-2
 USER jovyan
 # how about texlive-full ...
 

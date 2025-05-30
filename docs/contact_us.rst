@@ -75,7 +75,7 @@ Or perhaps you'd like to see some part of this guide explained in more detail? |
 Code contributions
 ==================
 
-Would you like to add a new simulation feature, customize the existing codebase to your needs, or contrubute some useful API extensions or language bindings?  
+Would you like to add a new simulation feature, customize the existing codebase to your needs, or contribute some useful API extensions or language bindings?  
 
 See the Hacker's guide (TBA), |contact us| for support, and make a `pull request <https://gitlab.com/c7859/neurocomputing-lab/Inferior_OliveEMC/eden/-/merge_requests>`_.
 

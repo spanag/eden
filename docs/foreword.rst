@@ -8,3 +8,8 @@ To learn how to use EDEN, check out the `Quickstart <quickstart.ipynb>`_ with a 
 
 .. and the tutorials and our showcase of full-featured models with publication-ready figures.
 
+.. spelling:word-list::
+	xtensible
+	ynamics
+	ngine
+	etworks

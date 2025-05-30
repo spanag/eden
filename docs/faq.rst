@@ -73,7 +73,7 @@ Terminology dictionary
         - section
         - A *distinct* unbranched section of neuritic cable.
     *   - Arbitrary dependence
-        - :ref:`\<VariableReference\> <extension_pointers.ipynb>`
+        - `\<VariableReference\> <extension_pointers.ipynb>`__
         - ``POINTER``
         - ``addmsg``
         - 
@@ -199,7 +199,7 @@ What is "discretisation" or "compartments" and how does it affect my model?
 Refer to the `"Discretisation" section <intro_spatial.ipynb#Simulation-aspect:-Discretisation-into-compartments>`__ and try the `'simple cable' exercise <intro_spatial.ipynb#Example:-Modelling-and-simulating-a-stretch-of-neural-cable>`__ exercise, on the chapter on spatially-modelled neurons.  What usually happens is:
 
 * Having too large compartments shows as *excessive damping* (or *underestimation*) with regard to spatially-sensitive effects: namely spike propagation, and the contribution of point processes like synapses and probes to the neuron's state.
-* On the other hand, having too small compartments may stress the numerical methods, over- or undershooting due to *numerical round-off* when thedifferences become tiny.
+* On the other hand, having too small compartments may stress the numerical methods, over- or undershooting due to *numerical round-off* when the differences become tiny.
 
 Generally, simulators don't like handling multiple timescales; keep things as rough as they still let your model work as designed.
 

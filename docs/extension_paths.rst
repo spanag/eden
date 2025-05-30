@@ -50,7 +50,7 @@ Instead of the :doc:`form <neuroml:Userdocs/Paths>` ``population/cell_id/synapse
 LEMS paths for synaptic projection elements
 *******************************************
 
-Instead of the LEMS form which may assign serial number in unpredictable ways, EDEN offers an alternative form similar to that for ``<inputList>``\ s.  After the syanpse instance and the mechanism's elements, a ``pre`` or ``post`` locator is added to select between either half of the synapse (for simple ``<projection>``\ s, only ``post`` is valid).  The pattern is then as follows:
+Instead of the LEMS form which may assign serial number in unpredictable ways, EDEN offers an alternative form similar to that for ``<inputList>``\ s.  After the synapse instance and the mechanism's elements, a ``pre`` or ``post`` locator is added to select between either half of the synapse (for simple ``<projection>``\ s, only ``post`` is valid).  The pattern is then as follows:
 
 .. code::
 	

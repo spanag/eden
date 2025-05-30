@@ -2,7 +2,7 @@ import numpy as np
 
 
 def GetAutoFps(anim_axis, max_auto_fps = 60):
-	'''Get an appopriate update frequency for a time series.
+	'''Get an appropriate update frequency for a time series.
 	'''
 	anim_dt = np.diff(anim_axis)
 	# the last sample might have minuscule delta as per our sampling logic, ignore if possible

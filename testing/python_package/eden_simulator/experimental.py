@@ -44,7 +44,7 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 	----------------
 	
 	mesh_prism_sides_count : int, optional
-		A fixed number of sides for the meses of the tubular sections comprising the enurons' morphologies. Must be 3 or more.
+		A fixed number of sides for the meshes of the tubular sections comprising the neurons' morphologies. Must be 3 or more.
 		Defaults to ``5``.
 	
 	extra_cmdline_args : list[str], optional
@@ -52,7 +52,7 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 		Refer to the EDEN user's manual, "Command line API" for more details.
 		
 	full_cmdline : list[str], optional
-		Specify the exact argv to be passed to EDEN.  
+		Specify the exact ``argv`` to be passed to EDEN.  
 		Refer to the EDEN user's manual, "Command line API" for more details.
 	
 	executable_path : str, optional
@@ -102,7 +102,7 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 		The total membrane capacitance per compartment, in `pF`.
 	
 	``'comp_conductance_to_parent'``: ndarray[(n_comps), float]
-		The electrical cytosolic conductance between each comparment and its tree parent, in `nS`. The first value for the tree root is zero (not applicable).
+		The electrical cytosolic conductance between each compartment and its tree parent, in `nS`. The first value for the tree root is zero (not applicable).
 	
 	``'segment_groups'``: dict[str, dict]
 		Details about each NeuroML segment group, keyed by name.

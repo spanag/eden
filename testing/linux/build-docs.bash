@@ -8,7 +8,7 @@ LF="
 # set -v
 # RUN_DIRECT=1
 
-DEBUG_SPHINX= # for debugging
+# DEBUG_SPHINX= # for debugging
 if [ -n "$BUILD_IN_PLACE" ]; then
 	echo "BUILD_IN_PLACE set"
 	if [ -z "$ARTIFACTS_DIR" ]; then
@@ -36,24 +36,38 @@ BUILD_DIR=$(python3 -c "import os; print(os.path.abspath(\"$BUILD_DIR\"))")
 if [ -n "${ARTIFACTS_DIR}" ]; then mkdir -p "$ARTIFACTS_DIR"; fi
 if [ -n "${BUILD_DIR}"     ]; then mkdir -p "$BUILD_DIR"    ; fi
 
-
-
 # now set up the config...
 source "$(dirname "${BASH_SOURCE[0]}")/default-repo-path.bash"
 
 # more elegant LATER
 source "$(dirname "${BASH_SOURCE[0]}")/setup-options.bash"
 source "$(dirname "${BASH_SOURCE[0]}")/get-version.bash"
-# Build up the line delimited build env options (LATER use \0 if really needed), to use either with env or with docker:
-# echo $BUILD_DIR
-# exit 0
-ENV+=OUT_DIR="$BUILD_DIR"$LF
-ENV+=BUILD_STAMP="$VERSION"$LF
-ENV+=BUILD="release"$LF
 
-ENV+=TARGETS="eden wheel"$LF
-ENV+=WHEEL_VERSION="$VERSION"$LF
-ENV+=WHEEL_DONT_REPAIR="true"$LF # instead of qualifying a plat_name
+# Build up the line delimited build env options (LATER use \0 if really needed), to use either with env or with docker:
+ENVVARS=() # the list of env to preserve e.g. through docker
+
+# setup build vars
+BUILD_STAMP="$VERSION"
+BUILD="release"
+TARGETS="eden wheel"
+WHEEL_VERSION="$VERSION"
+WHEEL_DONT_REPAIR="true" # instead of qualifying a plat_name
+ENVVARS+=(BUILD_STAMP BUILD TARGETS WHEEL_VERSION WHEEL_DONT_REPAIR)
+
+# setup sphinx vars
+SPHINX_CMDLINE_EXTRA="$SPHINX_CMDLINE_EXTRA"
+BUILD_LINKCHECK=${BUILD_LINKCHECK:-no}
+BUILD_SPELLCHECK=${BUILD_SPELLCHECK:-yes}
+BUILD_HTML=${BUILD_HTML:-yes}
+BUILD_PDF=${BUILD_PDF:-yes}
+# export -p
+ENVVARS+=(BUILD_LINKCHECK BUILD_SPELLCHECK BUILD_HTML BUILD_PDF SPHINX_CMDLINE_EXTRA)
+
+# and now create the full env
+for i in "${ENVVARS[@]}"; do
+	# echo $i "${!i}" 
+	ENV+=$i=${!i}$LF
+done
 
 if [ -n "$RUN_DIRECT" ]; then
 	
@@ -114,10 +128,19 @@ if [ -n "$RUN_DIRECT" ]; then
 	# now build the docs!
 	if [ -z "$DONT_RUN_SPHINX" ]; then # TODO a less awkward flag for readthedocs...
 		pip freeze > "$ARTIFACTS_DIR/pip.txt"
-		# python3 -m sphinx -T -E -W --keep-going -b linkcheck -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/linkcheck
-		python3 -m sphinx -T -E -W --keep-going -b html -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/html
-		python3 -m sphinx -T --keep-going -b latex -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/pdf
-		cd "$ARTIFACTS_DIR/pdf" && latexmk -r latexmkrc -pdf -f -dvi- -ps- -jobname=eden-simulator -interaction=nonstopmode
+		if [ "$BUILD_LINKCHECK" = "yes" ];then
+			python3 -m sphinx -T -E -W --keep-going -b spelling -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/linkcheck
+		fi
+		if [ "$BUILD_LINKCHECK" = "yes" ];then
+			python3 -m sphinx -T -E -W --keep-going -b linkcheck -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/linkcheck
+		fi
+		if [ "$BUILD_HTML" = "yes" ]; then
+			python3 -m sphinx -T -E -W --keep-going -b html -d _build/doctrees -D language=en $SPHINX_CMDLINE_EXTRA "${BUILD_DIR}/docs" $ARTIFACTS_DIR/html
+		fi
+		if [ "$BUILD_PDF" = "yes" ]; then
+			python3 -m sphinx -T --keep-going -b latex -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/pdf
+			cd "$ARTIFACTS_DIR/pdf" && latexmk -r latexmkrc -pdf -f -dvi- -ps- -jobname=eden-simulator -interaction=nonstopmode
+		fi
 	fi
 
 else
@@ -128,12 +151,13 @@ else
 
 	# preferably use --env-file, otherwise: https://unix.stackexchange.com/questions/546053/convert-env-file-into-params-for-docker
 	# or just run the same script inside docker
-
+	ENVFILE="$BUILD_DIR/envxtra.txt"
+	printf '%s' "$ENV" > "$ENVFILE" 
 	bash "$(dirname "${BASH_SOURCE[0]}")/docker/sudo_docker.bash" \
 		run -it --rm --mount type=bind,source=$(realpath ${REPO_DIR}),destination=/repo \
 		--mount "type=bind,source=$(realpath $BUILD_DIR),destination=/build"  --user $DOCKER_USER_OR_ROOT \
 		--mount "type=bind,source=$(realpath $ARTIFACTS_DIR),destination=/artifacts" \
-		-e DEEP_IN_THOUGHT=1 -e RUN_DIRECT=1 -e BUILD_DIR=/build -e ARTIFACTS_DIR=/artifacts --workdir /build \
+		-e DEEP_IN_THOUGHT=1 -e RUN_DIRECT=1 -e BUILD_DIR=/build -e ARTIFACTS_DIR=/artifacts --env-file "$ENVFILE" --workdir /build \
 		eden-build-docs bash -c "set -e; bash /repo/testing/linux/build-docs.bash"
 
 fi

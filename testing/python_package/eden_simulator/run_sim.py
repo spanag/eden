@@ -143,7 +143,7 @@ def runEden( example_lems_file, *,
 		Refer to the EDEN user's manual, "Command line API" for more details.
 		
 	full_cmdline : list[str], optional
-		Specify the exact argv to be passed to EDEN.  
+		Specify the exact `argv` to be passed to EDEN.  
 		Refer to the EDEN user's manual, "Command line API" for more details.
 	
 	executable_path : str, optional

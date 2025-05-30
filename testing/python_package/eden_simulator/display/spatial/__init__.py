@@ -59,7 +59,7 @@ def get_mesh_info(cell_info):
 	---
 	cell_info: dict
 
-		The infomation for a cell type, provided by an element of `eden_simulator.experimental.explain_cell`.
+		The information for a cell type, provided by an element of `eden_simulator.experimental.explain_cell`
 	
 	Returns
 	---

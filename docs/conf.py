@@ -119,6 +119,7 @@ extensions = [
 	'sphinx_design',
 	'sphinx_copybutton',
 	
+	'sphinxcontrib.spelling',
     # 'sphinxcontrib.bibtex',  # for bibliographic references?
     'sphinxcontrib.rsvgconverter',  # for SVG->PDF conversion in LaTeX output
 ]
@@ -339,7 +340,7 @@ def setup(app):
 			conf.exclude_patterns += ['*_latex.rst']
 		
 		# Skip executing the notebooks just for linkcheck, assuming all hyperlinks exist in its text cells
-		if app.builder.name == 'linkcheck':
+		if app.builder.name in [ 'linkcheck', 'spelling' ]:
 			conf.nbsphinx_execute = 'never'
 			
 		get_more_assets(app)
@@ -582,6 +583,12 @@ linkcheck_allowed_redirects = {
 }
 linkcheck_timeout = 45
 linkcheck_retries = 3
+
+spelling_lang=tokenizer_lang='en'
+spelling_word_list_filename=['spelling_wordlist.txt']
+spelling_warning=True
+spelling_verbose=True
+spelling_show_whole_line=True
 
 # NEXT organise the structure better, with less inline toc and more intro pages...
 # structure should be: intro (+ about i think!), user's guide, hacker's guide, python ref either at the end of the whole or at the end of the user's guide.

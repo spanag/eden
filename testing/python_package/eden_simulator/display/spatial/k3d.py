@@ -38,7 +38,7 @@ def DeduceColormap(colormap):
 
 
 def RgbToInt(rgb):
-	'''Convert ... x 3 *rgb* array to K3D style packed ints.'''
+	'''Convert ... x 3 *rgb* array to K3D style packed `ints`.'''
 	# print(25,rgb)
 	rgb = np.array(rgb)
 	if rgb.shape == (0,): return rgb
@@ -327,7 +327,7 @@ class Plot(k3d.Plot):
 	
 	# Additional shortcut for displaying a snapshot
 	def show_html(self, snapshot_type='inline', **kwargs):
-		'''Show a snapshot of the plot as an ipynb displayable.
+		'''Show a snapshot of the plot as an `ipynb` displayable.
 		
 		Parameters
 		---
