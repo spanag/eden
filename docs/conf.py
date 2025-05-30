@@ -108,6 +108,7 @@ extensions = [
 	'sphinx.ext.autodoc',
 	'sphinx.ext.autosummary',
 	'sphinx.ext.napoleon',
+	'myst_parser',
     #'sphinx_codeautolink',  # automatic links from code to documentation, breaks because of cmocean? NEXT
 	
 	'sphinx.ext.intersphinx',
@@ -232,6 +233,27 @@ if repo_display_prefix:
 else:
 	extensions.append('sphinx.ext.viewcode')
 
+# MyST
+
+# https://myst-parser.readthedocs.io/en/latest/syntax/optional.html
+myst_enable_extensions = [
+    "amsmath",
+    "attrs_inline",
+    "colon_fence",
+    "deflist",
+    "dollarmath",
+    "fieldlist",
+    "html_admonition",
+    "html_image",
+    "linkify",
+    "replacements",
+    # "smartquotes",
+    # "strikethrough", no latex support yet...
+    "substitution",
+    "tasklist",
+]
+myst_linkify_fuzzy_links=False
+myst_heading_anchors = 6
 
 # nbsphinx
 

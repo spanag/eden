@@ -48,6 +48,7 @@ Welcome to EDEN's documentation!
 	✨ Beyond NeuroML <eden_extensions>
 	🗺️ Usage examples <examples>
 	🐍️ Python API <python_api>
+	👷‍♀️ Hacker's guide <hacker_guide>
 
 .. toctree::
 	:caption: ⠀

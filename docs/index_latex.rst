@@ -56,6 +56,7 @@ Welcome to EDEN's documentation!
 	neuroml_basics
 	eden_extensions
 	examples
+	hacker_guide
 
 .. raw:: latex
 	

@@ -9,10 +9,13 @@ Purkinje
 alphanumeral
 analyse
 analysing
+automagical
+automagically
 autoscale
 behaviour
 centre
 centres
+CMake
 codebase
 Colab
 colormap
@@ -43,11 +46,14 @@ fluo
 frusta
 f̵u̵n̵k̵y̵
 generalised
+Homebrew
 jLEMS
 jNeuroML
+judgement
 LEMS
 linearisation
 linearised
+makefile
 microcolumn
 μm
 msec
@@ -87,6 +93,7 @@ timebase
 timestep
 uncomment
 unitless
+userbase
 visualisation
 visualise
 visualised

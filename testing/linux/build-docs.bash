@@ -47,12 +47,13 @@ source "$(dirname "${BASH_SOURCE[0]}")/get-version.bash"
 ENVVARS=() # the list of env to preserve e.g. through docker
 
 # setup build vars
+OUT_DIR="$BUILD_DIR"
 BUILD_STAMP="$VERSION"
 BUILD="release"
 TARGETS="eden wheel"
 WHEEL_VERSION="$VERSION"
 WHEEL_DONT_REPAIR="true" # instead of qualifying a plat_name
-ENVVARS+=(BUILD_STAMP BUILD TARGETS WHEEL_VERSION WHEEL_DONT_REPAIR)
+ENVVARS+=(OUT_DIR BUILD_STAMP BUILD TARGETS WHEEL_VERSION WHEEL_DONT_REPAIR)
 
 # setup sphinx vars
 SPHINX_CMDLINE_EXTRA="$SPHINX_CMDLINE_EXTRA"
@@ -108,7 +109,7 @@ if [ -n "$RUN_DIRECT" ]; then
 			(cd "${REPO_DIR}"; env -S "$VNE" bash -c "testing/linux/docker/build_on_docker.bash") #TODO refactor
 
 			python3 -m pip uninstall -y eden-simulator
-
+			
 			WHEEL_TO_TEST=$(find "$BUILD_DIR/bin" -type f -name "eden_simulator-$VERSION-py3-none-*.whl")
 			
 			# TODO if dont run sphinx here...
@@ -128,8 +129,8 @@ if [ -n "$RUN_DIRECT" ]; then
 	# now build the docs!
 	if [ -z "$DONT_RUN_SPHINX" ]; then # TODO a less awkward flag for readthedocs...
 		pip freeze > "$ARTIFACTS_DIR/pip.txt"
-		if [ "$BUILD_LINKCHECK" = "yes" ];then
-			python3 -m sphinx -T -E -W --keep-going -b spelling -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/linkcheck
+		if [ "$BUILD_SPELLCHECK" = "yes" ];then
+			python3 -m sphinx -T -E -W --keep-going -b spelling -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/spelling
 		fi
 		if [ "$BUILD_LINKCHECK" = "yes" ];then
 			python3 -m sphinx -T -E -W --keep-going -b linkcheck -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/linkcheck
