@@ -44,6 +44,7 @@ build:
       # - echo $(find ./bin -type f -name "eden_simulator-*.whl") > bin/eden_wheel_requirements.txt
       # can't install the local wheel without disabling pypi and can't install dependencies without enabling pypi or listing them with a script... just find the wheel's name above
       # - echo "--find-links=bin/ -I eden-simulator" >  bin/eden_wheel_requirements.txt
+      - python -m sphinx -b spelling -D nbsphinx_execute=never docs/ $READTHEDOCS_OUTPUT/spelling
       
     post_install:
       # TODO add eden wheel here i guess

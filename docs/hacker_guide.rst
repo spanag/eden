@@ -1,4 +1,4 @@
-Hacker's guide
+Building on top of the EDEN platform
 ________________________________________
 
 

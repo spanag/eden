@@ -271,7 +271,8 @@ setuptools.setup(
     scripts=scripts_list,  
     entry_points=entry_points,
     install_requires = [
-        # 'setuptools', # due to customised setup step ... but it should already be in place to install the wheel right?
+		# due to customised setup step ... but it should already be in place to install the wheel right?
+        'setuptools < 81; python_version < "3.9"', # otherwise use the new api, it's funny how many environments run 3.8
         'numpy',
         'lxml',
     ] + (['h5py <= 2.10'] if (sysconfig.get_platform() == 'win32') else []) # h5py wheels are missing since, and pip doesn't know that h5py source is tough to build

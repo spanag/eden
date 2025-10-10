@@ -1,14 +1,13 @@
 '''
 Straightforward display of neurons with [K3D]( https://k3d-jupyter.org ).
 '''
+import sys
 import numpy as np
 import scipy
 import k3d
 
 from ..animation import GetAutoFps
 from . import get_mesh_info, get_verts_faces_per_comp
-
-import pkg_resources
 
 def DeduceColormap(colormap):
 	'''Try to deduce a K3D colormap from the passed argument.
@@ -263,7 +262,16 @@ def decompress_cells(k3d_mesh):
 			for k,v in custom_data['cell_colors'].items()
 		}
 
-enhancement_js_base = pkg_resources.resource_string(__name__, 'k3d_enhancements.js').decode("utf-8")
+if True:
+	_enhancement_js_filename = 'k3d_enhancements.js'
+	if sys.version_info >= (3,9):
+		# new way
+		from importlib import resources as importlib_resources
+		enhancement_js_base = importlib_resources.files(__name__).joinpath(_enhancement_js_filename).read_bytes().decode("utf-8")
+	else:
+		# old way https://importlib-resources.readthedocs.io/en/latest/migration.html#pkg-resources-resource-string
+		import pkg_resources
+		enhancement_js_base = pkg_resources.resource_string(__name__, _enhancement_js_filename).decode("utf-8")
 
 # set_timebar_inline = '''target.appendChild(timebar_container);'''
 set_timebar_absolu = '''{
@@ -294,7 +302,7 @@ class Plot(k3d.Plot):
 		#"""Show plot inside ipywidgets.Output()."""
 		# The way that Jupyter extensions are made now, 
 		# the widgets are totally untouchable from JS AFAIK
-		# (unless a kind soul widget-side adds a reference from the DOM target to the encloseds js widget, that is)
+		# (unless a kind soul widget-side adds a reference from the DOM target to the enclosed js widget, that is)
 		# Therefore augmentations such as per-cell compression have to be rolled back for display. 
 		#     (and also interactive manipulation of attributes from python side)
 			

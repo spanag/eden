@@ -33,13 +33,6 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 		*The following parameters are less commonly used*:
 	
 	
-	Returns
-	-------
-
-	info : dict[str, dict]
-		The requested information, keyed by cell type name.
-	
-	
 	Other Parameters
 	----------------
 	
@@ -57,6 +50,13 @@ def explain_cell( nml_file, *, verbose = False, threads=None,
 	
 	executable_path : str, optional
 		Select a specific executable of EDEN to run the simulation with. Useful for custom installations and uses of EDEN.
+	
+	
+	Returns
+	-------
+	
+	info : dict[str, dict]
+		The requested information, keyed by cell type name.
 	
 	
 	Notes
