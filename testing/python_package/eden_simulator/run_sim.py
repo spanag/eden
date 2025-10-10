@@ -177,14 +177,15 @@ def runEden( example_lems_file, *,
 	t_run = datetime.now()
 	_invoke_eden(args, threads, extra_cmdline_args, executable_path, verbose, full_cmdline)
 	
+	# NB reload_saved_data returns ordered dicts, hence no need to clone
 	results = reload_saved_data(example_lems_file, reload_events=reload_events, t_run=t_run)
 	if reload_events: traje, event = results # decompose tuple
 	else: traje, event = (results, None)
 	
 	if reload_events:
-		return ordict(sorted(traje.items())), ordict(sorted(event.items()))
+		return traje, event
 	else:
-		return ordict(sorted(traje.items()))
+		return traje
 
 
 # Adapted from pynml.reload_saved_data: https://github.com/NeuroML/pyNeuroML/blob/v0.7.5/pyneuroml/pynml.py
@@ -208,7 +209,7 @@ def reload_saved_data(
 	:param remove_dat_files_after_load: toggle if data files should be deleted after they've been loaded
 	:type remove_dat_files_after_load: bool
 	"""
-	
+	# Make sure to return ordered dicts, to maintain the original order in the xml file!
 	if not os.path.isfile(lems_file_name):
 		real_lems_file = os.path.realpath(os.path.join(base_dir, lems_file_name))
 	else:
