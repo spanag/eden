@@ -2,7 +2,7 @@
 sphinx==7.4.1
 pydata-sphinx-theme==0.14.4
 
-pandoc==2.0.1
+pandoc
 sphinxcontrib-bibtex>=2.1
 sphinxcontrib-svg2pdfconverter
 
