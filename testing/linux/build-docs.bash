@@ -115,6 +115,11 @@ if [ -n "$RUN_DIRECT" ]; then
 			# TODO if dont run sphinx here...
 			# "$(dirname "${BASH_SOURCE[0]}")/run-docs-with-wheel.bash" "$WHEEL_TO_TEST" TODO
 			python3 -m pip install "$WHEEL_TO_TEST"
+			
+			# Some packages which need building may have forgotten to require setuptools. And if building will break blaming pip instead of setuptools which is missing. So make sure to install setuptools as a separate action, BEFORE pip install -r the offending packages since they don't state the dependency. https://stackoverflow.com/questions/76441747/no-module-named-pip-when-getting-requirements-to-build-wheel-but-pip-does-ex#comment135466049_76813953
+			python3 -m pip install setuptools
+			echo "Installed setuptools!"
+			
 			python3 -m pip install $PIP_INSTALL_BUILD_DOCS_EXTRA -r "$REPO_DIR/docs/requirements.txt" # 
 		fi
 	fi
