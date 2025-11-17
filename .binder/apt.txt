@@ -24,3 +24,6 @@ libasound2
 # libasound2t64
 libnss3
 libgbm-dev
+
+# pandoc is nice TODO
+pandoc

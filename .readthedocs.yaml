@@ -31,6 +31,7 @@ build:
     - librsvg2-bin
     - texlive-latex-recommended
     - texlive-science
+    - pandoc
   
   jobs:
     post_create_environment:
