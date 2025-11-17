@@ -58,9 +58,10 @@ if [ -z $ONLY_BUILD_EDEN ]; then
 	$(which google-chrome) --version
 	# ls -la $HOME
 	
-	# stopgap for https://discourse.vtk.org/t/status-update-runtime-opengl-render-window-selection-in-vtk/14583
-	pip uninstall -y vtk
-	pip install --extra-index-url https://wheels.vtk.org vtk-osmesa 
+	# stopgap for https://discourse.vtk.org/t/status-update-runtime-opengl-render-window-selection-in-vtk/14583 no more needed, yay https://discourse.vtk.org/t/trouble-in-pip-installing-vtk-osmesa/14890
+	# we still can't have the new wheels because autodoc flips out for some reason, for the tested version of python 3.11 .
+	# pip uninstall -y vtk
+	# pip install --extra-index-url https://gitlab.kitware.com/api/v4/projects/13/packages/pypi/simple/ vtk-osmesa 
 # fi
 fi
 echo $PATH

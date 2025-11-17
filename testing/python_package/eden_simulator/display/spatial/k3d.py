@@ -267,11 +267,11 @@ if True:
 	if sys.version_info >= (3,9):
 		# new way
 		from importlib import resources as importlib_resources
-		enhancement_js_base = importlib_resources.files(__name__).joinpath(_enhancement_js_filename).read_bytes().decode("utf-8")
+		enhancement_js_base = importlib_resources.files(__package__).joinpath(_enhancement_js_filename).read_bytes().decode("utf-8")
 	else:
 		# old way https://importlib-resources.readthedocs.io/en/latest/migration.html#pkg-resources-resource-string
 		import pkg_resources
-		enhancement_js_base = pkg_resources.resource_string(__name__, _enhancement_js_filename).decode("utf-8")
+		enhancement_js_base = pkg_resources.resource_string(__package__, _enhancement_js_filename).decode("utf-8")
 
 # set_timebar_inline = '''target.appendChild(timebar_container);'''
 set_timebar_absolu = '''{

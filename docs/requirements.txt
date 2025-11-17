@@ -8,6 +8,7 @@ sphinxcontrib-svg2pdfconverter
 
 sphinx-last-updated-by-git
 sphinx-codeautolink
+sphinx-autodoc-typehints
 sphinxcontrib-spelling
 myst-parser
 linkify-it-py
@@ -41,7 +42,7 @@ k3d[dev, examples]
 
 ipyvolume
 #numpy > 2
-pyvista[all]<0.43 # due to old numpy failing to import??
+pyvista[all] #<0.43 # due to pyvista failing to import only when autodoc tries it?? related to python 3.11
 
 pyrender @ git+https://github.com/mmatl/pyrender@master
 # a newer version of pyopengl is needed: https://github.com/EvelynFan/FaceFormer/issues/7#issuecomment-1092615864

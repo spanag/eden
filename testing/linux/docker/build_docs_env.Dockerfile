@@ -1,11 +1,18 @@
-FROM jupyter/scipy-notebook:2023-08-25
+FROM readthedocs/build:ubuntu-22.04-2024.01.29
+# readthedocs/build:ubuntu-22.04-2024.01.29
+#jupyter/scipy-notebook:2023-08-25
+# readthedocs/build:ubuntu-24.04-2024.06.17
 # Build environment for EDEN simulator
 MAINTAINER Sotirios Panagiotou <info@sotiriospanagiotou.com>
+
+# if not a jupyter... TODO
+ENV NB_USER=${NB_USER:-docs}
+ENV NB_UID=${NB_UID:-1005}
 
 ENV TEMPREPO /repo_
 COPY ./.binder/apt.txt $TEMPREPO/.binder/
 
-USER jovyan
+USER $NB_USER
 RUN wget -q -N https://www.googleapis.com/download/storage/v1/b/chromium-browser-snapshots/o/Linux_x64%2F1047731%2Fchrome-linux.zip\?generation\=1663284576100523\&alt\=media -O  $HOME/chrome.zip
 USER root
 RUN chmod 777 -R  $TEMPREPO
@@ -49,14 +56,27 @@ RUN apt-get -y install \
     fonts-hanazono \
     xindy
 
-USER jovyan
+#TODO
+RUN apt-get install -y python3-venv
+
+# make way for an possible venv at a predicatble location
+RUN mkdir /build_venv && chmod 777 /build_venv
+
+USER $NB_USER
 # copy chown looks to the host only for username, oh well
-COPY --chown=1000 ./.binder/requirements.txt $TEMPREPO/.binder/
-COPY --chown=1000 ./docs/requirements.txt $TEMPREPO/docs/
+COPY --chown=$NB_UID ./.binder/requirements.txt $TEMPREPO/.binder/
+COPY --chown=$NB_UID ./docs/requirements.txt $TEMPREPO/docs/
+
+# give rtd a venv
+RUN [ "$(whoami)" != "docs" ] || python3 -m venv /build_venv
+ENV PATH="/build_venv/bin:$PATH"
+# RUN ls /build_venv && echo $(whoami) && false
+
+RUN pip install setuptools wheel pip
 RUN pip install -r  $TEMPREPO/.binder/requirements.txt
 
 # Also apply binder postbuild
-COPY --chown=1000 ./.binder/postBuild $TEMPREPO/.binder/
+COPY --chown=$NB_UID ./.binder/postBuild $TEMPREPO/.binder/
 # RUN chmod 777 -R $TEMPREPO
 
 RUN DONT_BUILD_EDEN=1 bash $TEMPREPO/.binder/postBuild
@@ -74,7 +94,7 @@ COPY   Makefile/ /repo/Makefile
 RUN chmod 777 -R /repo
 # or use buildkit or use .dockerignore
 
-USER jovyan
+USER $NB_USER
 RUN ls -la /repo
 RUN ONLY_BUILD_EDEN=1 bash /repo/.binder/postBuild
 
@@ -86,7 +106,18 @@ USER root
 RUN apt-get -y install librsvg2-bin
 RUN apt-get -y install texlive-latex-recommended texlive-science
 RUN apt-get -y install enchant-2
-USER jovyan
 # how about texlive-full ...
 
+# make home writable or at least temp folders like .cache, for some reason HOME is set to / sometimes TODO
+RUN echo "/.cache" && mkdir -p "/.cache" && chmod 777 "/.cache"
+RUN mkdir -p /docs && chmod 777 -R /home/docs
+# RUN  ls -l "$HOME/.cache" && false
+# give chromium place for temp paths https://github.com/hardkoded/puppeteer-sharp/issues/2633#issuecomment-2107557005
+ENV XDG_CONFIG_HOME=/tmp/.chromium
+ENV XDG_CACHE_HOME=/tmp/.chromium
+
+# also for ipythondir to stop whining
+ENV IPYTHONDIR=${IPYTHONDIR:-$HOME}
+
+USER $NB_USER
 CMD ["bash"]

@@ -15,7 +15,7 @@ def get_exe_path():
 	if sys.version_info >= (3,9):
 		# new way https://importlib-resources.readthedocs.io/en/latest/migration.html#pkg-resources-resource-filename
 		from importlib import resources as importlib_resources
-		ref = importlib_resources.files(__name__) / eden_bundled_exe
+		ref = importlib_resources.files(__package__) / eden_bundled_exe
 		if ref.is_file():
 			# NB I won't do this the "safe" way because there are YET more files that should be unpacked alongside the exe!
 			# See also the start of this file. The only cure is for the package to be always unpacked as a tree.
@@ -24,7 +24,7 @@ def get_exe_path():
 	else:
 		# old way
 		import pkg_resources
-		if pkg_resources.resource_exists(__name__, eden_bundled_exe):
-			eden_bundled_exe_filename = pkg_resources.resource_filename(__name__, eden_bundled_exe)
+		if pkg_resources.resource_exists(__package__, eden_bundled_exe):
+			eden_bundled_exe_filename = pkg_resources.resource_filename(__package__, eden_bundled_exe)
 		
 	return eden_bundled_exe_filename

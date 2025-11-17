@@ -35,7 +35,7 @@ Terminology dictionary
         - `NEURON <https://neuron.yale.edu>`__
         - `GENESIS <http://genesis-sim.org/>`__
         - `Arbor <https://arbor-sim.org>`__
-        - `BRIAN <https://brian2.readthedocs.io/>`__
+        - `BRIAN <https://briansimulator.org/>`__
         - Comments
     *   - Point neuron
         - ``<ComponentType extends="baseCell">``

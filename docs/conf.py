@@ -106,6 +106,7 @@ def get_more_assets(app):
 
 extensions = [
 	'sphinx.ext.autodoc',
+	'sphinx_autodoc_typehints',
 	'sphinx.ext.autosummary',
 	'sphinx.ext.napoleon',
 	'myst_parser',
@@ -383,11 +384,11 @@ def setup(app):
 				main_tex_filename = outdir+'/edenusersguide.tex' # LATER autodetect!
 				
 				with open(main_tex_filename,'rb') as f: s = f.read()
-				fw_start = s.index(b'\sphinxAtStartPar') # the very first... or alternatively after \pagestyle{normal}
-				fw_end = s.index(b'% FOREWORD END')
+				fw_start = s.index(rb'\sphinxAtStartPar') # the very first... or alternatively after \pagestyle{normal}
+				fw_end = s.index(rb'% FOREWORD END')
 				sfw = s[fw_start:fw_end]
 				ss = s[:fw_start]+s[fw_end:]
-				ss = ss.replace(b'\sphinxtableofcontents', sfw+b'\n%\clearpage\n'+b'\sphinxtableofcontents')
+				ss = ss.replace(rb'\sphinxtableofcontents', sfw+rb'\n%\clearpage\n'+rb'\sphinxtableofcontents')
 				with open(main_tex_filename, 'wb') as f: f.write(ss)
 				
 			
