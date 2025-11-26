@@ -23,10 +23,9 @@ def subsample_trajectories(time_axis_sec, data=[], animation_speed=0.0030, anima
 	
 	Returns
 	---
-	
 	The samples used from the sequence. May be less than expected if there are not enough samples to fill the grid.
 	samples_picked: 
-	. Useful for resampling more parallel time-series than those already passed to *data*.
+	TODO. Useful for resampling more parallel time-series than those already passed to *data*.
 	anim_axis: list-like
 	
 	The points in real-time, in seconds.

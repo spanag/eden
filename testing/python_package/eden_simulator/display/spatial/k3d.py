@@ -62,15 +62,12 @@ def plot_neuron(cell_info, comp_values=(.5,.5,.5), time_axis_sec=None, color_map
 	# print(comp_values.shape)
 	'''
 	Plot a neuron mesh with K3D, optionally coloured and animated.
-	For use with `Plot`.
+	For use with `Plot`. TODO
 
 	Parameters
 	---
-
 	vertices: Nx3 float array
-		The .
 	faces: Mx3 int array
-		The .
 	comp_per_face: M float vector
 		The compartment that each face belongs to.
 	comp_values, ndarray of float  K x C or T x K or  T x K x C or K or C (or T x c?) nah
@@ -88,7 +85,7 @@ def plot_neuron(cell_info, comp_values=(.5,.5,.5), time_axis_sec=None, color_map
 	
 	Returns
 	---
-	
+	mesh: k3d.mesh
 	'''
 	if time_axis_sec is not None and list(time_axis_sec) != list(sorted(time_axis_sec)): raise ValueError('time_axis_sec must be in increasing order')
 	
@@ -339,13 +336,9 @@ class Plot(k3d.Plot):
 		
 		Parameters
 		---
-		
-		snapshot_type: str
-		
+		snapshot_type : str
 			The snapshot_type to use in capturing.
-		
-		kwargs: dict
-			
+		kwargs : dict
 			Other arguments to pass to ``get_snapshot()``.
 		
 		'''

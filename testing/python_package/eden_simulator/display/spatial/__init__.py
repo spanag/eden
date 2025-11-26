@@ -14,20 +14,17 @@ def get_verts_faces_per_comp(mesh_vertices, mesh_faces, mesh_comp_per_face, n_co
 	
 	Returns
 	---
-	
 	(mapped_verts, mapped_faces, verts_per_comp, faces_per_comp): tuple
 	
-		* mapped_verts: function
-			A function receiving a 2-D `numpy.array`, and returning the linear combination of its columns as per `verts_per_comp`.
-		
-		
-		* verts_per_comp: scipy.spmatrix
-			A sparse matrix with the neuron mesh's vertices as rows and associated compartments as columns. TODO
-		
-		* mapped_verts: function  
-		* verts_per_comp: scipy.spmatrix
-			Similar to the previous but mapping compartments to mesh faces. TODO
+	mapped_verts: function
+		A function receiving a 2-D `numpy.array`, and returning the linear combination of its columns as per `verts_per_comp`.
 	
+	verts_per_comp: scipy.spmatrix
+		A sparse matrix with the neuron mesh's vertices as rows and associated compartments as columns. TODO
+	
+	mapped_verts: function  
+	verts_per_comp: scipy.spmatrix
+		Similar to the previous but mapping compartments to mesh faces. TODO
 	
 	'''
 	n_faces = len(mesh_faces)
@@ -63,7 +60,6 @@ def get_mesh_info(cell_info):
 	
 	Returns
 	---
-	
 	(mesh_vertices, mesh_faces, mesh_comp_per_face, n_comps): tuple
 		The selected mesh-specific subset of `cell_info`.
 	

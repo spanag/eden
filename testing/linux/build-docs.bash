@@ -135,16 +135,16 @@ if [ -n "$RUN_DIRECT" ]; then
 	if [ -z "$DONT_RUN_SPHINX" ]; then # TODO a less awkward flag for readthedocs...
 		pip freeze > "$ARTIFACTS_DIR/pip.txt"
 		if [ "$BUILD_SPELLCHECK" = "yes" ];then
-			python3 -m sphinx -T -E -W --keep-going -b spelling -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/spelling
+			python3 -m sphinx -T -E -W --keep-going -b spelling -d _build/doctrees -D language=en $SPHINX_CMDLINE_EXTRA "${BUILD_DIR}/docs" $ARTIFACTS_DIR/spelling
 		fi
 		if [ "$BUILD_LINKCHECK" = "yes" ];then
-			python3 -m sphinx -T -E -W --keep-going -b linkcheck -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/linkcheck
+			python3 -m sphinx -T -E -W --keep-going -b linkcheck -d _build/doctrees -D language=en $SPHINX_CMDLINE_EXTRA "${BUILD_DIR}/docs" $ARTIFACTS_DIR/linkcheck
 		fi
 		if [ "$BUILD_HTML" = "yes" ]; then
 			python3 -m sphinx -T -E -W --keep-going -b html -d _build/doctrees -D language=en $SPHINX_CMDLINE_EXTRA "${BUILD_DIR}/docs" $ARTIFACTS_DIR/html
 		fi
 		if [ "$BUILD_PDF" = "yes" ]; then
-			python3 -m sphinx -T --keep-going -b latex -d _build/doctrees -D language=en "${BUILD_DIR}/docs" $ARTIFACTS_DIR/pdf
+			python3 -m sphinx -T --keep-going -b latex -d _build/doctrees -D language=en $SPHINX_CMDLINE_EXTRA "${BUILD_DIR}/docs" $ARTIFACTS_DIR/pdf
 			cd "$ARTIFACTS_DIR/pdf" && latexmk -r latexmkrc -pdf -f -dvi- -ps- -jobname=eden-simulator -interaction=nonstopmode
 		fi
 	fi

@@ -54,7 +54,11 @@ RUN apt-get -y install \
     texlive-fonts-recommended \
     fonts-noto-cjk-extra \
     fonts-hanazono \
-    xindy
+    xindy \
+    texlive-latex-recommended texlive-science \
+    enchant-2 \
+    librsvg2-bin
+# how about texlive-full ...
 
 #TODO
 RUN apt-get install -y python3-venv
@@ -103,11 +107,6 @@ RUN ONLY_BUILD_EDEN=1 bash /repo/.binder/postBuild
 
 # TODO
 USER root 
-RUN apt-get -y install librsvg2-bin
-RUN apt-get -y install texlive-latex-recommended texlive-science
-RUN apt-get -y install enchant-2
-# how about texlive-full ...
-
 # make home writable or at least temp folders like .cache, for some reason HOME is set to / sometimes TODO
 RUN echo "/.cache" && mkdir -p "/.cache" && chmod 777 "/.cache"
 RUN mkdir -p /docs && chmod 777 -R /home/docs
@@ -115,6 +114,12 @@ RUN mkdir -p /docs && chmod 777 -R /home/docs
 # give chromium place for temp paths https://github.com/hardkoded/puppeteer-sharp/issues/2633#issuecomment-2107557005
 ENV XDG_CONFIG_HOME=/tmp/.chromium
 ENV XDG_CACHE_HOME=/tmp/.chromium
+# for tex https://tex.stackexchange.com/questions/582779/texlive-2020s-lualatex-fails-to-compile-due-to-no-writeable-cache-path-texli or chmod home https://github.com/NixOS/nixpkgs/issues/180639
+ENV TEXMFHOME=$HOME/.cache/texlive2020
+ENV TEXMFVAR=$HOME/.cache/texlive2020/texmf-var/
+ENV TEXMFCONFIG=$TEXMFSYSCONFIG
+# and for good measure https://tex.stackexchange.com/questions/679574/fatal-error-luaotfload-load-%C3%97-failed-to-load-fontloader-module-basics-gen
+RUN chmod -R 777 /var/lib/texmf
 
 # also for ipythondir to stop whining
 ENV IPYTHONDIR=${IPYTHONDIR:-$HOME}

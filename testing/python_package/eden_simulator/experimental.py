@@ -178,7 +178,7 @@ def GetLemsLocatorsForCell(cell_info, compartment_ids=None):
 	
 	Returns
 	-------
-	l : list(str)
+	l : list[str]
 
 		The list of locators, to be used in extended LEMS paths capturing the cell property.
 	

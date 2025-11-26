@@ -9,13 +9,11 @@ def get_neuron_mesh(cell_info):
     
     Parameters
     ----------
-    
     cell_info: dict[str]
         A `dict` containing `'mesh_vertices'`, `'mesh_faces'` and `'mesh_comp_per_face'` describing a neuron's 3-D mesh, as produced by  by `eden_simulator.experimental.explain_cell`.
         
     Returns
     -------
-
     mesh: pyvista.UnstructuredGrid
         A 3D mesh which can be assigned scalars per compartment.
     '''

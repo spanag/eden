@@ -142,6 +142,8 @@ intersphinx_mapping = {
 	'pyvista': ('https://docs.pyvista.org', None),
 }
 
+
+napoleon_use_param=True
 # autodoc
 # Mock unavailable library modules
 autodoc_mock_imports = ["lxml", "numpy",] # could import these for now, but not necessarily in the general case...
@@ -156,7 +158,7 @@ def autodoc_skip_member(app, what, name, obj, would_skip, options):
 
 autodoc_default_options = {
 	"exclude-members": "main, parse_dict_arg, parse_list_arg, build_namespace, convert_case, process_args",
-	"imported-members":True,
+	"imported-members":False,
 }
 
 autosummary_generate = True  # Turn on sphinx.ext.autosummary, because why have it just work https://stackoverflow.com/questions/62613202/automatically-document-all-modules-recursively-with-sphinx-autodoc
@@ -388,7 +390,7 @@ def setup(app):
 				fw_end = s.index(rb'% FOREWORD END')
 				sfw = s[fw_start:fw_end]
 				ss = s[:fw_start]+s[fw_end:]
-				ss = ss.replace(rb'\sphinxtableofcontents', sfw+rb'\n%\clearpage\n'+rb'\sphinxtableofcontents')
+				ss = ss.replace(b'\\sphinxtableofcontents', sfw+b'\n%\\clearpage\n'+b'\\sphinxtableofcontents')
 				with open(main_tex_filename, 'wb') as f: f.write(ss)
 				
 			

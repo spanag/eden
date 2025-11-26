@@ -122,7 +122,6 @@ def runEden( example_lems_file, *,
 	
 	Parameters
 	----------
-	
 	example_lems_file : str
 		The filename where the `<Simulation>` to run is located.
 	
@@ -152,19 +151,14 @@ def runEden( example_lems_file, *,
 	
 	Returns
 	-------
-
 	trajectories : dict[str, numpy.ndarray[float[n]]]
-		
-		- *when reload_events == False*
-		
+		*when reload_events == False*
 	(trajectories, events) :  tuple(dict, dict)
-		
-		- *when reload_events == True*; see `reload_events` parameter.
+		*when reload_events == True*; see `reload_events` parameter.
 	
 	
 	Notes
 	-----
-	
 	All values are returned in SI units, or derived thereof.  
 	
 	- e.g. concentration is in `mol/m³`, not `mol/L` !
