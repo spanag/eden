@@ -116,8 +116,7 @@ def runEden( example_lems_file, *,
 	reload_events=False, verbose = False, threads = None,
 	extra_cmdline_args=None, full_cmdline=None, executable_path=None
 ):
-	'''
-	Run a NeuroML2/LEMS file with EDEN.
+	'''Run a NeuroML2/LEMS file with EDEN.
 	
 	
 	Parameters

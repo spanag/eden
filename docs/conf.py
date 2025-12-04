@@ -46,7 +46,6 @@ for x in ['repo_gitlab_user', 'repo_github_user', 'repo_gitlab_user_binder', 're
 print(repo_local_path) 
 print(html_context)
 
-import os
 confdir = os.getcwd()
 
 # get binary assets from static store like html_logo, favicon, LATER put somewhere appropriate\
@@ -110,7 +109,7 @@ extensions = [
 	'sphinx.ext.autosummary',
 	'sphinx.ext.napoleon',
 	'myst_parser',
-    #'sphinx_codeautolink',  # automatic links from code to documentation, breaks because of cmocean? NEXT
+    'sphinx_codeautolink',  # automatic links from code to documentation
 	
 	'sphinx.ext.intersphinx',
 	# "sphinx.ext.autosectionlabel", # more trouble than it's worth, for multiple chapters
@@ -158,7 +157,7 @@ def autodoc_skip_member(app, what, name, obj, would_skip, options):
 
 autodoc_default_options = {
 	"exclude-members": "main, parse_dict_arg, parse_list_arg, build_namespace, convert_case, process_args",
-	"imported-members":False,
+	# "imported-members":False, NB This option must NOT be set to ANYTHING, not even None, to be disabled! If set to anything, it is in fact enabled!
 }
 
 autosummary_generate = True  # Turn on sphinx.ext.autosummary, because why have it just work https://stackoverflow.com/questions/62613202/automatically-document-all-modules-recursively-with-sphinx-autodoc
@@ -614,6 +613,9 @@ spelling_word_list_filename=['spelling_wordlist.txt']
 spelling_warning=True
 spelling_verbose=True
 spelling_show_whole_line=True
+
+# for 3d renders, don't even try x11 https://docs.vtk.org/en/latest/advanced/runtime_settings.html
+os.environ['VTK_DEFAULT_OPENGL_WINDOW']='vtkOSOpenGLRenderWindow'
 
 # NEXT organise the structure better, with less inline toc and more intro pages...
 # structure should be: intro (+ about i think!), user's guide, hacker's guide, python ref either at the end of the whole or at the end of the user's guide.
