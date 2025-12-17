@@ -10,17 +10,17 @@ COPY . /repo
 
 WORKDIR /repo
 
-ENV OUT_DIR /app
+ENV OUT_DIR=/app
 RUN bash ./testing/linux/docker/build_on_docker.bash
 
-FROM debian:buster-20191014-slim
+FROM debian:trixie-20251208-slim
 
 # Get the necessary runtime tools
 # including GCC with OpenMP
 # perhaps use a ENV PACKAGES variable LATER
 RUN apt-get update \
     && apt-get install -y \
-	build-essential gcc-7 \
+	build-essential gcc \
     && apt-get clean && rm -rf /var/cache/apt/* && rm -rf /var/lib/apt/lists/* && rm -rf /tmp/* 
 
 WORKDIR /app

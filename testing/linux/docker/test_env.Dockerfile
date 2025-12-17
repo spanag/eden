@@ -49,7 +49,7 @@ ARG EDEN_INSTALL_DIR
 USER root
 RUN apt-get update && apt-get install -y \
 build-essential gcc \
-flex=2.6* bison=2:3* xxd \
+flex bison xxd \
 && apt-get clean && rm -rf /var/cache/apt/* && rm -rf /var/lib/apt/lists/* && rm -rf /tmp/* 
 
 
