@@ -545,7 +545,8 @@ struct CompartmentDiscretization{
 	// Moreover keep track of the stated cables and their associasted compartments with representative lengths along
 	std::map<Int, std::vector<int32_t> > cable_to_compartments_id; // by cable group_seq
 	std::map<Int, std::vector<Real> > cable_to_compartments_fraction_along; // NB: along the cable, not the segment or compartment
-		
+	std::vector<int32_t> compartment_to_cable_seq; // right now we just track if a compartment is the first in a cable, to mimic NEURON's behaviour
+	
 	// Note that every cell could be unique, and perhaps 16 bits are enough to describe neurons...
 	// LATER efficiency trick: keep the above lists empty, non existent or something, for cases where the mapping is 1 to 1
 	
@@ -689,7 +690,9 @@ bool GetCompartmentDiscretizationForCellType(const Morphology &morph, Compartmen
 	
 	compartment_to_segment_seq.resize( number_of_compartments ); 
 	compartment_to_first_segment_start_fractionAlong.assign( number_of_compartments, -1 ); 
-	compartment_to_last_segment_end_fractionAlong.assign( number_of_compartments, -1 ); 
+	compartment_to_last_segment_end_fractionAlong.assign( number_of_compartments, -1 );
+	
+	comp_disc.compartment_to_cable_seq.assign( number_of_compartments, -1 );
 	
 	// Process the structure of cables: slice them into compartments of equal length.
 	// later on, the density mechanism specs have to be applied on segments anyway,
@@ -748,7 +751,7 @@ bool GetCompartmentDiscretizationForCellType(const Morphology &morph, Compartmen
 		// current implementation will simply not account for the segment as it has zero length
 		for(Int comp_in_cable = 0; comp_in_cable < cable_nseg; comp_in_cable++){
 			
-			Int comp_seq = cable_to_compartment_offset[group_seq] + comp_in_cable;
+			int32_t comp_seq = cable_to_compartment_offset[group_seq] + comp_in_cable;
 			
 			// The borders of path_length that this compartment covers
 			// The mapping is fixed and linear over path_length, for now
@@ -757,6 +760,7 @@ bool GetCompartmentDiscretizationForCellType(const Morphology &morph, Compartmen
 			// Likewise the mapping of compartment midpoint to fraction along the cable is also uniform (for now)
 			comp_disc.cable_to_compartments_id[group_seq].push_back(comp_seq);
 			comp_disc.cable_to_compartments_fraction_along[group_seq].push_back((comp_in_cable+0.5)/Real(cable_nseg));
+			comp_disc.compartment_to_cable_seq[comp_seq] = group_seq;
 			
 			if(debug_log_discretisation) printf("cable group_seq %d comp %d, comp_seq %d begin\n", (int) group_seq, (int)comp_in_cable, (int) comp_seq);
 			
@@ -1335,8 +1339,19 @@ bool GetCellPassiveCableProperties(
 		// also take advantage of comp_seq order to resolve resistance with parent as well
 		auto comp_parent = comp_disc.tree_parent_per_compartment[comp_seq];
 		if(comp_parent >= 0){
-			inter_compartment_axial_resistance[comp_seq] = comp_axial_resistance_proximal + compartment_axial_resistance_distal[comp_parent];
-		
+			auto &resistance_to_parent = inter_compartment_axial_resistance[comp_seq];
+			
+			// special case: if the compartment is the first of its cable, omit parent compartment's distal resistance to match NEURON's behaviour.
+			// It can be important when the parent's resistance to proximal end is a lot (for eg a long compartment, or even a soma tapered to zero at its ends!)
+			// see how parent-side resistance is zero for the first compartment of a child section here:
+			// rright starts from zero and then has half of the previous compartment: https://github.com/neuronsimulator/nrn/blob/9.0.1/src/nrnoc/treeset.cpp#L783
+			const auto cable_seq = comp_disc.compartment_to_cable_seq[comp_seq];
+			if(
+				cable_seq >= 0 
+				&& comp_disc.cable_to_compartments_id.count(cable_seq) > 0
+				&& comp_disc.cable_to_compartments_id.at(cable_seq)[0] == comp_seq
+			)    resistance_to_parent = comp_axial_resistance_proximal;
+			else resistance_to_parent = comp_axial_resistance_proximal + compartment_axial_resistance_distal[comp_parent];
 		}
 		else{
 			inter_compartment_axial_resistance[comp_seq] = NAN;

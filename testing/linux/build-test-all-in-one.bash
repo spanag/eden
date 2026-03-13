@@ -21,7 +21,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/build-wheel.bash"
 WHEEL_TO_TEST=$(find "$BUILD_DIR/bin" -type f -name "eden_simulator-$WHEEL_VERSION-py3-none-*.whl")
 
 "$(dirname "${BASH_SOURCE[0]}")/run-tests-on-wheel.bash" "$WHEEL_TO_TEST"
-echo "Tests passed"
+echo "Smoke test passed"
 cp -f "$WHEEL_TO_TEST" "$ARTIFACTS_DIR"
 echo "Artifact ready on $ARTIFACTS_DIR"
 

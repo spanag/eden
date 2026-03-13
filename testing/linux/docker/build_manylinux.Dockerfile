@@ -6,6 +6,20 @@ ARG MANYLINUX_IMAGE
 # Build environment for EDEN simulator based on manulinux images
 MAINTAINER Sotirios Panagiotou <info@sotiriospanagiotou.com>
 
+
+# for manylinux2014: Centos 7 is EOL and is no longer available from the usual mirrors, so switch to https://vault.centos.org
+# see https://github.com/pypa/manylinux/pull/1628/commits/7beb9ae220bcf3da425d323817709c1a1e2bd35d https://github.com/pypa/manylinux/issues/1641
+RUN if [[ "${MANYLINUX_IMAGE}" == *"manylinux2014"* ]]; then \
+	sed -i 's/enabled=1/enabled=0/g' /etc/yum/pluginconf.d/fastestmirror.conf; \
+	sed -i 's/^mirrorlist/#mirrorlist/g' /etc/yum.repos.d/*.repo; \
+	sed -i 's;^.*baseurl=http://mirror;baseurl=https://vault;g' /etc/yum.repos.d/*.repo; \
+	if [ "${AUDITWHEEL_ARCH}" == "aarch64" ] || [ "${AUDITWHEEL_ARCH}" == "ppc64le" ]; then \
+		sed -i 's;/centos/7/;/altarch/7/;g' /etc/yum.repos.d/*.repo ;\
+	fi;\
+fi
+
+
+
 # Get the necessary build tools
 # perhaps use a ENV PACKAGES variable LATER
 RUN yum update -y \
