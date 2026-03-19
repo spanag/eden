@@ -3358,7 +3358,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 				const char *dervar_name = dervars.getName(i);
 				const auto &dervar = dervars.get(i);
 				if(dervar.type != ComponentType::DerivedVariable::Type::SELECT) continue;
-				// NB: to avoid glue structs etc for WritableRequirement to work, string names are used
+				// NB: to avoid glue structs etc for derivative sum to work, string names are used
 				ret += tab +"float Lems_select_"+dervar_name+" = 0;\n";
 			}
 			return ret;
@@ -3488,7 +3488,7 @@ bool GenerateModel(const Model &model, const SimulatorConfig &config, EngineConf
 						case Type::PROPERTY    : return "property"   ;
 						case Type::REQUIREMENT : return "requirement";
 						case Type::VARREQ      : return "varreq"     ;
-						case Type::WRIREQ      : return "wrireq"     ;
+						case Type::WRIREQ      : return "wrireq"     ; // NB wrireqs supersede normal requirements since they are mutable and thus mapped to a parent statevar already
 						case Type::STATE       : return "state"      ;
 						case Type::DERIVED     : return "derived"    ;
 						default                : return "";

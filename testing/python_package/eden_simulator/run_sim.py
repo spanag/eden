@@ -217,7 +217,13 @@ def reload_saved_data(
 	events = ordict()
 
 	base_lems_file_path = os.path.dirname(os.path.realpath(lems_file_name))
+	
 	from lxml import etree
+	# "A bad cache policy is indistinguishable from a memory leak." Disable the default bad caching policy LATER
+	# Even the parser option will NOT help, contrary to https://lxml.de/parsing.html#parser-options https://www.benbernardblog.com/tracking-down-a-freaky-python-memory-leak-part-2/ 
+	# NOR does it work to alternatively explicitly remove nodes one by one... https://stackoverflow.com/questions/12160418/why-is-lxml-etree-iterparse-eating-up-all-my-memory#49139976
+	# "Can you turn it off? Yes, if you're using htmlParser. No, if you're using xmlParser. Guess which one I'm using?" https://www.reddit.com/r/Python/comments/j0gl8t/comment/g70xo7u/
+	# or use xml.sax or something, but that will be an extra to proper h5 support
 	tree = etree.parse(real_lems_file)
 
 	sim = tree.getroot().find("Simulation")

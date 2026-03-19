@@ -40,6 +40,8 @@ downsample
 downsampled
 electrotonic
 electrophysiological
+equilibria
+excitatory
 facto
 favourite
 fluo

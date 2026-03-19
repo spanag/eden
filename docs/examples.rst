@@ -15,6 +15,7 @@ This part walks the reader through various tutorials and popular modelling use c
 	Putting it all together: A network of detailed cells <tut_net>
 	exa_lfp
 	example_pong
+	tut_brunel
 
 ..
 	example_imposed_field

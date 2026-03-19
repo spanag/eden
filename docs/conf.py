@@ -136,7 +136,7 @@ suppress_warnings = [
 # intersphinx
 intersphinx_mapping = {
 	'neuroml': ('https://docs.neuroml.org/', None),
-	'neuron': ('https://nrn.readthedocs.io/en/latest/', None),
+	'neuron': ('https://www.neuronsimulator.org/en/latest/', None),
 	'k3d': ('https://k3d-jupyter.org/', None),
 	'pyvista': ('https://docs.pyvista.org', None),
 }
@@ -273,6 +273,7 @@ nbsphinx_thumbnails = {
 	'extension_writable'   : '_static/thumb_extension_writable.png'   ,
 	'extension_multiflux'  : '_static/thumb_extension_multiflux.png'  ,
 	'example_pong': '_static/thumb_example_pong.png',
+	'tut_brunel': '_static/thumb_tut_brunel.png',
 }
 
 # This is processed by Jinja2 and inserted before each notebook https://github.com/spatialaudio/nbsphinx/blob/0.9.3/doc/conf.py#L43
@@ -600,6 +601,7 @@ linkcheck_allowed_redirects = {
 	
     r'https://brian2\.readthedocs\.io/.*': r'https://brian2\.readthedocs\.io/en/stable/.*',
     r'https://nrn\.readthedocs\.io/.*': r'https://nrn\.readthedocs\.io/en/.*',
+    r'https://nrn\.readthedocs\.io/.*': r'https://neuronsimulator\.org/.*',
     r'https://docs\.pyvista\.org/api/core/_autosummary/pyvista\..*': r'https://docs\.pyvista\.org/api/core/_autosummary/pyvista\..*',
     r'https://gitlab\.com': r'https://about\.gitlab\.com',
 	r'http://hdl\.handle\.net/11299/199178': r'https://conservancy\.umn\.edu/items/c6457e17-3327-4673-afc5-28a00e40b904',

@@ -4,7 +4,7 @@ DOCKER_TESTING_DIR := $(abspath $(dir $(firstword $(MAKEFILE_LIST) ) ) )
 TESTING_DIR ?= $(DOCKER_TESTING_DIR)/../../
 PROJ_BASE ?= $(TESTING_DIR)/../
 
-USER_UID_GID = $(shell id -u):$(shell id -g)
+DOCKER_USER_OR_ROOT ?= $(shell id -u):$(shell id -g)
 
 EDEN_DOCKER_BUILD_ENV_IMAGE_NAME?=eden-build
 EDEN_DOCKER_BUILD_DOCS_ENV_IMAGE_NAME?=eden-build-docs
@@ -47,7 +47,7 @@ test: docker_test_env build_eden_for_docker docker_build_docs_env
 	cp -rT ${PROJ_BASE}testing/validation_tests testing/sandbox/validation_tests
 	chmod -R 777 testing/sandbox/validation_tests
 	
-	${SUDO_DOCKER} run -it --rm --mount type=bind,source=${PROJ_BASE}/testing/sandbox/validation_tests,destination=/home/jovyan/work --group-add 100 --user ${USER_UID_GID} ${EDEN_DOCKER_TEST_ENV_IMAGE_FULLNAME}  python validation_tests.py
+	${SUDO_DOCKER} run -it --rm --mount type=bind,source=${PROJ_BASE}/testing/sandbox/validation_tests,destination=/home/jovyan/work --group-add 100 --user ${DOCKER_USER_OR_ROOT} ${EDEN_DOCKER_TEST_ENV_IMAGE_FULLNAME}  python validation_tests.py
 	
 	rm -rf testing/sandbox/validation_tests
 	

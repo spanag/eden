@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Make synapses able to directly alter artificial cells -->
+<!-- TODO example for a proper delta synapse, ie editing an existing Requirement -->
 <!-- TODO make the equivalent on physical cells as well -->
 <neuroml id=" NML_EdenTestNetwork1">
 <ComponentType name="AlterableCell"

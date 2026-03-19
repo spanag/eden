@@ -5043,7 +5043,7 @@ struct ImportState{
 				const char *wrireq_name = wrireqs.getName(i);
 				const auto &wrireq = wrireqs.get(i);
 				if(!(bound_cell.type == CellType::Type::ARTIFICIAL && bound_cell.artificial.component.ok())){
-					log.error( eConn, "there are WritableRequirements in synapse type %s, yet cell %s is not represented by a LEMS component", syncomp_name, bound_cell_name);
+					log.error( eConn, "internal error: there are WritableRequirements in synapse type %s, yet cell %s is not represented by a LEMS component", syncomp_name, bound_cell_name); // NB lems representations are quite handy even when not used. Otherwise there may be lots of special cases here
 					return false;
 				}
 				const auto &bound_comptype = component_types.get( bound_cell.artificial.component.id_seq );
@@ -8917,6 +8917,13 @@ struct ImportState{
 		for(const pugi::xml_node &eProp : kids.by_name.getOrNew("VariableRequirement") ){
 			if( !ParseStatevarOrRequirement(log, eProp, new_type.variable_requirements, new_type.name_space, ComponentType::NamespaceThing::VARREQ, "variable requirement" ) ) return false; }
 		for(const pugi::xml_node &eProp : kids.by_name.getOrNew("WritableRequirement") ){
+			auto name = RequiredLemsName(log,eProp);
+			if(!name) return false;
+			if(new_type.requirements.has(name)){
+				// HACK just be lazy for now and just remove the req if it exists from the name to item mapping, (ie shadow the name)
+				// so as to let <WritableRequirement>s supersede the usual <Requirement>s including magical ones, TODO either convert wrireq to a flag or ...
+				new_type.name_space.names.erase(name);
+			}
 			if( !ParseStatevarOrRequirement(log, eProp, new_type.writable_requirements, new_type.name_space, ComponentType::NamespaceThing::WRIREQ, "writable requirement" ) ) return false; }
 		
 		for(const pugi::xml_node &ePort : kids.by_name.getOrNew("EventPort") ){

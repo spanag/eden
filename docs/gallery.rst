@@ -12,6 +12,7 @@ Examples gallery
 	exa_lfp
 	example_pong
 	Variable parameters on detailed cells <example_spatial_customsetup>
+	Excitatory-inhibitory network <tut_brunel>
 
 ..
 	example_imposed_field
