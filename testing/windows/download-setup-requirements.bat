@@ -51,13 +51,13 @@ call :wget_if_missing %DOWNLOADS_DIR%\findutils-4.2.20-2-bin.zip https://sourcef
 call :wget_if_missing %DOWNLOADS_DIR%\win_flex_bison-2.5.18.zip https://sourceforge.net/projects/winflexbison/files/win_flex_bison-2.5.18.zip || goto :error
 call :wget_if_missing "%DOWNLOADS_DIR%\xxd-1.11_win32(static).zip" "https://sourceforge.net/projects/xxd-for-windows/files/xxd-1.11_win32(static).zip" || goto :error
 
-%WGET% -O %DOWNLOADS_DIR%\gnumake-4.3.exe https://github.com/mbuilov/gnumake-windows/blob/master/gnumake-4.3.exe?raw=true --secure-protocol=TLSV1_3 || goto :error
+%WGET% -O %DOWNLOADS_DIR%\gnumake-4.3.exe https://github.com/mbuilov/gnumake-windows/blob/master/archive/gnumake-4.3.exe?raw=true --secure-protocol=TLSV1_3 || goto :error
 
 call :wget_if_missing %DOWNLOADS_DIR%\mingw32.7z "https://github.com/brechtsanders/winlibs_mingw/releases/download/9.5.0-10.0.0-msvcrt-r1/winlibs-i686-posix-dwarf-gcc-9.5.0-mingw-w64msvcrt-10.0.0-r1.7z" || goto :error
 call :wget_if_missing %DOWNLOADS_DIR%\mingw64.7z "https://github.com/brechtsanders/winlibs_mingw/releases/download/9.5.0-10.0.0-msvcrt-r1/winlibs-x86_64-posix-seh-gcc-9.5.0-mingw-w64msvcrt-10.0.0-r1.7z" || goto :error
 
-call :wget_if_missing %DOWNLOADS_DIR%\python-win32.zip https://www.python.org/ftp/python/3.7.9/python-3.7.9-embed-win32.zip || goto :error
-call :wget_if_missing %DOWNLOADS_DIR%\python-amd64.zip https://www.python.org/ftp/python/3.7.9/python-3.7.9-embed-amd64.zip || goto :error
+call :wget_if_missing %DOWNLOADS_DIR%\python-win32.zip https://www.python.org/ftp/python/3.11.0/python-3.11.0-embed-win32.zip || goto :error
+call :wget_if_missing %DOWNLOADS_DIR%\python-amd64.zip https://www.python.org/ftp/python/3.11.0/python-3.11.0-embed-amd64.zip || goto :error
 
 call :wget_if_missing %DOWNLOADS_DIR%\get-pip.py https://bootstrap.pypa.io/pip/get-pip.py || goto :error
 

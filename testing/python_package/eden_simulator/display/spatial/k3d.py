@@ -203,7 +203,7 @@ def plot_neuron(cell_info, comp_values=(.5,.5,.5), time_axis_sec=None, color_map
 			k3d_my_attrs['custom_data'][k] = k3d_my_attrs.pop(k)
 		# also set color_range if unset
 		color_range = kwargs.pop('color_range', [])
-		if not color_range and 'cell_attribute' in k3d_my_attrs['custom_data']:
+		if color_range is None and 'cell_attribute' in k3d_my_attrs['custom_data']:
 			color_range = k3d.helpers.check_attribute_color_range(k3d_my_attrs['custom_data']['cell_attribute'])
 		kwargs['color_range'] = color_range
 	plt_mesh = k3d.mesh(mesh_vertices.astype(np.float32), mesh_faces.astype(np.uint32),

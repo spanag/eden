@@ -76,6 +76,7 @@ def get_more_assets(app):
 		'thumb_extension_io.png',
 		'thumb_extension_writable.png',
 		'thumb_extension_multiflux.png',
+		'thumb_tut_brunel.png',
 		'favicon.png',
 	]
 	if app.builder.format == 'latex': # LATER check if latex...
@@ -596,6 +597,7 @@ linkcheck_allowed_redirects = {
     # All HTTP redirections from the source URI to
     # the canonical URI will be treated as "working".
     r'https://sphinx-doc\.org/.*': r'https://sphinx-doc\.org/en/master/.*',
+    r'http://doi.org/.*': r'.*',
     r'https://doi.org/.*': r'.*',
     r'https://github\.com/NeuroML/.*/issues/new': r'.*',
 	

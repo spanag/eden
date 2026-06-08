@@ -65,6 +65,7 @@ modeller
 modellers
 modelling
 multiplicatively
+multipole
 normalised
 neurite
 neurites
