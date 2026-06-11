@@ -19,17 +19,32 @@ def GetAutoFps(anim_axis, max_auto_fps = 60):
 # LATER perhaps do linear filtering instead...? or use exact frames only?
 def subsample_trajectories(time_axis_sec, data=[], animation_speed=0.0030, animation_frames_per_second=30):
 	'''
-	TODO
+	Subsample a set of time series for animated real-time display.
+	
+	Parameters
+	---
+	time_axis_sec : np.array[float]
+		The timebase for the given time series, in seconds.
+	data : array
+		A `series` by `time` array of values. Length of `time` must be same as `time_axis_sec`.
+	animation_speed : float
+		The ratio of how fast the time series is played back, relative to `time_axis_sec`.
+	animation_frames_per_second : float
+		The desired sampling rate for the animation. The time series are subsampled but not interpolated, thus the true frame rate may vary.
 	
 	Returns
 	---
-	The samples used from the sequence. May be less than expected if there are not enough samples to fill the grid.
-	samples_picked: 
-	TODO. Useful for resampling more parallel time-series than those already passed to *data*.
-	anim_axis: list-like
-	
-	The points in real-time, in seconds.
+	samples_picked: np.array[int]
+		The samples used from the provided sequence `data`.  Useful for resampling other time series similar to `data`. May be less than expected if there are not enough samples to fill the grid.
+	anim_axis:  np.array[float]
+		Animation-time for each picked sample.
+	sampled_time_axis: np.array[float]
+		Original timebase for each picked sample. Equals `time_axis_sec[samples_picked]`.
+	sampled_data: list[list]
+		Sub-sampled `data`. Equals `data[samples_picked]`.
+
 	'''
+	# TODO why should data be a list of arrays?
 	if list(time_axis_sec) != list(sorted(time_axis_sec)): raise ValueError('time_axis_sec must be in increasing order')
 	
 	data_duration = (time_axis_sec[-1] - time_axis_sec[0])

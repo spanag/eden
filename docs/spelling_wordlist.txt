@@ -40,6 +40,7 @@ downsample
 downsampled
 electrotonic
 electrophysiological
+ephaptic
 equilibria
 excitatory
 facto
@@ -58,6 +59,7 @@ linearised
 makefile
 microcolumn
 μm
+μsec
 msec
 minimise
 modelled
@@ -75,12 +77,15 @@ parameterised
 parameterisable
 perturbates
 polarised
+polarisation
 pre
 programmatically
 Quickstart
 randomisation
 randomise
 randomised
+Ranvier
+rheobase
 repurpose
 repolarise
 repolarises
@@ -91,7 +96,10 @@ specialised
 stabilise
 stomatogastric
 stylised
+subsampled
+synchronised
 systematised
+Thévenin
 timebase
 timestep
 uncomment

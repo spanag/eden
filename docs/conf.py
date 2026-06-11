@@ -84,9 +84,9 @@ def get_more_assets(app):
 			'tutorial_network_balls.png',
 			'tutorial_network_neuron.png',
 			'tutorial_network_detailed.png',
-			'example_lfp_3d_vm.png',
-			'example_lfp_3d_current.png',
-			'example_lfp_3d_full.png',
+			# 'example_lfp_3d_vm.png',
+			# 'example_lfp_3d_current.png',
+			# 'example_lfp_3d_full.png',
 			'extension_customsetup_balls.png',
 		]
 		
@@ -267,6 +267,7 @@ nbsphinx_thumbnails = {
 	'intro_lems'   : '_static/thumb_intro_lems.png'   ,
 	'tut_net': '_static/thumb_tut_net.gif',
 	'exa_lfp': '_static/thumb_exa_lfp.png',
+	'example_imposed_field': '_static/thumb_example_imposed_field.png',
 	'extension_customsetup': '_static/thumb_extension_customsetup.png',
 	'example_spatial_customsetup': '_static/thumb_example_spatial_customsetup.png',
 	'extension_pointers'   : '_static/thumb_extension_pointers.png'   ,
