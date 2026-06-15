@@ -27,6 +27,12 @@ Examples gallery
 	extension_io
 	Multiple flows per neuron <extension_multiflux>
 	Writable <Requirement>s <extension_writable>
+	
+.. nblinkgallery::
+	:caption: From papers
+	:name: rst-link-frompapers
+	
+	Tsodyks, Uziel, Markram (2000) <paper_tsodyksuzielmarkram2000>
 
 ..
 	.. nblinkgallery::

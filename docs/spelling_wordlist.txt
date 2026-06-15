@@ -121,3 +121,7 @@ ndarray
 ipywidgets
 ipynb
 param
+
+Markram
+Tsodyks
+Uziel

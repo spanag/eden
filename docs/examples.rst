@@ -17,6 +17,7 @@ This part walks the reader through various tutorials and popular modelling use c
 	example_imposed_field
 	example_pong
 	tut_brunel
+	paper_tsodyksuzielmarkram2000
 
 ..
 	example_robot
