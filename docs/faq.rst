@@ -146,7 +146,7 @@ These are some factors that can lead to calculations being run differently:
 - A different order of summation, that happens they are split over multiple cores in a computer;
 - The distribution of model parts between computers in a multi-machine simulation.
 
-To study the issue and potential causes further, refer to a web search on "floating point determinism" (for example, ""`Determinism and Reproducibility
+To study the issue and potential causes further, refer to a web search on "floating point determinism" (for example, "`Determinism and Reproducibility
 in Large-Scale HPC Systems <https://wodet.cs.washington.edu/wp-content/uploads/2013/03/wodet2013-final12.pdf>`__").
 
 In conclusion, measures to attempt deterministic simulation may get the output to be close enough in between simulation runs, but this is regrettably not guaranteed within practical limits.
