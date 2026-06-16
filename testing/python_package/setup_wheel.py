@@ -245,7 +245,7 @@ setuptools.setup(
 		'Issue tracker'    : 'https://gitlab.com/c7859/neurocomputing-lab/Inferior_OliveEMC/eden/-/issues',
 		'Changelog'        : 'https://gitlab.com/c7859/neurocomputing-lab/Inferior_OliveEMC/eden/-/blob/development/CHANGELOG.txt'
 	},
-
+    license='GPL-3.0-only',
     classifiers=[
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Bio-Informatics",
@@ -253,7 +253,6 @@ setuptools.setup(
         "Operating System :: Microsoft :: Windows",
         "Operating System :: MacOS",
         "Operating System :: POSIX :: Linux",
-        "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
         "Development Status :: 3 - Alpha",
         'Programming Language :: C++',
         "Programming Language :: Python :: 3",

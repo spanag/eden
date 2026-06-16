@@ -51,6 +51,6 @@ fi
 bash "$(dirname "${BASH_SOURCE[0]}")/docker/sudo_docker.bash" \
 run -it --rm --mount type=bind,source=$(realpath ${REPO_DIR}),destination=/repo,readonly --mount "type=bind,source=$BUILD_PATH,destination=/build"  --user $DOCKER_USER_OR_ROOT \
  -e RUN_DIRECT=1 --workdir /build -e PIP_INSTALL_EXTRAS=$PIP_INSTALL_EXTRAS \
- $MANYLINUX_IMAGE bash -c "set -e; PATH=/build:/opt/python/cp37-cp37m/bin:\$PATH; ln -sfT \$(which cc) gcc; bash /repo/testing/linux/run-tests-on-wheel.bash \"$(basename $1)\""
+ $MANYLINUX_IMAGE bash -c "set -e; PATH=/build:/opt/python/cp311-cp311/bin:\$PATH; ln -sfT \$(which cc) gcc; bash /repo/testing/linux/run-tests-on-wheel.bash \"$(basename $1)\""
 
 fi
