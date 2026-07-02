@@ -33,6 +33,7 @@ Examples gallery
 	:name: rst-link-frompapers
 	
 	Tsodyks, Uziel, Markram (2000) <paper_tsodyksuzielmarkram2000>
+	Brzosko, Zannone et al. (2017) <paper_brzosko2017>
 
 ..
 	.. nblinkgallery::

@@ -42,8 +42,10 @@ with open("README_wheel.md", "r") as fh:
 
 # Restrict tag to platform dependent, without restricting abi, and don't actually build any extension
 # As seen on https://github.com/Yelp/dumb-init/blob/master/setup.py#L11-L27
-# try:
-from setuptools.command.bdist_wheel import bdist_wheel as _bdist_wheel
+try:
+    from setuptools.command.bdist_wheel import bdist_wheel as _bdist_wheel
+except Exception:
+    from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 class platform_specific_bdist_wheel(_bdist_wheel):
 
     def finalize_options(self):

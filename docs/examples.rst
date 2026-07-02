@@ -18,6 +18,7 @@ This part walks the reader through various tutorials and popular modelling use c
 	example_pong
 	tut_brunel
 	paper_tsodyksuzielmarkram2000
+	paper_brzosko2017
 
 ..
 	example_robot

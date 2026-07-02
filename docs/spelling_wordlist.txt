@@ -13,6 +13,7 @@ automagical
 automagically
 autoscale
 behaviour
+behaviours
 centre
 centres
 CMake
@@ -125,3 +126,6 @@ param
 Markram
 Tsodyks
 Uziel
+Brzosko
+Zannone
+

@@ -77,6 +77,7 @@ def get_more_assets(app):
 		'thumb_extension_writable.png',
 		'thumb_extension_multiflux.png',
 		'thumb_tut_brunel.png',
+		'thumb_paper_brzosko2017.png',
 		'favicon.png',
 	]
 	if app.builder.format == 'latex': # LATER check if latex...
@@ -84,9 +85,6 @@ def get_more_assets(app):
 			'tutorial_network_balls.png',
 			'tutorial_network_neuron.png',
 			'tutorial_network_detailed.png',
-			# 'example_lfp_3d_vm.png',
-			# 'example_lfp_3d_current.png',
-			# 'example_lfp_3d_full.png',
 			'extension_customsetup_balls.png',
 		]
 		
@@ -276,6 +274,7 @@ nbsphinx_thumbnails = {
 	'extension_multiflux'  : '_static/thumb_extension_multiflux.png'  ,
 	'example_pong': '_static/thumb_example_pong.png',
 	'tut_brunel': '_static/thumb_tut_brunel.png',
+	'paper_brzosko2017': '_static/thumb_paper_brzosko2017.png',
 }
 
 # This is processed by Jinja2 and inserted before each notebook https://github.com/spatialaudio/nbsphinx/blob/0.9.3/doc/conf.py#L43
