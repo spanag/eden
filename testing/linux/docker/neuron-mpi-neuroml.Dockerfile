@@ -26,7 +26,7 @@ RUN python -c "import matplotlib"
 # ---> Install NEURON
 WORKDIR $HOME
 
-ARG NEURON_VERSION=8.2.7
+ARG NEURON_VERSION=8.2.6
 RUN python3 -m pip install neuron==${NEURON_VERSION}
 RUN which nrnivmodl nrniv; echo $PATH
 # NEURON_HOME is needed by NML tooling

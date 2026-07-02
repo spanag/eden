@@ -22,9 +22,13 @@ fi
 
 # Get the necessary build tools
 # perhaps use a ENV PACKAGES variable LATER
-RUN yum update -y \
+RUN if which yum ; then set -e; yum update -y \
 && yum install -y \
-vim-common wget m4
+vim-common wget m4 ; fi
+RUN if which apt ; then set -e; apt update -y \
+&& apt install -y \
+vim-common wget m4 ; fi
+
 #&& apt-get clean && rm -rf /var/cache/apt/* && rm -rf /var/lib/apt/lists/* && rm -rf /tmp/* 
 # More options:
 # m4 autoconf for automakeable projects
@@ -45,7 +49,7 @@ RUN set -e; cd bison-*/; ./configure; make; make install; bison --version
 WORKDIR /
 
 # Decide on a python3 for the following
-ENV python3=python3.9
+ENV python3=python3.11
 RUN mkdir /realpython && ln -sfT "$(which $python3)" /realpython/python3
 ENV PATH="/realpython:$PATH"
 

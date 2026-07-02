@@ -23,7 +23,7 @@ python3 -m pip install -U pip
 python3 -m pip uninstall -y eden-simulator 
 
 python3 -m pip install $PIP_INSTALL_EXTRAS wheel
-python3 -m pip install "$1"
+python3 -m pip install --prefer-binary "$1"
 
 source "$(dirname "${BASH_SOURCE[0]}")/run-basic-tests.bash"
 

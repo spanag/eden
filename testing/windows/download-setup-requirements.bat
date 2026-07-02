@@ -56,10 +56,11 @@ call :wget_if_missing "%DOWNLOADS_DIR%\xxd-1.11_win32(static).zip" "https://sour
 call :wget_if_missing %DOWNLOADS_DIR%\mingw32.7z "https://github.com/brechtsanders/winlibs_mingw/releases/download/9.5.0-10.0.0-msvcrt-r1/winlibs-i686-posix-dwarf-gcc-9.5.0-mingw-w64msvcrt-10.0.0-r1.7z" || goto :error
 call :wget_if_missing %DOWNLOADS_DIR%\mingw64.7z "https://github.com/brechtsanders/winlibs_mingw/releases/download/9.5.0-10.0.0-msvcrt-r1/winlibs-x86_64-posix-seh-gcc-9.5.0-mingw-w64msvcrt-10.0.0-r1.7z" || goto :error
 
-call :wget_if_missing %DOWNLOADS_DIR%\python-win32.zip https://www.python.org/ftp/python/3.11.0/python-3.11.0-embed-win32.zip || goto :error
+call :wget_if_missing %DOWNLOADS_DIR%\python-win32.zip https://www.python.org/ftp/python/3.8.0/python-3.8.0-embed-win32.zip || goto :error
 call :wget_if_missing %DOWNLOADS_DIR%\python-amd64.zip https://www.python.org/ftp/python/3.11.0/python-3.11.0-embed-amd64.zip || goto :error
 
 call :wget_if_missing %DOWNLOADS_DIR%\get-pip.py https://bootstrap.pypa.io/pip/get-pip.py || goto :error
+call :wget_if_missing %DOWNLOADS_DIR%\get-pip-3.8.py https://bootstrap.pypa.io/pip/3.8/get-pip.py || goto :error
 
 
 :unpack
@@ -114,14 +115,14 @@ copy /Y %DOWNLOADS_DIR%\gnumake-4.3.exe %MAKE_DIR%\make.exe || goto :error
 copy /Y %PYTHON32_DIR%\python.exe %PYTHON32_DIR%\python3.exe || goto :error
 copy /Y %PYTHON64_DIR%\python.exe %PYTHON64_DIR%\python3.exe || goto :error
 
-call :setup_python %PYTHON32_DIR% %GETPIP_DIR% || goto :error
-call :setup_python %PYTHON64_DIR% %GETPIP_DIR% || goto :error
+call :setup_python %PYTHON32_DIR% "%GETPIP_DIR%\get-pip-3.8.py" || goto :error
+call :setup_python %PYTHON64_DIR% "%GETPIP_DIR%\get-pip.py" || goto :error
 
 @goto :done_python
 
 :setup_python
 :: 1 is location of python, 2 is location of get-pip.py
-"%1\python3" "%2\get-pip.py" || exit /b %errorlevel%
+"%1\python3" "%2" || exit /b %errorlevel%
 :: Now, site packages must be enabled in the ._pth as removing the ._pth causes registry and envvars to be probed: 
 :: https://docs.python.org/3/library/sys_path_init.html#pth-files https://docs.python.org/3/using/windows.html#windows-finding-modules https://dev.to/fpim/setting-up-python-s-windows-embeddable-distribution-properly-1081
 :: which would break isolation of thus build environment.

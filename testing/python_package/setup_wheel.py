@@ -43,7 +43,7 @@ with open("README_wheel.md", "r") as fh:
 # Restrict tag to platform dependent, without restricting abi, and don't actually build any extension
 # As seen on https://github.com/Yelp/dumb-init/blob/master/setup.py#L11-L27
 # try:
-from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
+from setuptools.command.bdist_wheel import bdist_wheel as _bdist_wheel
 class platform_specific_bdist_wheel(_bdist_wheel):
 
     def finalize_options(self):
@@ -274,7 +274,7 @@ setuptools.setup(
         'setuptools < 81; python_version < "3.9"', # otherwise use the new api, it's funny how many environments run 3.8
         'numpy',
         'lxml',
-    ] + (['h5py <= 2.10'] if (sysconfig.get_platform() == 'win32') else []) # h5py wheels are missing since, and pip doesn't know that h5py source is tough to build
+    ] + (['h5py <= 2.10'] if (sysconfig.get_platform() == 'win32') else []) # h5py wheels are missing since and for >3.8, and pip doesn't know that h5py source is tough to build
     ,
 
     python_requires='>=3.2',
