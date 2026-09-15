@@ -330,6 +330,11 @@ Does EDEN support Blockchain?
 
 In NeuroML, `anatomically detailed cells <intro_spatial.ipynb>`_ comprise spans of neurite.  Each such span can be considered as a chain of interlinked "blocks", also called "compartments" in our terminology.  In that sense, EDEN can simulate multiple blockchains within even a single neuron.
 
+Is EDEN Metaverse-ready?
+------------------------
+
+Certainly. Interaction with any type of Metaverse (and even the physical world!) is covered by the `Streaming I/O capability <extension_io.ipynb>`__.  For a full example see the `Brzosko et al. 2017 port <paper_brzosko2017.ipynb> __`where the simulated SNN interacts with an external environment.
+
 Does EDEN support Artificial Intelligence?
 ------------------------------------------
 
